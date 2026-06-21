@@ -3,6 +3,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const Database = require('better-sqlite3');
 const request = require('supertest');
 
 let app;
@@ -223,6 +224,72 @@ test('admin can assign multiple providers to a group', async () => {
     ORDER BY priority DESC, provider_id ASC
   `).all(group.id).map((row) => row.provider_id);
   assert.deepEqual(providerIds, [deepseek.id, secondProvider.lastInsertRowid]);
+});
+
+test('admin can clear all providers from a group', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
+  const groupName = `No Provider Group ${Date.now()}`;
+  const group = db.prepare(`
+    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, ?, NULL, NULL, NULL, NULL)
+  `).run(groupName, deepseek.id);
+  db.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, 100)
+  `).run(group.lastInsertRowid, deepseek.id);
+
+  await agent.post(`/admin/groups/${group.lastInsertRowid}`).type('form').send({
+    name: groupName,
+    daily_call_limit: '',
+    daily_token_limit: '',
+    hourly_call_limit: '',
+    hourly_token_limit: ''
+  }).expect(302);
+
+  const updated = db.prepare('SELECT provider_id FROM groups WHERE id = ?').get(group.lastInsertRowid);
+  const providerCount = db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE group_id = ?').get(group.lastInsertRowid).count;
+  assert.equal(updated.provider_id, null);
+  assert.equal(providerCount, 0);
+});
+
+test('database startup does not re-add the default provider to configured group pools', () => {
+  const database = new Database(path.join(os.tmpdir(), `agents-proxy-startup-test-${Date.now()}.sqlite`));
+  const { initSchema, migrateSchema, seedSettings } = require('../src/db');
+  database.pragma('foreign_keys = ON');
+  initSchema(database);
+  migrateSchema(database);
+  seedSettings(database);
+
+  const activeSlug = `active-model-${Date.now()}`;
+  const activeProvider = database.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
+    VALUES (?, ?, ?, ?, ?, 1, 100)
+  `).run(activeSlug, 'Spark 25 vLLM', 'openai-compatible', mockBaseUrl, 'local');
+  const group = database.prepare(`
+    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, ?, NULL, NULL, NULL, NULL)
+  `).run(`Curs Agents ${Date.now()}`, activeProvider.lastInsertRowid);
+
+  database.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, 100)
+  `).run(group.lastInsertRowid, activeProvider.lastInsertRowid);
+
+  migrateSchema(database);
+  seedSettings(database);
+
+  const providerSlugs = database.prepare(`
+    SELECT providers.slug
+    FROM group_providers
+    JOIN providers ON providers.id = group_providers.provider_id
+    WHERE group_providers.group_id = ?
+    ORDER BY providers.slug ASC
+  `).all(group.lastInsertRowid).map((row) => row.slug);
+
+  assert.deepEqual(providerSlugs, [activeSlug]);
+  database.close();
 });
 
 test('admin pages escape dynamic user and group content', async () => {

@@ -204,6 +204,11 @@ function migrateSchema(database) {
     SELECT id, provider_id, 1, 100, CURRENT_TIMESTAMP
     FROM groups
     WHERE provider_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM group_providers
+        WHERE group_providers.group_id = groups.id
+      )
   `);
 
   database.prepare(`
@@ -380,12 +385,6 @@ function seedDefaultGroup(database) {
   }
 
   if (groupId) {
-    if (providerId) {
-      database.prepare(`
-        INSERT OR IGNORE INTO group_providers (group_id, provider_id, enabled, priority, updated_at)
-        VALUES (?, ?, 1, 100, CURRENT_TIMESTAMP)
-      `).run(groupId, providerId);
-    }
     database.prepare(`
       INSERT OR IGNORE INTO user_groups (user_id, group_id)
       SELECT users.id, ?

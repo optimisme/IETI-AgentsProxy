@@ -112,6 +112,7 @@ PUBLIC_BASE_URL=https://your-public-domain.example
 
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace_with_a_strong_password
+ADMIN_PASSWORD_HASH=
 SESSION_SECRET=replace_with_a_long_random_session_secret
 
 MAX_REQUESTS_PER_MINUTE=1000
@@ -125,18 +126,32 @@ LOG_REQUEST_BODY=false
 REQUEST_TIMEOUT_MS=120000
 ```
 
-Inicialitza la base de dades i arrenca:
+Inicialitza la base de dades:
 
 ```bash
 npm run init-db
-npm start
 ```
 
-Per mantenir el proces viu en un servidor pots fer servir el gestor que prefereixis, per exemple `pm2`, `systemd`, Docker o el servei del teu proveidor d'allotjament. L'ordre real que ha d'executar el proces es:
+En produccio, arrenca el proces amb PM2:
 
 ```bash
-node src/server.js
+npm install -g pm2
+npm run pm2:start
+npm run pm2:save
 ```
+
+Els scripts PM2 fan servir `ecosystem.config.cjs` i mantenen el nom de proces `app`, compatible amb els scripts de desplegament existents.
+
+Comandes habituals:
+
+```bash
+npm run pm2:list
+npm run pm2:logs
+npm run pm2:restart
+npm run pm2:stop
+```
+
+Si no vols PM2, l'entrypoint directe continua sent `node src/server.js`.
 
 En produccio, fes servir HTTPS davant del servidor, per exemple amb un reverse proxy.
 
