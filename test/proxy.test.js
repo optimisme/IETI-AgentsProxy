@@ -62,7 +62,8 @@ test.before(async () => {
   process.env.DEFAULT_DAILY_TOKEN_LIMIT = '10000000';
   process.env.DEFAULT_MONTHLY_TOKEN_LIMIT = '100000000';
   process.env.DEFAULT_MODEL_CONTEXT_LIMIT = '131072';
-  process.env.MAX_TOKENS_PER_REQUEST = '131072';
+  process.env.DEFAULT_MODEL_OUTPUT_LIMIT = '16384';
+  process.env.MAX_TOKENS_PER_REQUEST = '16384';
 
   ({ createApp } = require('../src/app'));
   const { getDb } = require('../src/db');
@@ -841,7 +842,7 @@ test('student portal shows usage and downloads default opencode config', async (
   const agent = request.agent(app);
   db.prepare(`
     UPDATE provider_models
-    SET context_limit = 131072, output_limit = 8192
+    SET context_limit = 131072, output_limit = 16384
     WHERE public_model = 'active-model'
   `).run();
 
@@ -863,8 +864,8 @@ test('student portal shows usage and downloads default opencode config', async (
   assert.equal(configRes.body.model, 'ieti-agents/active-model');
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].name, 'active-model');
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.context, 131072);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.output, 8192);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].max_tokens, 8192);
+  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.output, 16384);
+  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].max_tokens, 16384);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].tool_call, true);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].reasoning, true);
   assert.deepEqual(configRes.body.provider['ieti-agents'].models['active-model'].modalities, {

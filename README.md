@@ -116,10 +116,10 @@ ADMIN_PASSWORD_HASH=
 SESSION_SECRET=replace_with_a_long_random_session_secret
 
 MAX_REQUESTS_PER_MINUTE=1000
-MAX_TOKENS_PER_REQUEST=131072
+MAX_TOKENS_PER_REQUEST=16384
 DEFAULT_DAILY_TOKEN_LIMIT=10000000
 DEFAULT_MODEL_CONTEXT_LIMIT=131072
-DEFAULT_MODEL_OUTPUT_LIMIT=8192
+DEFAULT_MODEL_OUTPUT_LIMIT=16384
 MAX_IMAGES_PER_REQUEST=4
 MAX_IMAGE_BYTES=8000000
 MAX_TOTAL_IMAGE_BYTES=16000000
@@ -207,9 +207,9 @@ Exemple de configuracio generada:
           "name": "active-model",
           "limit": {
             "context": 131072,
-            "output": 8192
+            "output": 16384
           },
-          "max_tokens": 8192,
+          "max_tokens": 16384,
           "tool_call": true,
           "reasoning": true,
           "modalities": {

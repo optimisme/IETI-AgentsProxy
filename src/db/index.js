@@ -220,8 +220,14 @@ function migrateSchema(database) {
   database.prepare(`
     UPDATE settings
     SET value = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'max_tokens_per_request' AND value IN ('32000', '65536')
+    WHERE key = 'max_tokens_per_request' AND value IN ('32000', '65536', '131072')
   `).run(String(config.maxTokensPerRequest));
+
+  database.prepare(`
+    UPDATE settings
+    SET value = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE key = 'default_model_output_limit' AND value = '8192'
+  `).run(String(config.defaultModelOutputLimit));
 
   database.prepare(`
     UPDATE provider_models
