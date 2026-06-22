@@ -36,7 +36,7 @@ function createApp() {
   app.set('trust proxy', true);
   app.locals.sessionStore = sessionStore;
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: Math.ceil((config.maxTotalImageBytes * 4) / 3) + 1048576 }));
   app.use(express.urlencoded({ extended: false, limit: '128kb' }));
   app.use(session({
     name: 'ieti_proxy_sid',

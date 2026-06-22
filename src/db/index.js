@@ -213,9 +213,15 @@ function migrateSchema(database) {
 
   database.prepare(`
     UPDATE settings
-    SET value = '65536', updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'default_model_context_limit' AND value IN ('16384', '64000', '32768')
-  `).run();
+    SET value = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE key = 'default_model_context_limit' AND value IN ('16384', '64000', '32768', '65536')
+  `).run(String(config.defaultModelContextLimit));
+
+  database.prepare(`
+    UPDATE settings
+    SET value = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE key = 'max_tokens_per_request' AND value IN ('32000', '65536')
+  `).run(String(config.maxTokensPerRequest));
 
   database.prepare(`
     UPDATE provider_models
@@ -317,7 +323,11 @@ function seedSettings(database) {
     default_model_output_limit: String(config.defaultModelOutputLimit),
     maintenance_mode: 'false',
     max_tokens_per_request: String(config.maxTokensPerRequest),
-    max_requests_per_minute: String(config.maxRequestsPerMinute)
+    max_requests_per_minute: String(config.maxRequestsPerMinute),
+    max_images_per_request: String(config.maxImagesPerRequest),
+    max_image_bytes: String(config.maxImageBytes),
+    max_total_image_bytes: String(config.maxTotalImageBytes),
+    allow_video_input: String(config.allowVideoInput)
   };
 
   for (const [key, value] of Object.entries(defaults)) {

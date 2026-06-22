@@ -720,7 +720,11 @@ router.get('/admin/server', requireAdmin, (req, res) => {
         <label>Default daily token limit</label><input name="default_daily_token_limit" type="number" value="${escapeHtml(settings.default_daily_token_limit)}">
         <label>OpenCode model context limit</label><input name="default_model_context_limit" type="number" value="${escapeHtml(settings.default_model_context_limit)}">
         <label>OpenCode model output limit</label><input name="default_model_output_limit" type="number" value="${escapeHtml(settings.default_model_output_limit)}">
-        <label>Max tokens per request</label><input name="max_tokens_per_request" type="number" value="${escapeHtml(settings.max_tokens_per_request)}">
+        <label>Max output tokens per request</label><input name="max_tokens_per_request" type="number" value="${escapeHtml(settings.max_tokens_per_request)}">
+        <label>Max images per request</label><input name="max_images_per_request" type="number" value="${escapeHtml(settings.max_images_per_request)}">
+        <label>Max image bytes</label><input name="max_image_bytes" type="number" value="${escapeHtml(settings.max_image_bytes)}">
+        <label>Max total image bytes</label><input name="max_total_image_bytes" type="number" value="${escapeHtml(settings.max_total_image_bytes)}">
+        <label><input name="allow_video_input" type="checkbox" value="true" style="width:auto" ${settings.allow_video_input === 'true' ? 'checked' : ''}> Allow video input</label>
         <label>Max requests per minute</label><input name="max_requests_per_minute" type="number" value="${escapeHtml(settings.max_requests_per_minute)}">
         <label><input name="maintenance_mode" type="checkbox" value="true" style="width:auto" ${settings.maintenance_mode === 'true' ? 'checked' : ''}> Maintenance mode</label>
         <p><button>Save server settings</button></p>
@@ -751,9 +755,10 @@ router.get('/admin/server', requireAdmin, (req, res) => {
 
 router.post('/admin/server', requireAdmin, (req, res) => {
   setSetting('public_base_url', req.body.public_base_url || '');
-  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute']) {
+  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute', 'max_images_per_request', 'max_image_bytes', 'max_total_image_bytes']) {
     setSetting(key, req.body[key]);
   }
+  setSetting('allow_video_input', req.body.allow_video_input ? 'true' : 'false');
   setSetting('maintenance_mode', req.body.maintenance_mode ? 'true' : 'false');
   res.redirect('/admin/server?saved=1');
 });

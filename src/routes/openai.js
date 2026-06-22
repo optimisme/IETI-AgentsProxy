@@ -7,6 +7,7 @@ const { checkQuota } = require('../services/quotaService');
 const { recordUsage } = require('../services/usageService');
 const { getUserGroup } = require('../services/accessService');
 const { estimateChatTokens, estimateTokensFromText } = require('../utils/tokens');
+const { validateRequestPayload } = require('../utils/payloadValidation');
 const { apiError } = require('../utils/errors');
 
 const router = express.Router();
@@ -48,6 +49,7 @@ router.post('/v1/chat/completions', authStudent, studentRateLimit, async (req, r
     if (wasStreaming && !config.enableStreaming) {
       throw apiError(400, 'streaming_disabled', 'Streaming is disabled on this server.');
     }
+    validateRequestPayload(payload);
 
     const { group } = checkQuota({ user, model, estimatedInputTokens, requestedMaxTokens });
     timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);

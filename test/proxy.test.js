@@ -61,7 +61,8 @@ test.before(async () => {
   process.env.MAX_REQUESTS_PER_MINUTE = '1000';
   process.env.DEFAULT_DAILY_TOKEN_LIMIT = '10000000';
   process.env.DEFAULT_MONTHLY_TOKEN_LIMIT = '100000000';
-  process.env.DEFAULT_MODEL_CONTEXT_LIMIT = '65536';
+  process.env.DEFAULT_MODEL_CONTEXT_LIMIT = '131072';
+  process.env.MAX_TOKENS_PER_REQUEST = '131072';
 
   ({ createApp } = require('../src/app'));
   const { getDb } = require('../src/db');
@@ -130,12 +131,85 @@ test('valid user can call models', async () => {
 
 test('quota exceeded blocks requests', async () => {
   const student = createStudent({ dailyLimit: 1 });
+  db.prepare(`
+    INSERT INTO usage_logs (user_id, model, provider_slug, input_tokens, output_tokens, total_tokens, was_streaming, status, error_message)
+    VALUES (?, 'active-model', 'deepseek', 1, 0, 1, 0, 'success', NULL)
+  `).run(student.id);
   const res = await request(app)
     .post('/v1/chat/completions')
     .set('Authorization', `Bearer ${student.key}`)
     .send({ model: 'active-model', messages: [{ role: 'user', content: 'This request is too large for the tiny quota.' }] })
     .expect(429);
   assert.equal(res.body.error.code, 'daily_quota_exceeded');
+});
+
+test('multimodal image base64 is forwarded and usage comes from provider', async () => {
+  const student = createStudent();
+  const largeBase64 = Buffer.alloc(420000, 1).toString('base64');
+  const res = await request(app)
+    .post('/v1/chat/completions')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({
+      model: 'active-model',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Describe this image.' },
+          { type: 'image_url', image_url: { url: `data:image/png;base64,${largeBase64}` } }
+        ]
+      }],
+      max_tokens: 64
+    })
+    .expect(200);
+
+  assert.equal(res.body.model, 'deepseek-chat');
+  const usage = db.prepare(`
+    SELECT input_tokens, output_tokens, total_tokens, status
+    FROM usage_logs
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(student.id);
+  assert.deepEqual(usage, { input_tokens: 5, output_tokens: 2, total_tokens: 7, status: 'success' });
+});
+
+test('multimodal validation rejects too many images and video', async () => {
+  const student = createStudent();
+  const image = { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('image').toString('base64')}` } };
+
+  const tooMany = await request(app)
+    .post('/v1/chat/completions')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({
+      model: 'active-model',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Images' }, image, image, image, image, image] }]
+    })
+    .expect(413);
+  assert.equal(tooMany.body.error.code, 'too_many_images');
+
+  const video = await request(app)
+    .post('/v1/chat/completions')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({
+      model: 'active-model',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Video' }, { type: 'video_url', video_url: { url: 'data:video/mp4;base64,AAAA' } }] }]
+    })
+    .expect(400);
+  assert.equal(video.body.error.code, 'video_not_supported');
+});
+
+test('requested max_tokens is bounded before provider call', async () => {
+  const student = createStudent();
+  const res = await request(app)
+    .post('/v1/chat/completions')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({
+      model: 'active-model',
+      messages: [{ role: 'user', content: 'Say OK.' }],
+      max_tokens: 200000
+    })
+    .expect(413);
+  assert.equal(res.body.error.code, 'max_tokens_too_large');
 });
 
 test('admin can create user and regenerate key', async () => {
@@ -765,6 +839,11 @@ test('streaming works with a small request', async () => {
 test('student portal shows usage and downloads default opencode config', async () => {
   const student = createStudent();
   const agent = request.agent(app);
+  db.prepare(`
+    UPDATE provider_models
+    SET context_limit = 131072, output_limit = 8192
+    WHERE public_model = 'active-model'
+  `).run();
 
   await agent.get('/').expect(200).expect(/<h1>Login<\/h1>/);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
@@ -783,7 +862,7 @@ test('student portal shows usage and downloads default opencode config', async (
   assert.equal(configRes.body.provider['ieti-agents'].options.chunkTimeout, 600000);
   assert.equal(configRes.body.model, 'ieti-agents/active-model');
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].name, 'active-model');
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.context, 65536);
+  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.context, 131072);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.output, 8192);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].max_tokens, 8192);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].tool_call, true);

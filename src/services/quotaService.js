@@ -1,17 +1,9 @@
 const config = require('../config');
 const { apiError } = require('../utils/errors');
 const { getUsageTotals } = require('./usageService');
-const { getSetting } = require('./settingsService');
 const { getUserGroup } = require('./accessService');
 
-function checkQuota({ user, model, estimatedInputTokens, requestedMaxTokens = 0 }) {
-  const maxTokensPerRequest = Number(getSetting('max_tokens_per_request', 32000));
-  const requestBudget = estimatedInputTokens + Number(requestedMaxTokens || 0);
-
-  if (requestBudget > maxTokensPerRequest) {
-    throw apiError(413, 'request_too_large', `Request token estimate exceeds ${maxTokensPerRequest} tokens.`);
-  }
-
+function checkQuota({ user, model }) {
   if (model !== config.publicModelName) {
     throw apiError(403, 'model_not_allowed', `Use ${config.publicModelName} for this user.`);
   }
@@ -31,10 +23,10 @@ function checkQuota({ user, model, estimatedInputTokens, requestedMaxTokens = 0 
   if (group.hourly_call_limit !== null && totals.hourCalls + 1 > group.hourly_call_limit) {
     throw apiError(429, 'hourly_call_quota_exceeded', 'Hourly call limit exceeded.');
   }
-  if (group.daily_token_limit !== null && totals.todayTokens + requestBudget > group.daily_token_limit) {
+  if (group.daily_token_limit !== null && totals.todayTokens >= group.daily_token_limit) {
     throw apiError(429, 'daily_quota_exceeded', 'Daily token limit exceeded.');
   }
-  if (group.hourly_token_limit !== null && totals.hourTokens + requestBudget > group.hourly_token_limit) {
+  if (group.hourly_token_limit !== null && totals.hourTokens >= group.hourly_token_limit) {
     throw apiError(429, 'hourly_quota_exceeded', 'Hourly token limit exceeded.');
   }
 

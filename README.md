@@ -116,10 +116,14 @@ ADMIN_PASSWORD_HASH=
 SESSION_SECRET=replace_with_a_long_random_session_secret
 
 MAX_REQUESTS_PER_MINUTE=1000
-MAX_TOKENS_PER_REQUEST=32000
+MAX_TOKENS_PER_REQUEST=131072
 DEFAULT_DAILY_TOKEN_LIMIT=10000000
-DEFAULT_MODEL_CONTEXT_LIMIT=65536
+DEFAULT_MODEL_CONTEXT_LIMIT=131072
 DEFAULT_MODEL_OUTPUT_LIMIT=8192
+MAX_IMAGES_PER_REQUEST=4
+MAX_IMAGE_BYTES=8000000
+MAX_TOTAL_IMAGE_BYTES=16000000
+ALLOW_VIDEO_INPUT=false
 
 ENABLE_STREAMING=true
 LOG_REQUEST_BODY=false
@@ -170,7 +174,7 @@ Valors principals:
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`: credencials d'administracio.
 - `SESSION_SECRET`: secret de sessio Express. Ha de ser llarg i aleatori.
 - `MAX_REQUESTS_PER_MINUTE`: rate limit per usuari.
-- `MAX_TOKENS_PER_REQUEST`: maxim estimat de tokens per peticio.
+- `MAX_TOKENS_PER_REQUEST`: maxim de `max_tokens` de sortida que pot demanar una peticio. Els tokens reals es registren a partir del `usage` del proveidor quan existeix.
 - `DEFAULT_DAILY_TOKEN_LIMIT`: limit global per defecte del servidor.
 
 `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEFAULT_PROVIDER_SLUG`, `DEFAULT_PROVIDER_NAME` i `DEFAULT_UPSTREAM_MODEL` nomes s'usen per crear el primer proveidor en una base de dades nova. Un cop creada la base de dades, els proveidors es gestionen des de l'administracio.
@@ -202,7 +206,7 @@ Exemple de configuracio generada:
         "active-model": {
           "name": "active-model",
           "limit": {
-            "context": 65536,
+            "context": 131072,
             "output": 8192
           },
           "max_tokens": 8192,
