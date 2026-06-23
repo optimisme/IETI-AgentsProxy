@@ -750,7 +750,7 @@ router.get('/admin/server', requireAdmin, (req, res) => {
       })();
     </script>
   `;
-  render(req, res, 'server', { title: 'Edit Server Settings', content, flash: flash(cleanupFlash || (req.query.saved ? 'Server settings saved.' : '')) });
+  render(req, res, 'server', { title: 'Edit Server', content, flash: flash(cleanupFlash || (req.query.saved ? 'Server settings saved.' : '')) });
 });
 
 router.post('/admin/server', requireAdmin, (req, res) => {
