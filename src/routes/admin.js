@@ -519,7 +519,7 @@ router.get('/admin/groups/:id', requireAdmin, (req, res) => {
     </tr>
   `).join('');
   render(req, res, 'user-detail', {
-    title: 'Group',
+    title: 'Edit Group',
     content: `
       ${groupForm(group, `/admin/groups/${group.id}`)}
       <h2>Users</h2>
@@ -618,7 +618,7 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
         : req.query.created
           ? 'User created.'
           : '';
-  render(req, res, 'user-detail', { title: 'User', content, flash: flash(message) });
+  render(req, res, 'user-detail', { title: 'Edit User', content, flash: flash(message) });
 });
 
 router.post('/admin/users/:id', requireAdmin, (req, res) => {
@@ -750,7 +750,7 @@ router.get('/admin/server', requireAdmin, (req, res) => {
       })();
     </script>
   `;
-  render(req, res, 'server', { title: 'Server', content, flash: flash(cleanupFlash || (req.query.saved ? 'Server settings saved.' : '')) });
+  render(req, res, 'server', { title: 'Edit Server Settings', content, flash: flash(cleanupFlash || (req.query.saved ? 'Server settings saved.' : '')) });
 });
 
 router.post('/admin/server', requireAdmin, (req, res) => {
