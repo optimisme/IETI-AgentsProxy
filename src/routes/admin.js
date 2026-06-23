@@ -56,7 +56,7 @@ function render(req, res, view, { title, content = '', flash = '' } = {}) {
     </header>
   ` : '';
 
-  const body = renderTemplate(view, { content: trustedHtml(content), flash: trustedHtml(flash) });
+  const body = renderTemplate(view, { title: title || 'Admin', content: trustedHtml(content), flash: trustedHtml(flash) });
   res.send(renderTemplate('layout', {
     title: title || 'Admin',
     nav: trustedHtml(nav),
@@ -772,7 +772,6 @@ router.get('/admin/providers/new', requireAdmin, (req, res) => {
   render(req, res, 'settings', {
     title: 'New Provider',
     content: `
-      <h1>New Provider</h1>
       ${providerForm({ enabled: 1, api_key: '' })}
     `
   });
@@ -801,10 +800,9 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
   render(req, res, 'settings', {
-    title: `Edit ${provider.name}`,
+    title: 'Edit provider',
     flash: flash(req.query.saved ? 'Provider saved.' : req.query.test || ''),
     content: `
-      <h1>Edit ${escapeHtml(provider.name)}</h1>
       <div class="provider-sections">
         ${providerForm(provider, `/admin/providers/${provider.id}`)}
         ${activeModelMappingForm(provider)}

@@ -673,8 +673,10 @@ test('admin can edit provider slug and sees edit title', async () => {
   const replacementSlug = `deepseek-renamed-${Date.now()}`;
 
   const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200);
-  assert.match(edit.text, /<title>Edit DeepSeek<\/title>/);
-  assert.match(edit.text, /<h1>Edit DeepSeek<\/h1>/);
+  assert.match(edit.text, /<title>Edit provider<\/title>/);
+  assert.match(edit.text, /<h1>Edit provider<\/h1>/);
+  assert.doesNotMatch(edit.text, /<h1>Providers<\/h1>/);
+  assert.doesNotMatch(edit.text, /<h1>Edit DeepSeek<\/h1>/);
   assert.match(edit.text, /name="slug"/);
   assert.doesNotMatch(edit.text, /name="slug"[^>]*readonly/);
   assert.match(edit.text, /Active Model Mapping/);
