@@ -101,6 +101,10 @@ function hasCapacity(provider) {
   return max <= 0 || getInFlight(provider.slug) < max;
 }
 
+function randomChoice(values) {
+  return values[Math.floor(Math.random() * values.length)];
+}
+
 function reserveProvider(provider) {
   inFlightByProvider.set(provider.slug, getInFlight(provider.slug) + 1);
   let released = false;
@@ -152,17 +156,16 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null) {
     throw apiError(404, 'model_not_found', `Model ${publicModelAlias} is not available.`);
   }
 
-  const candidate = candidates
-    .filter(hasCapacity)
-    .sort((left, right) => (
-      getInFlight(left.slug) - getInFlight(right.slug) ||
-      Number(right.priority || 0) - Number(left.priority || 0) ||
-      String(left.name).localeCompare(String(right.name)) ||
-      Number(left.id) - Number(right.id)
-    ))[0];
-  if (!candidate) {
+  const availableCandidates = candidates.filter(hasCapacity);
+  if (!availableCandidates.length) {
     throw apiError(503, 'provider_capacity_exceeded', `All providers for ${publicModelAlias} are at capacity.`);
   }
+
+  const lowestInFlight = Math.min(...availableCandidates.map((provider) => getInFlight(provider.slug)));
+  const leastBusyCandidates = availableCandidates.filter((provider) => getInFlight(provider.slug) === lowestInFlight);
+  const highestPriority = Math.max(...leastBusyCandidates.map((provider) => Number(provider.priority || 0)));
+  const topCandidates = leastBusyCandidates.filter((provider) => Number(provider.priority || 0) === highestPriority);
+  const candidate = randomChoice(topCandidates);
   return candidate;
 }
 

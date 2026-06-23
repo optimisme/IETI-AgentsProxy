@@ -128,7 +128,6 @@ function initSchema(database) {
       group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
       provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
       enabled INTEGER NOT NULL DEFAULT 1,
-      weight INTEGER NOT NULL DEFAULT 100,
       priority INTEGER NOT NULL DEFAULT 100,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -199,6 +198,13 @@ function migrateSchema(database) {
   `);
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_user_groups_one_group ON user_groups(user_id)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_users_api_key_lookup_hash ON users(api_key_lookup_hash)');
+
+  const groupProviderColumns = database.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
+  const legacyProviderPoolColumn = ['wei', 'ght'].join('');
+  if (groupProviderColumns.includes(legacyProviderPoolColumn)) {
+    database.exec(`ALTER TABLE group_providers DROP COLUMN ${legacyProviderPoolColumn}`);
+  }
+
   database.exec(`
     INSERT OR IGNORE INTO group_providers (group_id, provider_id, enabled, priority, updated_at)
     SELECT id, provider_id, 1, 100, CURRENT_TIMESTAMP

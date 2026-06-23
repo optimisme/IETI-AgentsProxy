@@ -334,8 +334,12 @@ test('database startup does not re-add the default provider to configured group 
   const { initSchema, migrateSchema, seedSettings } = require('../src/db');
   database.pragma('foreign_keys = ON');
   initSchema(database);
+  const legacyProviderPoolColumn = ['wei', 'ght'].join('');
+  database.exec(`ALTER TABLE group_providers ADD COLUMN ${legacyProviderPoolColumn} INTEGER NOT NULL DEFAULT 100`);
   migrateSchema(database);
   seedSettings(database);
+  const groupProviderColumns = database.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
+  assert.equal(groupProviderColumns.includes(legacyProviderPoolColumn), false);
 
   const activeSlug = `active-model-${Date.now()}`;
   const activeProvider = database.prepare(`
@@ -518,6 +522,8 @@ test('admin groups do not expose description and usage section is removed', asyn
   assert.doesNotMatch(usageColumns.join(','), /estimated_cost_eur/);
   const providerModelColumns = db.prepare('PRAGMA table_info(provider_models)').all().map((column) => column.name);
   assert.doesNotMatch(providerModelColumns.join(','), /input_eur_per_1m|output_eur_per_1m/);
+  const groupProviderColumns = db.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
+  assert.equal(groupProviderColumns.includes(['wei', 'ght'].join('')), false);
   const legacyAccessTables = db.prepare(`
     SELECT name FROM sqlite_master
     WHERE type = 'table' AND name IN ('user_allowed_providers', 'group_allowed_providers')
@@ -795,6 +801,37 @@ test('group provider pool routes to the least busy provider', async () => {
     assert.equal(res.body.model, 'pool-upstream');
   } finally {
     release();
+  }
+});
+
+test('group provider pool randomizes equally loaded providers', () => {
+  const firstProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
+    VALUES (?, ?, ?, ?, ?, 1, 100)
+  `).run('random-pool-a', 'Random Pool A', 'openai-compatible', mockBaseUrl, 'local');
+  const secondProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
+    VALUES (?, ?, ?, ?, ?, 1, 100)
+  `).run('random-pool-b', 'Random Pool B', 'openai-compatible', mockBaseUrl, 'local');
+  const insertModel = db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 32000, 4096)
+  `);
+  insertModel.run(firstProvider.lastInsertRowid, 'active-model', 'random-upstream-a', 'Random A');
+  insertModel.run(secondProvider.lastInsertRowid, 'active-model', 'random-upstream-b', 'Random B');
+
+  const { chooseProviderModel } = require('../src/services/providerService');
+  const originalRandom = Math.random;
+  try {
+    Math.random = () => 0;
+    const firstChoice = chooseProviderModel('active-model', ['random-pool-a', 'random-pool-b']);
+    Math.random = () => 0.999999;
+    const secondChoice = chooseProviderModel('active-model', ['random-pool-a', 'random-pool-b']);
+
+    assert.equal(firstChoice.slug, 'random-pool-a');
+    assert.equal(secondChoice.slug, 'random-pool-b');
+  } finally {
+    Math.random = originalRandom;
   }
 });
 

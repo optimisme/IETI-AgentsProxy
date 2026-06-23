@@ -3,7 +3,7 @@ const { getDb } = require('../db');
 function providerPoolForGroup(groupId) {
   if (!groupId) return [];
   return getDb().prepare(`
-    SELECT providers.id, providers.slug, providers.name, group_providers.priority, group_providers.weight
+    SELECT providers.id, providers.slug, providers.name, group_providers.priority
     FROM group_providers
     JOIN providers ON providers.id = group_providers.provider_id
     WHERE group_providers.group_id = ?
