@@ -670,6 +670,7 @@ test('admin can edit provider slug and sees edit title', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get('deepseek');
+  const originalModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ? AND public_model = ?').get(provider.id, 'active-model');
   const replacementSlug = `deepseek-renamed-${Date.now()}`;
 
   const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200);
@@ -682,6 +683,7 @@ test('admin can edit provider slug and sees edit title', async () => {
   assert.match(edit.text, /Active Model Mapping/);
   assert.match(edit.text, /Public alias shown to OpenCode/);
   assert.match(edit.text, /value="active-model" readonly/);
+  assert.doesNotMatch(edit.text, /Save mapping/);
   assert.doesNotMatch(edit.text, /<h2>Models<\/h2>/);
   assert.doesNotMatch(edit.text, /Add model/);
 
@@ -692,12 +694,22 @@ test('admin can edit provider slug and sees edit title', async () => {
     api_key: '',
     enabled: '1',
     max_concurrent_requests: provider.max_concurrent_requests || '',
-    timeout_ms: provider.timeout_ms || ''
-  }).expect(302);
+    timeout_ms: provider.timeout_ms || '',
+    upstream_model: 'deepseek-chat-renamed',
+    context_limit: '65536',
+    output_limit: '8192'
+  }).expect(302).expect('Location', `/admin/providers/${provider.id}?saved=1`);
 
   const updated = db.prepare('SELECT slug FROM providers WHERE id = ?').get(provider.id);
   assert.equal(updated.slug, replacementSlug);
+  const model = db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ? AND public_model = ?').get(provider.id, 'active-model');
+  assert.equal(model.upstream_model, 'deepseek-chat-renamed');
   db.prepare('UPDATE providers SET slug = ? WHERE id = ?').run(provider.slug, provider.id);
+  db.prepare(`
+    UPDATE provider_models
+    SET upstream_model = ?, context_limit = ?, output_limit = ?
+    WHERE provider_id = ? AND public_model = ?
+  `).run(originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id, 'active-model');
 });
 
 test('provider active mapping can be saved and tested inline', async () => {

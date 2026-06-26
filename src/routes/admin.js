@@ -183,6 +183,25 @@ function parseModelMappingForm(body) {
   };
 }
 
+function saveActiveModelMapping(db, providerId, providerName, form) {
+  db.prepare('DELETE FROM provider_models WHERE provider_id = ? AND public_model != ?').run(providerId, config.publicModelName);
+  const existing = db.prepare('SELECT id FROM provider_models WHERE provider_id = ? AND public_model = ?').get(providerId, config.publicModelName);
+  if (existing) {
+    db.prepare(`
+      UPDATE provider_models
+      SET upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(form.upstreamModel, providerName, form.contextLimit, form.outputLimit, existing.id);
+  } else {
+    db.prepare(`
+      INSERT INTO provider_models
+        (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+      VALUES (?, ?, ?, ?, 1, ?, ?)
+    `).run(providerId, config.publicModelName, form.upstreamModel, providerName, form.contextLimit, form.outputLimit);
+  }
+}
+
 function adminUsersUrl({ search = '', groupId = 0, page = 1 } = {}) {
   const params = new URLSearchParams();
   if (search) params.set('q', search);
@@ -286,6 +305,26 @@ function groupForm(group = {}, action = '/admin/groups') {
   `;
 }
 
+function activeProviderModel(providerId) {
+  return providerId ? getDb().prepare(`
+    SELECT *
+    FROM provider_models
+    WHERE provider_id = ?
+    ORDER BY enabled DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get(providerId) || {} : {};
+}
+
+function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
+  return `
+    <h2>Active Model Mapping</h2>
+    <label>Public alias shown to OpenCode</label><input value="${escapeHtml(config.publicModelName)}" readonly>
+    <label>Provider model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
+    <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
+    <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
+  `;
+}
+
 function providerForm(provider = {}, action = '/admin/providers') {
   return `
     <form method="post" action="${action}" class="panel">
@@ -296,34 +335,13 @@ function providerForm(provider = {}, action = '/admin/providers') {
       <label>Maximum concurrent requests. Blank or 0 means infinite.</label><input name="max_concurrent_requests" type="number" min="0" value="${escapeHtml(provider.max_concurrent_requests ?? '')}">
       <label>Timeout milliseconds. Blank uses the server default.</label><input name="timeout_ms" type="number" min="0" value="${escapeHtml(provider.timeout_ms ?? '')}">
       <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${provider.enabled === 0 ? '' : 'checked'}> Enabled</label>
-      <p><button type="submit">Save provider</button> <a class="button secondary" href="/admin/settings">Cancel</a></p>
-    </form>
-  `;
-}
-
-function activeProviderModel(providerId) {
-  return getDb().prepare(`
-    SELECT *
-    FROM provider_models
-    WHERE provider_id = ?
-    ORDER BY enabled DESC, updated_at DESC, id DESC
-    LIMIT 1
-  `).get(providerId) || {};
-}
-
-function activeModelMappingForm(provider, model = activeProviderModel(provider.id)) {
-  return `
-    <form method="post" action="/admin/providers/${provider.id}/mapping" class="panel">
-      <h2>Active Model Mapping</h2>
-      <label>Public alias shown to OpenCode</label><input value="${escapeHtml(config.publicModelName)}" readonly>
-      <label>Provider model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
-      <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
-      <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
+      ${modelMappingFields(provider)}
       <div class="actions" style="margin-top:16px">
-        <button type="submit">Save mapping</button>
-        <button type="button" class="secondary" data-test-url="/admin/providers/${provider.id}/mapping/test.json" data-result-target="mapping-test-result">Run mapping test request</button>
+        <button type="submit">Save provider</button>
+        ${provider.id ? `<button type="button" class="secondary" data-test-url="/admin/providers/${provider.id}/mapping/test.json" data-result-target="mapping-test-result">Run mapping test request</button>` : ''}
+        <a class="button secondary" href="/admin/settings">Cancel</a>
       </div>
-      <p id="mapping-test-result" class="muted" aria-live="polite" style="white-space:pre-wrap"></p>
+      ${provider.id ? '<p id="mapping-test-result" class="muted" aria-live="polite" style="white-space:pre-wrap"></p>' : ''}
     </form>
   `;
 }
@@ -779,21 +797,27 @@ router.get('/admin/providers/new', requireAdmin, (req, res) => {
 
 router.post('/admin/providers', requireAdmin, (req, res) => {
   const form = parseProviderForm(req.body);
-  getDb().prepare(`
-    INSERT INTO providers
-      (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests, timeout_ms)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    form.slug,
-    form.name,
-    'openai-compatible',
-    form.baseUrl,
-    form.apiKey,
-    form.enabled,
-    form.maxConcurrentRequests,
-    form.timeoutMs
-  );
-  res.redirect('/admin/settings?saved=1');
+  const mapping = parseModelMappingForm(req.body);
+  const db = getDb();
+  const providerId = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO providers
+        (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests, timeout_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      form.slug,
+      form.name,
+      'openai-compatible',
+      form.baseUrl,
+      form.apiKey,
+      form.enabled,
+      form.maxConcurrentRequests,
+      form.timeoutMs
+    );
+    saveActiveModelMapping(db, result.lastInsertRowid, form.name, mapping);
+    return result.lastInsertRowid;
+  })();
+  res.redirect(`/admin/providers/${providerId}?saved=1`);
 });
 
 router.get('/admin/providers/:id', requireAdmin, (req, res) => {
@@ -805,7 +829,6 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
     content: `
       <div class="provider-sections">
         ${providerForm(provider, `/admin/providers/${provider.id}`)}
-        ${activeModelMappingForm(provider)}
         <div class="panel">
           <h2>Provider API key</h2>
           <form method="post" action="/admin/providers/${provider.id}">
@@ -885,22 +908,27 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
     return res.redirect(`/admin/providers/${provider.id}?saved=1`);
   }
   const form = parseProviderForm(req.body, provider);
-  getDb().prepare(`
-    UPDATE providers
-    SET slug = ?, name = ?, kind = ?, base_url = ?, api_key = ?, enabled = ?,
-        max_concurrent_requests = ?, timeout_ms = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    form.slug,
-    form.name,
-    'openai-compatible',
-    form.baseUrl,
-    form.apiKey,
-    form.enabled,
-    form.maxConcurrentRequests,
-    form.timeoutMs,
-    provider.id
-  );
+  const mapping = parseModelMappingForm(req.body);
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE providers
+      SET slug = ?, name = ?, kind = ?, base_url = ?, api_key = ?, enabled = ?,
+          max_concurrent_requests = ?, timeout_ms = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      form.slug,
+      form.name,
+      'openai-compatible',
+      form.baseUrl,
+      form.apiKey,
+      form.enabled,
+      form.maxConcurrentRequests,
+      form.timeoutMs,
+      provider.id
+    );
+    saveActiveModelMapping(db, provider.id, form.name, mapping);
+  })();
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
 });
 
@@ -935,22 +963,7 @@ router.post('/admin/providers/:id/mapping', requireAdmin, (req, res) => {
   const form = parseModelMappingForm(req.body);
   const db = getDb();
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM provider_models WHERE provider_id = ? AND public_model != ?').run(provider.id, config.publicModelName);
-    const existing = db.prepare('SELECT id FROM provider_models WHERE provider_id = ? AND public_model = ?').get(provider.id, config.publicModelName);
-    if (existing) {
-      db.prepare(`
-        UPDATE provider_models
-        SET upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(form.upstreamModel, provider.name, form.contextLimit, form.outputLimit, existing.id);
-    } else {
-      db.prepare(`
-        INSERT INTO provider_models
-          (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-      `).run(provider.id, config.publicModelName, form.upstreamModel, provider.name, form.contextLimit, form.outputLimit);
-    }
+    saveActiveModelMapping(db, provider.id, provider.name, form);
   });
   tx();
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
