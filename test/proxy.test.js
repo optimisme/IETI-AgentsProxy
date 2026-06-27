@@ -698,7 +698,8 @@ test('admin can edit provider slug and sees edit title', async () => {
   assert.match(edit.text, /name="slug"/);
   assert.doesNotMatch(edit.text, /name="slug"[^>]*readonly/);
   assert.match(edit.text, /Active Model Mapping/);
-  assert.match(edit.text, /Public alias shown to OpenCode/);
+  assert.match(edit.text, /OpenCode model alias/);
+  assert.match(edit.text, /Providers with the same alias are load-balanced together and shown as one model in OpenCode/);
   assert.match(edit.text, /name="public_model"/);
   assert.doesNotMatch(edit.text, /name="public_model"[^>]*readonly/);
   assert.doesNotMatch(edit.text, /Save mapping/);

@@ -185,9 +185,9 @@ function parseModelMappingForm(body) {
 }
 
 function validatePublicModelAlias(value) {
-  const alias = requiredText(value, 'Public alias shown to OpenCode', { max: 120 });
+  const alias = requiredText(value, 'OpenCode model alias', { max: 120 });
   if (/[\s/]/.test(alias)) {
-    throw apiError(400, 'invalid_form', 'Public alias shown to OpenCode cannot contain spaces or slashes.');
+    throw apiError(400, 'invalid_form', 'OpenCode model alias cannot contain spaces or slashes.');
   }
   return alias;
 }
@@ -346,7 +346,8 @@ function activeProviderModel(providerId) {
 function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
   return `
     <h2>Active Model Mapping</h2>
-    <label>Public alias shown to OpenCode</label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
+    <label>OpenCode model alias</label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
+    <p class="muted">Providers with the same alias are load-balanced together and shown as one model in OpenCode.</p>
     <label>Provider model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
     <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
     <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
