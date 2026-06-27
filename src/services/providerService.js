@@ -45,24 +45,6 @@ function listProviders() {
   }));
 }
 
-function listProviderModels(providerId = null) {
-  if (providerId) {
-    return getDb().prepare(`
-      SELECT provider_models.*, providers.slug AS provider_slug, providers.name AS provider_name, providers.enabled AS provider_enabled
-      FROM provider_models
-      JOIN providers ON providers.id = provider_models.provider_id
-      WHERE provider_models.provider_id = ?
-      ORDER BY provider_models.public_model ASC
-    `).all(providerId);
-  }
-  return getDb().prepare(`
-    SELECT provider_models.*, providers.slug AS provider_slug, providers.name AS provider_name, providers.enabled AS provider_enabled
-    FROM provider_models
-    JOIN providers ON providers.id = provider_models.provider_id
-    ORDER BY providers.name ASC, provider_models.public_model ASC
-  `).all();
-}
-
 function getEnabledModelEntries() {
   const rows = getDb().prepare(`
     SELECT
@@ -88,10 +70,6 @@ function getEnabledModelEntries() {
         output: Number(row.output_limit || config.defaultModelOutputLimit)
       }
   }));
-}
-
-function getEnabledModels() {
-  return getEnabledModelEntries().map((model) => model.id);
 }
 
 function getPublicModelAliasesForProviderSlugs(slugs) {
@@ -300,11 +278,9 @@ module.exports = {
   chatCompletionsUrl,
   chooseProviderModel,
   getEnabledModelEntries,
-  getEnabledModels,
   getPublicModelAliasesForProviderSlugs,
   getInFlight,
   getProviderBySlug,
-  listProviderModels,
   listProviders,
   reserveProviderForTest,
   testProvider

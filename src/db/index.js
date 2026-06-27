@@ -218,30 +218,6 @@ function migrateSchema(database) {
   `);
 
   database.prepare(`
-    UPDATE settings
-    SET value = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'default_model_context_limit' AND value IN ('16384', '64000', '32768', '65536')
-  `).run(String(config.defaultModelContextLimit));
-
-  database.prepare(`
-    UPDATE settings
-    SET value = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'max_tokens_per_request' AND value IN ('32000', '65536', '131072')
-  `).run(String(config.maxTokensPerRequest));
-
-  database.prepare(`
-    UPDATE settings
-    SET value = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'default_model_output_limit' AND value = '8192'
-  `).run(String(config.defaultModelOutputLimit));
-
-  database.prepare(`
-    UPDATE provider_models
-    SET context_limit = 65536, updated_at = CURRENT_TIMESTAMP
-    WHERE context_limit IN (16384, 64000, 32768)
-  `).run();
-
-  database.prepare(`
     DELETE FROM settings
     WHERE key IN (
       'deepseek_api_key',
@@ -285,36 +261,6 @@ function migrateSchema(database) {
       GROUP BY provider_id
     )
   `);
-  database.prepare(`
-    UPDATE settings
-    SET value = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'default_daily_token_limit' AND value IN ('100000', '100000000')
-  `).run(String(config.defaultDailyTokenLimit));
-
-  database.prepare(`
-    UPDATE settings
-    SET value = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE key = 'max_requests_per_minute' AND value IN ('20', '50')
-  `).run(String(config.maxRequestsPerMinute));
-
-  database.prepare(`
-    UPDATE groups
-    SET daily_call_limit = ?,
-        daily_token_limit = ?,
-        hourly_call_limit = ?,
-        hourly_token_limit = ?,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE name = 'Default Users'
-      AND (daily_call_limit IS NULL OR daily_call_limit = 1000000000)
-      AND (daily_token_limit IS NULL OR daily_token_limit = 100000 OR daily_token_limit = 1000000000)
-      AND (hourly_call_limit IS NULL OR hourly_call_limit = 100000000)
-      AND (hourly_token_limit IS NULL OR hourly_token_limit = 100000000)
-  `).run(
-    DEFAULT_GROUP_LIMITS.dailyCallLimit,
-    DEFAULT_GROUP_LIMITS.dailyTokenLimit,
-    DEFAULT_GROUP_LIMITS.hourlyCallLimit,
-    DEFAULT_GROUP_LIMITS.hourlyTokenLimit
-  );
 }
 
 function seedSettings(database) {

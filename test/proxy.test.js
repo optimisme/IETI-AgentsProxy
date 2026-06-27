@@ -340,7 +340,7 @@ test('admin can clear all providers from a group', async () => {
   assert.equal(providerCount, 0);
 });
 
-test('database startup does not re-add the default provider to configured group pools', () => {
+test('database startup preserves configured provider pools, aliases, limits, and settings', () => {
   const database = new Database(path.join(os.tmpdir(), `agents-proxy-startup-test-${Date.now()}.sqlite`));
   const { initSchema, migrateSchema, seedSettings } = require('../src/db');
   database.pragma('foreign_keys = ON');
@@ -370,6 +370,25 @@ test('database startup does not re-add the default provider to configured group 
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
     VALUES (?, ?, ?, ?, 1, 65536, 8192)
   `).run(activeProvider.lastInsertRowid, 'custom-public-alias', 'custom-upstream', 'Custom Model');
+  database.prepare(`
+    UPDATE provider_models
+    SET context_limit = 32768
+    WHERE provider_id = ?
+  `).run(activeProvider.lastInsertRowid);
+  const updateSetting = database.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?');
+  updateSetting.run('16384', 'default_model_context_limit');
+  updateSetting.run('8192', 'default_model_output_limit');
+  updateSetting.run('32000', 'max_tokens_per_request');
+  updateSetting.run('20', 'max_requests_per_minute');
+  updateSetting.run('100000', 'default_daily_token_limit');
+  database.prepare(`
+    UPDATE groups
+    SET daily_call_limit = 1000000000,
+        daily_token_limit = 100000,
+        hourly_call_limit = 100000000,
+        hourly_token_limit = 100000000
+    WHERE name = 'Default Users'
+  `).run();
 
   migrateSchema(database);
   seedSettings(database);
@@ -383,8 +402,38 @@ test('database startup does not re-add the default provider to configured group 
   `).all(group.lastInsertRowid).map((row) => row.slug);
 
   assert.deepEqual(providerSlugs, [activeSlug]);
-  const publicAlias = database.prepare('SELECT public_model FROM provider_models WHERE provider_id = ?').get(activeProvider.lastInsertRowid).public_model;
-  assert.equal(publicAlias, 'custom-public-alias');
+  const model = database.prepare('SELECT public_model, context_limit FROM provider_models WHERE provider_id = ?').get(activeProvider.lastInsertRowid);
+  assert.equal(model.public_model, 'custom-public-alias');
+  assert.equal(model.context_limit, 32768);
+  const settings = Object.fromEntries(database.prepare(`
+    SELECT key, value
+    FROM settings
+    WHERE key IN (
+      'default_model_context_limit',
+      'default_model_output_limit',
+      'max_tokens_per_request',
+      'max_requests_per_minute',
+      'default_daily_token_limit'
+    )
+  `).all().map((row) => [row.key, row.value]));
+  assert.deepEqual(settings, {
+    default_daily_token_limit: '100000',
+    default_model_context_limit: '16384',
+    default_model_output_limit: '8192',
+    max_requests_per_minute: '20',
+    max_tokens_per_request: '32000'
+  });
+  const defaultGroup = database.prepare(`
+    SELECT daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit
+    FROM groups
+    WHERE name = 'Default Users'
+  `).get();
+  assert.deepEqual(defaultGroup, {
+    daily_call_limit: 1000000000,
+    daily_token_limit: 100000,
+    hourly_call_limit: 100000000,
+    hourly_token_limit: 100000000
+  });
   database.close();
 });
 
@@ -702,6 +751,7 @@ test('admin can edit provider slug and sees edit title', async () => {
   assert.match(edit.text, /Providers with the same alias are load-balanced together and shown as one model in OpenCode/);
   assert.match(edit.text, /name="public_model"/);
   assert.doesNotMatch(edit.text, /name="public_model"[^>]*readonly/);
+  assert.match(edit.text, /Upstream model name/);
   assert.doesNotMatch(edit.text, /Save mapping/);
   assert.doesNotMatch(edit.text, /<h2>Models<\/h2>/);
   assert.doesNotMatch(edit.text, /Add model/);

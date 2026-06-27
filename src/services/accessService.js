@@ -71,11 +71,6 @@ function setUserGroups(userId, groupIds) {
   tx();
 }
 
-function getAllowedProviderSlugsForUser(userId) {
-  const group = getUserGroup(userId);
-  return group?.provider_slugs || [];
-}
-
 function setGroupProviders(groupId, providerIds) {
   const ids = [...new Set(providerIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
   const db = getDb();
@@ -99,7 +94,6 @@ function setGroupProviders(groupId, providerIds) {
 module.exports = {
   attachProviderPool,
   getAllGroups,
-  getAllowedProviderSlugsForUser,
   getUserGroup,
   getUserGroups,
   providerPoolForGroup,

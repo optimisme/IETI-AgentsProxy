@@ -178,7 +178,7 @@ function isProviderApiKeyOnlyForm(body) {
 function parseModelMappingForm(body) {
   return {
     publicModel: validatePublicModelAlias(body.public_model),
-    upstreamModel: requiredText(body.upstream_model, 'Provider model name', { max: 255 }),
+    upstreamModel: requiredText(body.upstream_model, 'Upstream model name', { max: 255 }),
     contextLimit: nonNegativeIntegerOrNull(body.context_limit, 'Context limit'),
     outputLimit: nonNegativeIntegerOrNull(body.output_limit, 'Output limit')
   };
@@ -347,7 +347,7 @@ function modelMappingFields(provider = {}, model = activeProviderModel(provider.
   return `
     <h2>Active Model Mapping</h2>
     <label>OpenCode model alias <span class="muted" style="display:block;font-weight:400">Providers with the same alias are load-balanced together and shown as one model in OpenCode.</span></label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
-    <label>Provider model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
+    <label>Upstream model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
     <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
     <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
   `;

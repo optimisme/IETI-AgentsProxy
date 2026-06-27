@@ -44,7 +44,6 @@
 | Router | Path | Description |
 |--------|------|-------------|
 | `routes/health.js` | `GET /health` | Health check |
-| `routes/me.js` | `GET /me` | Current user info from Bearer token |
 | `routes/openai.js` | `GET /v1/models`, `POST /v1/chat/completions` | OpenAI-compatible API proxy (with streaming SSE support) |
 | `routes/studentPortal.js` | `/`, `/login`, `/logout`, `/portal/*` | Student self-service web UI |
 | `routes/admin.js` | `/admin/*` | Admin backoffice (users, groups, providers, settings) |
@@ -133,4 +132,3 @@ Default port is `3000`. The script:
 | `proxmoxConnect.sh` | Quick SSH to the container |
 | `proxmoxSendFile.sh` | SCP a single file to `~` on the remote |
 | `proxmoxDeploy.sh` | Full deploy (zip + transfer + npm install + pm2 restart) |
-

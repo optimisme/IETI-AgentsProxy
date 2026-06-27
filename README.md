@@ -235,7 +235,6 @@ Authorization: Bearer <user_api_key>
 Endpoints principals:
 
 - `GET /health`: comprovacio de salut.
-- `GET /me`: informacio de l'usuari autenticat.
 - `GET /v1/models`: models disponibles per a l'usuari.
 - `POST /v1/chat/completions`: proxy OpenAI-compatible.
 
@@ -276,7 +275,7 @@ Estructura principal:
 - `src/config.js`: llegeix `settings.env` i exporta valors tipats.
 - `src/app.js`: crea l'aplicacio Express, middleware, rutes i gestio d'errors.
 - `src/db/`: connexio SQLite, esquema, migracions i inicialitzacio.
-- `src/routes/`: rutes HTTP del portal, admin, API OpenAI-compatible, salut i `/me`.
+- `src/routes/`: rutes HTTP del portal, admin, API OpenAI-compatible i salut.
 - `src/middleware/`: autenticacio, rate limit i errors.
 - `src/services/`: logica de negoci.
 - `src/views/`: plantilles HTML server-rendered.

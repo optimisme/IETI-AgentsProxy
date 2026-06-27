@@ -5,7 +5,6 @@ const BetterSqlite3Store = require('better-sqlite3-session-store')(session);
 const config = require('./config');
 const { getDb } = require('./db');
 const healthRoutes = require('./routes/health');
-const meRoutes = require('./routes/me');
 const openaiRoutes = require('./routes/openai');
 const adminRoutes = require('./routes/admin');
 const studentPortalRoutes = require('./routes/studentPortal');
@@ -63,7 +62,6 @@ function createApp() {
   app.use(healthRoutes);
   app.use(studentPortalRoutes);
   app.use(adminRoutes);
-  app.use(meRoutes);
   app.use(openaiRoutes);
   app.use(notFound);
   app.use(errorHandler);
