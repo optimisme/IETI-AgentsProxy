@@ -308,7 +308,7 @@ function groupForm(group = {}, action = '/admin/groups') {
   return `
     <form method="post" action="${action}" class="panel">
       <label>Name</label><input name="name" value="${escapeHtml(group.name)}" required>
-      <label>Model pools</label>
+      <label>Balanced model pools</label>
       <div class="checkbox-list">
         ${providers.length ? [...providerPools.entries()].map(([publicModel, poolProviders]) => `
           <fieldset style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:0 0 12px">

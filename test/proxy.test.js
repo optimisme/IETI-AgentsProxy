@@ -305,7 +305,7 @@ test('admin can assign multiple providers to a group', async () => {
   assert.deepEqual(providerIds, [deepseek.id, secondProvider.lastInsertRowid]);
 
   const edit = await agent.get(`/admin/groups/${group.id}`).expect(200);
-  assert.match(edit.text, /Model pools/);
+  assert.match(edit.text, /Balanced model pools/);
   assert.match(edit.text, /active-model/);
   assert.match(edit.text, /admin-fast-model/);
   assert.match(edit.text, /Admin Pool Provider/);
