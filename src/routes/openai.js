@@ -2,7 +2,7 @@ const express = require('express');
 const config = require('../config');
 const { authStudent } = require('../middleware/authStudent');
 const { studentRateLimit } = require('../middleware/rateLimit');
-const { callChatCompletions, getEnabledModelEntries } = require('../services/providerService');
+const { callChatCompletions, getEnabledModelEntries, getPublicModelAliasesForProviderSlugs } = require('../services/providerService');
 const { checkQuota } = require('../services/quotaService');
 const { recordUsage } = require('../services/usageService');
 const { getUserGroup } = require('../services/accessService');
@@ -15,22 +15,25 @@ const router = express.Router();
 router.get('/v1/models', authStudent, studentRateLimit, (req, res) => {
   const group = getUserGroup(req.student.id);
   const providerSlugs = new Set(group?.provider_slugs || []);
-  const hasActiveProvider = providerSlugs.size > 0 && getEnabledModelEntries().some((model) => providerSlugs.has(model.id));
+  const models = [...new Set(getEnabledModelEntries()
+    .filter((model) => providerSlugs.has(model.id))
+    .map((model) => model.publicModel)
+    .filter(Boolean))];
   res.json({
     object: 'list',
-    data: hasActiveProvider ? [{
-      id: config.publicModelName,
+    data: models.map((model) => ({
+      id: model,
       object: 'model',
       created: 0,
       owned_by: 'ieti-agents'
-    }] : []
+    }))
   });
 });
 
 router.post('/v1/chat/completions', authStudent, studentRateLimit, async (req, res, next) => {
   const user = req.student;
   const payload = req.body || {};
-  const model = payload.model || config.publicModelName;
+  let model = payload.model || '';
   const estimatedInputTokens = estimateChatTokens(payload);
   const requestedMaxTokens = Number(payload.max_tokens || 0);
   const wasStreaming = Boolean(payload.stream);
@@ -50,6 +53,10 @@ router.post('/v1/chat/completions', authStudent, studentRateLimit, async (req, r
       throw apiError(400, 'streaming_disabled', 'Streaming is disabled on this server.');
     }
     validateRequestPayload(payload);
+    if (!model) {
+      const group = getUserGroup(user.id);
+      model = getPublicModelAliasesForProviderSlugs(group?.provider_slugs || [])[0] || config.publicModelName;
+    }
 
     const { group } = checkQuota({ user, model, estimatedInputTokens, requestedMaxTokens });
     timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);

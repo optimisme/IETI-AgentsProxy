@@ -2,18 +2,20 @@ const config = require('../config');
 const { apiError } = require('../utils/errors');
 const { getUsageTotals } = require('./usageService');
 const { getUserGroup } = require('./accessService');
+const { getPublicModelAliasesForProviderSlugs } = require('./providerService');
 
 function checkQuota({ user, model }) {
-  if (model !== config.publicModelName) {
-    throw apiError(403, 'model_not_allowed', `Use ${config.publicModelName} for this user.`);
-  }
-
   const group = getUserGroup(user.id);
   if (!group) {
     throw apiError(403, 'group_required', 'This user is not assigned to a group.');
   }
   if (!group.provider_slug) {
     throw apiError(403, 'provider_required', 'This user group has no assigned provider.');
+  }
+  const allowedModels = getPublicModelAliasesForProviderSlugs(group.provider_slugs);
+  if (!allowedModels.includes(model)) {
+    const hint = allowedModels.length ? allowedModels.join(', ') : config.publicModelName;
+    throw apiError(403, 'model_not_allowed', `Use ${hint} for this user.`);
   }
 
   const totals = getUsageTotals(user.id);

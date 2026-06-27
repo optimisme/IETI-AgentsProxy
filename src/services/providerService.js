@@ -68,6 +68,7 @@ function getEnabledModelEntries() {
     SELECT
       providers.slug,
       providers.name AS provider_name,
+      provider_models.public_model,
       provider_models.name AS model_name,
       provider_models.context_limit,
       provider_models.output_limit,
@@ -80,6 +81,7 @@ function getEnabledModelEntries() {
   `).all();
   return rows.map((row) => ({
       id: row.slug,
+      publicModel: row.public_model,
       name: row.provider_name || row.slug,
       limit: {
         context: Number(row.context_limit || config.defaultModelContextLimit),
@@ -90,6 +92,15 @@ function getEnabledModelEntries() {
 
 function getEnabledModels() {
   return getEnabledModelEntries().map((model) => model.id);
+}
+
+function getPublicModelAliasesForProviderSlugs(slugs) {
+  const allowedSlugs = new Set(normalizeProviderSlugs(slugs));
+  if (!allowedSlugs.size) return [];
+  return [...new Set(getEnabledModelEntries()
+    .filter((model) => allowedSlugs.has(model.id))
+    .map((model) => model.publicModel)
+    .filter(Boolean))];
 }
 
 function getInFlight(slug) {
@@ -131,7 +142,8 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null) {
   const slugs = normalizeProviderSlugs(assignedProviderSlugs);
   const params = { publicModelAlias };
   const providerFilter = slugs.length
-    ? `AND providers.slug IN (${slugs.map((_, index) => `@slug${index}`).join(', ')})`
+    ? `AND providers.slug IN (${slugs.map((_, index) => `@slug${index}`).join(', ')})
+       AND provider_models.public_model = @publicModelAlias`
     : 'AND provider_models.public_model = @publicModelAlias';
   slugs.forEach((slug, index) => {
     params[`slug${index}`] = slug;
@@ -289,6 +301,7 @@ module.exports = {
   chooseProviderModel,
   getEnabledModelEntries,
   getEnabledModels,
+  getPublicModelAliasesForProviderSlugs,
   getInFlight,
   getProviderBySlug,
   listProviderModels,

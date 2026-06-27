@@ -286,11 +286,6 @@ function migrateSchema(database) {
     )
   `);
   database.prepare(`
-    UPDATE provider_models
-    SET public_model = ?, enabled = 1, updated_at = CURRENT_TIMESTAMP
-  `).run(config.publicModelName);
-
-  database.prepare(`
     UPDATE settings
     SET value = ?, updated_at = CURRENT_TIMESTAMP
     WHERE key = 'default_daily_token_limit' AND value IN ('100000', '100000000')

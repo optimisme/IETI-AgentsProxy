@@ -177,28 +177,45 @@ function isProviderApiKeyOnlyForm(body) {
 
 function parseModelMappingForm(body) {
   return {
+    publicModel: validatePublicModelAlias(body.public_model),
     upstreamModel: requiredText(body.upstream_model, 'Provider model name', { max: 255 }),
     contextLimit: nonNegativeIntegerOrNull(body.context_limit, 'Context limit'),
     outputLimit: nonNegativeIntegerOrNull(body.output_limit, 'Output limit')
   };
 }
 
+function validatePublicModelAlias(value) {
+  const alias = requiredText(value, 'Public alias shown to OpenCode', { max: 120 });
+  if (/[\s/]/.test(alias)) {
+    throw apiError(400, 'invalid_form', 'Public alias shown to OpenCode cannot contain spaces or slashes.');
+  }
+  return alias;
+}
+
 function saveActiveModelMapping(db, providerId, providerName, form) {
-  db.prepare('DELETE FROM provider_models WHERE provider_id = ? AND public_model != ?').run(providerId, config.publicModelName);
-  const existing = db.prepare('SELECT id FROM provider_models WHERE provider_id = ? AND public_model = ?').get(providerId, config.publicModelName);
+  const existing = db.prepare(`
+    SELECT id
+    FROM provider_models
+    WHERE provider_id = ?
+    ORDER BY enabled DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get(providerId);
+  if (existing) {
+    db.prepare('DELETE FROM provider_models WHERE provider_id = ? AND id != ?').run(providerId, existing.id);
+  }
   if (existing) {
     db.prepare(`
       UPDATE provider_models
-      SET upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
+      SET public_model = ?, upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(form.upstreamModel, providerName, form.contextLimit, form.outputLimit, existing.id);
+    `).run(form.publicModel, form.upstreamModel, providerName, form.contextLimit, form.outputLimit, existing.id);
   } else {
     db.prepare(`
       INSERT INTO provider_models
         (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
       VALUES (?, ?, ?, ?, 1, ?, ?)
-    `).run(providerId, config.publicModelName, form.upstreamModel, providerName, form.contextLimit, form.outputLimit);
+    `).run(providerId, form.publicModel, form.upstreamModel, providerName, form.contextLimit, form.outputLimit);
   }
 }
 
@@ -279,7 +296,11 @@ function userForm(user = {}, action = '/admin/users') {
 }
 
 function groupForm(group = {}, action = '/admin/groups') {
-  const providers = listProviders();
+  const providers = listProviders().map((provider) => ({
+    ...provider,
+    model: activeProviderModel(provider.id)
+  }));
+  const providerPools = Map.groupBy(providers, (provider) => provider.model.public_model || 'Unconfigured');
   const selectedProviderIds = new Set((group.providers || [])
     .map((provider) => Number(provider.id))
     .filter((id) => Number.isInteger(id) && id > 0));
@@ -287,14 +308,21 @@ function groupForm(group = {}, action = '/admin/groups') {
   return `
     <form method="post" action="${action}" class="panel">
       <label>Name</label><input name="name" value="${escapeHtml(group.name)}" required>
-      <label>Assigned providers</label>
+      <label>Model pools</label>
       <div class="checkbox-list">
-        ${providers.map((provider) => `
-          <label>
-            <input name="provider_ids" type="checkbox" value="${provider.id}" style="width:auto" ${selectedProviderIds.has(Number(provider.id)) ? 'checked' : ''}>
-            ${escapeHtml(provider.name)} (${escapeHtml(provider.slug)})
-          </label>
-        `).join('') || '<p class="muted">No providers configured.</p>'}
+        ${providers.length ? [...providerPools.entries()].map(([publicModel, poolProviders]) => `
+          <fieldset style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:0 0 12px">
+            <legend>${escapeHtml(publicModel)}</legend>
+            ${poolProviders.map((provider) => `
+              <label>
+                <input name="provider_ids" type="checkbox" value="${provider.id}" style="width:auto" ${selectedProviderIds.has(Number(provider.id)) ? 'checked' : ''}>
+                ${escapeHtml(provider.name)} (${escapeHtml(provider.slug)})
+                ${provider.model.upstream_model ? `<span class="muted">${escapeHtml(provider.model.upstream_model)}</span>` : '<span class="muted">No active mapping</span>'}
+                ${provider.enabled ? '' : '<span class="muted">disabled</span>'}
+              </label>
+            `).join('')}
+          </fieldset>
+        `).join('') : '<p class="muted">No providers configured.</p>'}
       </div>
       <label>Calls per day</label><input name="daily_call_limit" type="number" min="0" value="${limitValue(group.daily_call_limit)}" placeholder="Unlimited">
       <label>Tokens per day</label><input name="daily_token_limit" type="number" min="0" value="${limitValue(group.daily_token_limit)}" placeholder="Unlimited">
@@ -318,7 +346,7 @@ function activeProviderModel(providerId) {
 function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
   return `
     <h2>Active Model Mapping</h2>
-    <label>Public alias shown to OpenCode</label><input value="${escapeHtml(config.publicModelName)}" readonly>
+    <label>Public alias shown to OpenCode</label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
     <label>Provider model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
     <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
     <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">

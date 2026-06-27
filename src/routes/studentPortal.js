@@ -4,7 +4,7 @@ const { generateStudentKey, hashApiKey, lookupHashApiKey, keyPrefixSuffix } = re
 const { verifyAdminCredentials } = require('../middleware/authAdmin');
 const { getUsageTotals, recentUsage } = require('../services/usageService');
 const { getSetting } = require('../services/settingsService');
-const { getEnabledModelEntries, getEnabledModels } = require('../services/providerService');
+const { getEnabledModelEntries } = require('../services/providerService');
 const { getUserGroup } = require('../services/accessService');
 const {
   findUserByInviteToken,
@@ -34,17 +34,17 @@ function getRequestBaseUrl(req) {
 }
 
 function getModelEntries(models) {
-  const configured = new Map(getEnabledModelEntries().map((model) => [model.id, model]));
+  const configured = new Map(getEnabledModelEntries().map((model) => [model.publicModel, model]));
   const context = Number(getSetting('default_model_context_limit', config.defaultModelContextLimit));
   const output = Number(getSetting('default_model_output_limit', OPENCODE_DEFAULT_OUTPUT_LIMIT));
   return Object.fromEntries(models.map((model) => {
-    const entry = configured.get(model.providerSlug);
+    const entry = configured.get(model.id);
     const limit = model.limit || entry?.limit || { context, output };
     const modelOutput = Number(limit.output || output);
     return [
-      config.publicModelName,
+      model.id,
       {
-        name: config.publicModelName,
+        name: model.id,
         limit,
         max_tokens: modelOutput,
         tool_call: true,
@@ -58,21 +58,36 @@ function getModelEntries(models) {
   }));
 }
 
-function getActiveModelForUser(user) {
+function getActiveModelsForUser(user) {
   const group = getUserGroup(user.id);
   const providerSlugs = group?.provider_slugs || [];
-  const enabled = new Set(getEnabledModels());
-  const activeSlugs = providerSlugs.filter((slug) => enabled.has(slug));
-  if (!activeSlugs.length) return null;
-  const entries = getEnabledModelEntries().filter((entry) => activeSlugs.includes(entry.id));
-  const limit = entries.reduce((current, entry) => ({
-    context: Math.min(current.context, Number(entry.limit?.context || current.context)),
-    output: Math.min(current.output, Number(entry.limit?.output || current.output))
-  }), {
+  const enabled = getEnabledModelEntries().filter((entry) => providerSlugs.includes(entry.id));
+  const defaults = {
     context: Number(getSetting('default_model_context_limit', config.defaultModelContextLimit)),
     output: Number(getSetting('default_model_output_limit', OPENCODE_DEFAULT_OUTPUT_LIMIT))
-  });
-  return { id: config.publicModelName, providerSlug: activeSlugs[0], providerSlugs: activeSlugs, limit, group };
+  };
+  const byAlias = new Map();
+  for (const entry of enabled) {
+    if (!entry.publicModel) continue;
+    const current = byAlias.get(entry.publicModel) || {
+      id: entry.publicModel,
+      providerSlug: entry.id,
+      providerSlugs: [],
+      limit: null,
+      group
+    };
+    current.providerSlugs.push(entry.id);
+    const entryLimit = {
+      context: Number(entry.limit?.context || defaults.context),
+      output: Number(entry.limit?.output || defaults.output)
+    };
+    current.limit = {
+      context: current.limit ? Math.min(current.limit.context, entryLimit.context) : entryLimit.context,
+      output: current.limit ? Math.min(current.limit.output, entryLimit.output) : entryLimit.output
+    };
+    byAlias.set(entry.publicModel, current);
+  }
+  return [...byAlias.values()];
 }
 
 function buildOpenCodeProviderBlock({ req, models, apiKey }) {
@@ -275,8 +290,7 @@ router.post('/invite/:token', (req, res) => {
 router.get('/portal', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const usage = getUsageTotals(user.id);
-  const activeModel = getActiveModelForUser(user);
-  const models = activeModel ? [activeModel] : [];
+  const models = getActiveModelsForUser(user);
   const providerSnippet = JSON.stringify({
     provider: buildOpenCodeProviderBlock({
       req,
@@ -326,11 +340,11 @@ router.get('/portal', requireStudentSession, (req, res) => {
       ` : ''}
       <h1>${escapeHtml(user.name)}</h1>
       <p class="muted">${escapeHtml(user.email)}</p>
-      ${usageLimitCards(activeModel?.group, usage)}
+      ${usageLimitCards(models[0]?.group, usage)}
       <div class="panel" style="margin-top:16px">
         <h2>OpenCode</h2>
         <p>Provider base URL: <span class="key">${escapeHtml(`${getRequestBaseUrl(req)}/v1`)}</span></p>
-        <p>Model: <span class="key">${escapeHtml(config.publicModelName)}</span></p>
+        <p>Model: <span class="key">${escapeHtml(models.map((model) => model.id).join(', ') || config.publicModelName)}</span></p>
         <label>Provider section</label>
         <pre class="key">${escapeHtml(providerSnippet)}</pre>
         <div class="actions">
@@ -425,8 +439,7 @@ router.post('/portal/key/revoke', requireStudentSession, (req, res) => {
 
 router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
   const user = req.portalUser;
-  const activeModel = getActiveModelForUser(user);
-  const models = activeModel ? [activeModel] : [];
+  const models = getActiveModelsForUser(user);
   const apiKey = '{env:IETI_AGENT_KEY}';
   const opencodeConfig = buildOpenCodeConfig({ req, models, apiKey });
 

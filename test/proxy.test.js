@@ -278,6 +278,10 @@ test('admin can assign multiple providers to a group', async () => {
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
     VALUES (?, ?, ?, ?, ?, 1)
   `).run(`admin-pool-${Date.now()}`, 'Admin Pool Provider', 'openai-compatible', mockBaseUrl, 'local');
+  db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 32000, 4096)
+  `).run(secondProvider.lastInsertRowid, 'admin-fast-model', 'admin-fast-upstream', 'Admin Fast');
   const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
   const groupName = `Admin Pool Group ${Date.now()}`;
 
@@ -299,6 +303,13 @@ test('admin can assign multiple providers to a group', async () => {
     ORDER BY priority DESC, provider_id ASC
   `).all(group.id).map((row) => row.provider_id);
   assert.deepEqual(providerIds, [deepseek.id, secondProvider.lastInsertRowid]);
+
+  const edit = await agent.get(`/admin/groups/${group.id}`).expect(200);
+  assert.match(edit.text, /Model pools/);
+  assert.match(edit.text, /active-model/);
+  assert.match(edit.text, /admin-fast-model/);
+  assert.match(edit.text, /Admin Pool Provider/);
+  assert.match(edit.text, /admin-fast-upstream/);
 });
 
 test('admin can clear all providers from a group', async () => {
@@ -355,6 +366,10 @@ test('database startup does not re-add the default provider to configured group 
     INSERT INTO group_providers (group_id, provider_id, enabled, priority)
     VALUES (?, ?, 1, 100)
   `).run(group.lastInsertRowid, activeProvider.lastInsertRowid);
+  database.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 65536, 8192)
+  `).run(activeProvider.lastInsertRowid, 'custom-public-alias', 'custom-upstream', 'Custom Model');
 
   migrateSchema(database);
   seedSettings(database);
@@ -368,6 +383,8 @@ test('database startup does not re-add the default provider to configured group 
   `).all(group.lastInsertRowid).map((row) => row.slug);
 
   assert.deepEqual(providerSlugs, [activeSlug]);
+  const publicAlias = database.prepare('SELECT public_model FROM provider_models WHERE provider_id = ?').get(activeProvider.lastInsertRowid).public_model;
+  assert.equal(publicAlias, 'custom-public-alias');
   database.close();
 });
 
@@ -682,11 +699,13 @@ test('admin can edit provider slug and sees edit title', async () => {
   assert.doesNotMatch(edit.text, /name="slug"[^>]*readonly/);
   assert.match(edit.text, /Active Model Mapping/);
   assert.match(edit.text, /Public alias shown to OpenCode/);
-  assert.match(edit.text, /value="active-model" readonly/);
+  assert.match(edit.text, /name="public_model"/);
+  assert.doesNotMatch(edit.text, /name="public_model"[^>]*readonly/);
   assert.doesNotMatch(edit.text, /Save mapping/);
   assert.doesNotMatch(edit.text, /<h2>Models<\/h2>/);
   assert.doesNotMatch(edit.text, /Add model/);
 
+  const replacementModel = `renamed-model-${Date.now()}`;
   await agent.post(`/admin/providers/${provider.id}`).type('form').send({
     slug: replacementSlug,
     name: provider.name,
@@ -695,6 +714,7 @@ test('admin can edit provider slug and sees edit title', async () => {
     enabled: '1',
     max_concurrent_requests: provider.max_concurrent_requests || '',
     timeout_ms: provider.timeout_ms || '',
+    public_model: replacementModel,
     upstream_model: 'deepseek-chat-renamed',
     context_limit: '65536',
     output_limit: '8192'
@@ -702,22 +722,25 @@ test('admin can edit provider slug and sees edit title', async () => {
 
   const updated = db.prepare('SELECT slug FROM providers WHERE id = ?').get(provider.id);
   assert.equal(updated.slug, replacementSlug);
-  const model = db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ? AND public_model = ?').get(provider.id, 'active-model');
+  const model = db.prepare('SELECT public_model, upstream_model FROM provider_models WHERE provider_id = ?').get(provider.id);
+  assert.equal(model.public_model, replacementModel);
   assert.equal(model.upstream_model, 'deepseek-chat-renamed');
   db.prepare('UPDATE providers SET slug = ? WHERE id = ?').run(provider.slug, provider.id);
   db.prepare(`
     UPDATE provider_models
-    SET upstream_model = ?, context_limit = ?, output_limit = ?
-    WHERE provider_id = ? AND public_model = ?
-  `).run(originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id, 'active-model');
+    SET public_model = ?, upstream_model = ?, context_limit = ?, output_limit = ?
+    WHERE provider_id = ?
+  `).run(originalModel.public_model, originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id);
 });
 
 test('provider active mapping can be saved and tested inline', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get('deepseek');
+  const originalModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.id);
 
   await agent.post(`/admin/providers/${provider.id}/mapping`).type('form').send({
+    public_model: 'saved-alias',
     upstream_model: 'deepseek-chat',
     context_limit: '65536',
     output_limit: '8192'
@@ -725,7 +748,7 @@ test('provider active mapping can be saved and tested inline', async () => {
 
   const models = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').all(provider.id);
   assert.equal(models.length, 1);
-  assert.equal(models[0].public_model, 'active-model');
+  assert.equal(models[0].public_model, 'saved-alias');
   assert.equal(models[0].upstream_model, 'deepseek-chat');
 
   const providerTest = await agent.post(`/admin/providers/${provider.id}/test.json`).expect(200);
@@ -735,6 +758,11 @@ test('provider active mapping can be saved and tested inline', async () => {
   const mappingTest = await agent.post(`/admin/providers/${provider.id}/mapping/test.json`).expect(200);
   assert.equal(mappingTest.body.ok, true);
   assert.match(mappingTest.body.message, /Mapping test request passed/);
+  db.prepare(`
+    UPDATE provider_models
+    SET public_model = ?, upstream_model = ?, context_limit = ?, output_limit = ?
+    WHERE provider_id = ?
+  `).run(originalModel.public_model, originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id);
 });
 
 test('provider test explains common configuration failures', async () => {
@@ -768,7 +796,7 @@ test('provider concurrency cap blocks the requested provider', async () => {
     const blocked = await request(app)
       .post('/v1/chat/completions')
       .set('Authorization', `Bearer ${student.key}`)
-      .send({ model: 'active-model', messages: [{ role: 'user', content: 'Say OK.' }] })
+      .send({ model: 'local-vllm-test', messages: [{ role: 'user', content: 'Say OK.' }] })
       .expect(503);
     assert.equal(blocked.body.error.code, 'provider_capacity_exceeded');
   } finally {
@@ -778,7 +806,7 @@ test('provider concurrency cap blocks the requested provider', async () => {
   const ok = await request(app)
     .post('/v1/chat/completions')
     .set('Authorization', `Bearer ${student.key}`)
-    .send({ model: 'active-model', messages: [{ role: 'user', content: 'Say OK.' }] })
+    .send({ model: 'local-vllm-test', messages: [{ role: 'user', content: 'Say OK.' }] })
     .expect(200);
   assert.equal(ok.body.model, 'slow-local-upstream');
 });
@@ -791,7 +819,7 @@ test('group provider pool routes to the least busy provider', async () => {
   db.prepare(`
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
     VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(provider.lastInsertRowid, 'pool-internal', 'pool-upstream', 'Pool Local');
+  `).run(provider.lastInsertRowid, 'active-model', 'pool-upstream', 'Pool Local');
 
   const student = createStudent();
   const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
@@ -862,7 +890,7 @@ test('user provider access controls api models and opencode download', async () 
   const student = createStudent({ models: ['group-vllm-test'] });
 
   const modelsRes = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
-  assert.deepEqual(modelsRes.body.data.map((model) => model.id), ['active-model']);
+  assert.deepEqual(modelsRes.body.data.map((model) => model.id), ['group-internal']);
 
   await request(app)
     .post('/v1/chat/completions')
@@ -870,11 +898,76 @@ test('user provider access controls api models and opencode download', async () 
     .send({ model: 'deepseek', messages: [{ role: 'user', content: 'No access.' }] })
     .expect(403);
 
+  const chatRes = await request(app)
+    .post('/v1/chat/completions')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'group-internal', messages: [{ role: 'user', content: 'Allowed.' }] })
+    .expect(200);
+  assert.equal(chatRes.body.model, 'group-upstream');
+
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const configRes = await agent.get('/portal/opencode.json').expect(200);
-  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models), ['active-model']);
-  assert.equal(configRes.body.model, 'ieti-agents/active-model');
+  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models), ['group-internal']);
+  assert.equal(configRes.body.model, 'ieti-agents/group-internal');
+});
+
+test('opencode config lists every public model pool assigned to the user group', async () => {
+  const fastProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
+    VALUES (?, ?, ?, ?, ?, 1, NULL)
+  `).run('multi-fast-test', 'Multi Fast Test', 'openai-compatible', mockBaseUrl, 'local');
+  db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 32000, 4096)
+  `).run(fastProvider.lastInsertRowid, 'fast-model', 'fast-upstream', 'Fast Model');
+
+  const secondFastProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
+    VALUES (?, ?, ?, ?, ?, 1, NULL)
+  `).run('multi-fast-backup-test', 'Multi Fast Backup Test', 'openai-compatible', mockBaseUrl, 'local');
+  db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 64000, 8192)
+  `).run(secondFastProvider.lastInsertRowid, 'fast-model', 'fast-backup-upstream', 'Fast Backup Model');
+
+  const visionProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
+    VALUES (?, ?, ?, ?, ?, 1, NULL)
+  `).run('multi-vision-test', 'Multi Vision Test', 'openai-compatible', mockBaseUrl, 'local');
+  db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 64000, 2048)
+  `).run(visionProvider.lastInsertRowid, 'vision-model', 'vision-upstream', 'Vision Model');
+
+  const student = createStudent({ models: ['multi-fast-test'] });
+  const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  db.prepare('DELETE FROM group_providers WHERE group_id = ?').run(groupId);
+  db.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, ?)
+  `).run(groupId, fastProvider.lastInsertRowid, 100);
+  db.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, ?)
+  `).run(groupId, secondFastProvider.lastInsertRowid, 99);
+  db.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, ?)
+  `).run(groupId, visionProvider.lastInsertRowid, 98);
+
+  const modelsRes = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
+  assert.deepEqual(modelsRes.body.data.map((model) => model.id), ['fast-model', 'vision-model']);
+
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  const configRes = await agent.get('/portal/opencode.json').expect(200);
+  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models), ['fast-model', 'vision-model']);
+  assert.equal(configRes.body.model, 'ieti-agents/fast-model');
+  assert.equal(configRes.body.provider['ieti-agents'].models['fast-model'].limit.context, 32000);
+  assert.equal(configRes.body.provider['ieti-agents'].models['fast-model'].limit.output, 4096);
+  assert.equal(configRes.body.provider['ieti-agents'].models['vision-model'].limit.context, 64000);
+  assert.equal(configRes.body.provider['ieti-agents'].models['vision-model'].limit.output, 2048);
 });
 
 test('streaming works with a small request', async () => {
