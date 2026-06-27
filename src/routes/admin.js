@@ -731,6 +731,7 @@ router.get('/admin/settings', requireAdmin, (req, res) => {
         <td>${escapeHtml(provider.base_url)}</td>
         <td>${escapeHtml(provider.api_key ? 'configured' : 'not configured')}</td>
         <td><span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span></td>
+        <td>${model.public_model ? escapeHtml(model.public_model) : '<span class="muted">none</span>'}</td>
         <td>${model.upstream_model ? escapeHtml(model.upstream_model) : '<span class="muted">none</span>'}</td>
         <td>${groupCount}</td>
         <td class="actions">
@@ -743,8 +744,8 @@ router.get('/admin/settings', requireAdmin, (req, res) => {
     <div class="panel">
       <p><a class="button" href="/admin/providers/new">Add provider</a></p>
       <table>
-        <thead><tr><th>Name</th><th>Base URL</th><th>API key</th><th>Status</th><th>Active upstream model</th><th>Groups</th><th>Actions</th></tr></thead>
-        <tbody>${providerRows || '<tr><td colspan="7" class="muted">No providers.</td></tr>'}</tbody>
+        <thead><tr><th>Name</th><th>Base URL</th><th>API key</th><th>Status</th><th>OpenCode alias</th><th>Active upstream model</th><th>Groups</th><th>Actions</th></tr></thead>
+        <tbody>${providerRows || '<tr><td colspan="8" class="muted">No providers.</td></tr>'}</tbody>
       </table>
     </div>
   `;

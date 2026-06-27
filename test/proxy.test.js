@@ -701,6 +701,8 @@ test('admin can see and delete provider api key', async () => {
   const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get('deepseek');
 
   const list = await agent.get('/admin/settings').expect(200).expect(/<th>API key<\/th>/).expect(/configured/);
+  assert.match(list.text, /OpenCode alias/);
+  assert.match(list.text, /active-model/);
   assert.match(list.text, /Active upstream model/);
   assert.match(list.text, /<th>Groups<\/th>/);
   assert.doesNotMatch(list.text, /<th>Models<\/th>/);
