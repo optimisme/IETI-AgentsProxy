@@ -231,8 +231,24 @@ function chatUsageToResponses(usage, estimatedInputTokens = 0, estimatedOutputTo
   };
 }
 
+function extractReasoningText(message = {}) {
+  return normalizeText(message.reasoning ?? message.reasoning_content ?? '');
+}
+
+function reasoningOutput(text) {
+  if (!text) return null;
+  return {
+    id: outputItemId('rs'),
+    type: 'reasoning',
+    summary: [],
+    content: [{ type: 'reasoning_text', text }]
+  };
+}
+
 function chatMessageToOutput(message = {}) {
   const output = [];
+  const reasoning = reasoningOutput(extractReasoningText(message));
+  if (reasoning) output.push(reasoning);
   if (message.content !== undefined && message.content !== null && normalizeText(message.content) !== '') {
     output.push({
       id: outputItemId('msg'),
@@ -327,7 +343,9 @@ module.exports = {
   chatUsageToResponses,
   codexModelMetadata,
   createResponseShell,
+  extractReasoningText,
   outputItemId,
+  reasoningOutput,
   responseId,
   responsesContentToChat,
   responsesToChatPayload

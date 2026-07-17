@@ -23,6 +23,9 @@ test.before(async () => {
         const payload = JSON.parse(body || '{}');
         if (payload.stream) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (payload.stream_options?.include_usage) {
+            res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"reasoning":"Checked the request."}}]}\n\n');
+          }
           res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"content":"OK"}}]}\n\n');
           res.end('data: [DONE]\n\n');
           return;
@@ -115,6 +118,7 @@ test('health works', async () => {
 test('invalid student key is rejected', async () => {
   const res = await request(app).get('/v1/models').set('Authorization', 'Bearer bad-key').expect(401);
   assert.equal(res.body.error.code, 'invalid_api_key');
+  await request(app).get('/v1/model-capabilities').set('Authorization', 'Bearer bad-key').expect(401);
 });
 
 test('disabled user is rejected', async () => {
@@ -128,6 +132,28 @@ test('valid user can call models', async () => {
   const res = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
   assert.equal(res.body.object, 'list');
   assert.equal(res.body.data[0].id, 'active-model');
+  assert.deepEqual(Object.keys(res.body.data[0]), ['id', 'object', 'created', 'owned_by']);
+});
+
+test('valid user can publish current model capabilities for client configuration', async () => {
+  const student = createStudent();
+  const res = await request(app)
+    .get('/v1/model-capabilities')
+    .set('Authorization', `Bearer ${student.key}`)
+    .expect(200);
+  assert.equal(res.body.object, 'ieti.model_capabilities.list');
+  assert.equal(res.body.schema_version, 1);
+  assert.equal(res.body.data[0].id, 'active-model');
+  assert.equal(res.body.data[0].context_window, 131072);
+  assert.equal(res.body.data[0].max_output_tokens, 8192);
+  assert.deepEqual(res.body.data[0].capabilities, {
+    text: true,
+    image: true,
+    tools: true,
+    reasoning: true,
+    parallel_tools: true
+  });
+  assert.deepEqual(res.body.data[0].modalities, { input: ['text', 'image'], output: ['text'] });
 });
 
 test('codex model discovery returns virtual model metadata', async () => {
@@ -236,6 +262,8 @@ test('responses api translates chat streaming to responses events', async () => 
 
   assert.match(res.headers['content-type'], /text\/event-stream/);
   assert.match(res.text, /event: response\.created/);
+  assert.match(res.text, /event: response\.reasoning_text\.delta/);
+  assert.match(res.text, /"delta":"Checked the request\."/);
   assert.match(res.text, /event: response\.output_text\.delta/);
   assert.match(res.text, /"delta":"OK"/);
   assert.match(res.text, /event: response\.completed/);
@@ -289,6 +317,24 @@ test('responses api converts Codex function tools and prior tool output', () => 
   assert.equal(payload.tools[0].function.name, 'exec_command');
   assert.equal(payload.parallel_tool_calls, false);
   assert.deepEqual(payload.stream_options, { include_usage: true });
+});
+
+test('responses api preserves raw upstream reasoning in non-streaming output', () => {
+  const { chatCompletionToResponse } = require('../src/services/responsesService');
+  const response = chatCompletionToResponse({
+    id: 'chatcmpl-reasoning',
+    choices: [{ message: { role: 'assistant', reasoning: 'Inspected the request.', content: 'Done.' } }],
+    usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 }
+  }, { model: 'active-model', input: 'Inspect.' }, 3);
+
+  assert.deepEqual(response.output[0], {
+    id: response.output[0].id,
+    type: 'reasoning',
+    summary: [],
+    content: [{ type: 'reasoning_text', text: 'Inspected the request.' }]
+  });
+  assert.equal(response.output[1].type, 'message');
+  assert.equal(response.output[1].content[0].text, 'Done.');
 });
 
 test('responses api moves Codex developer messages to the initial system message', () => {
@@ -1241,6 +1287,12 @@ test('opencode config lists every public model pool assigned to the user group',
 
   const modelsRes = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
   assert.deepEqual(modelsRes.body.data.map((model) => model.id), ['fast-model', 'vision-model']);
+  const capabilitiesRes = await request(app)
+    .get('/v1/model-capabilities')
+    .set('Authorization', `Bearer ${student.key}`)
+    .expect(200);
+  assert.equal(capabilitiesRes.body.data[0].context_window, 32000);
+  assert.equal(capabilitiesRes.body.data[0].max_output_tokens, 4096);
 
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
@@ -1264,7 +1316,7 @@ test('streaming works with a small request', async () => {
   assert.match(res.text, /\[DONE]/);
 });
 
-test('student portal shows usage and downloads default opencode config', async () => {
+test('student portal shows usage and downloads OpenCode launchers', async () => {
   const student = createStudent();
   const agent = request.agent(app);
   db.prepare(`
@@ -1276,10 +1328,28 @@ test('student portal shows usage and downloads default opencode config', async (
   await agent.get('/').expect(200).expect(/<h1>Login<\/h1>/);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
 
-  const portal = await agent.get('/portal').expect(200).expect(/Tokens today/).expect(/Client configuration/).expect(/OpenCode/).expect(/Codex/).expect(/chunkTimeout/);
+  const portal = await agent.get('/portal').expect(200).expect(/Tokens today/).expect(/OpenCode launchers/).expect(/run_opencode\.sh/).expect(/run_opencode\.ps1/);
   assert.doesNotMatch(portal.text, /Cost EUR/);
-  assert.match(portal.text, /command = &quot;printenv&quot;/);
+  assert.doesNotMatch(portal.text, /Codex/);
+  assert.doesNotMatch(portal.text, /config\.toml/);
   assert.doesNotMatch(portal.text, /env_key/);
+  assert.doesNotMatch(portal.text, /chunkTimeout/);
+
+  const shellScript = await agent.get('/portal/run_opencode.sh').expect(200);
+  assert.match(shellScript.headers['content-disposition'], /attachment; filename="run_opencode\.sh"/);
+  assert.match(shellScript.headers['content-type'], /text\/plain/);
+  assert.match(shellScript.text, /^#!\/usr\/bin\/env bash/);
+  assert.match(shellScript.text, /OPENCODE_MODELS_PATH/);
+
+  const powerShellScript = await agent.get('/portal/run_opencode.ps1').expect(200);
+  assert.match(powerShellScript.headers['content-disposition'], /attachment; filename="run_opencode\.ps1"/);
+  assert.match(powerShellScript.headers['content-type'], /text\/plain/);
+  assert.match(powerShellScript.text, /\[CmdletBinding\(\)\]/);
+  assert.match(powerShellScript.text, /OPENCODE_MODELS_PATH/);
+
+  await request(app).get('/portal/run_opencode.sh').expect(302).expect('Location', '/');
+  await request(app).get('/portal/run_opencode.ps1').expect(302).expect('Location', '/');
+
   const configRes = await agent
     .get('/portal/opencode.json')
     .set('Host', 'course.example.test')
@@ -1287,14 +1357,14 @@ test('student portal shows usage and downloads default opencode config', async (
     .expect(200);
 
   assert.equal(configRes.body.provider['ieti-agents'].options.baseURL, 'https://course.example.test/v1');
-  assert.equal(configRes.body.provider['ieti-agents'].options.apiKey, '{env:IETI_AGENT_KEY}');
+  assert.equal(configRes.body.provider['ieti-agents'].options.apiKey, '{env:PROXY_AGENTS_KEY}');
   assert.equal(configRes.body.provider['ieti-agents'].options.timeout, 900000);
   assert.equal(configRes.body.provider['ieti-agents'].options.chunkTimeout, 600000);
   assert.equal(configRes.body.model, 'ieti-agents/active-model');
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].name, 'active-model');
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.context, 131072);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.output, 16384);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].max_tokens, 16384);
+  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].max_tokens, undefined);
+  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].parallel_tool_call, undefined);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].tool_call, true);
   assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].reasoning, true);
   assert.deepEqual(configRes.body.provider['ieti-agents'].models['active-model'].modalities, {
@@ -1302,15 +1372,7 @@ test('student portal shows usage and downloads default opencode config', async (
     output: ['text']
   });
 
-  const codexRes = await agent
-    .get('/portal/codex.toml')
-    .set('Host', 'course.example.test')
-    .set('X-Forwarded-Proto', 'https')
-    .expect(200);
-  assert.match(codexRes.text, /base_url = "https:\/\/course\.example\.test\/v1"/);
-  assert.match(codexRes.text, /\[model_providers\.ieti-agents\.auth\]/);
-  assert.match(codexRes.text, /command = "printenv"/);
-  assert.doesNotMatch(codexRes.text, /env_key/);
+  await agent.get('/portal/codex.toml').expect(404);
 });
 
 test('student can create and delete their own api key', async () => {

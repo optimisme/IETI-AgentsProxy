@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('node:path');
 const { getDb } = require('../db');
 const { generateStudentKey, hashApiKey, lookupHashApiKey, keyPrefixSuffix } = require('../services/keyService');
 const { verifyAdminCredentials } = require('../middleware/authAdmin');
@@ -28,6 +29,7 @@ const {
 
 const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
+const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..');
 
 function getRequestBaseUrl(req) {
   return requestBaseUrl(req, getSetting('public_base_url', ''));
@@ -40,16 +42,12 @@ function getModelEntries(models) {
   return Object.fromEntries(models.map((model) => {
     const entry = configured.get(model.id);
     const limit = model.limit || entry?.limit || { context, output };
-    const modelOutput = Number(limit.output || output);
     return [
       model.id,
       {
-        name: model.id,
         limit,
-        max_tokens: modelOutput,
         tool_call: model.capabilities?.tools ?? true,
         reasoning: model.capabilities?.reasoning ?? true,
-        parallel_tool_call: model.capabilities?.parallelTools ?? true,
         modalities: {
           input: [
             ...(model.capabilities?.text === false ? [] : ['text']),
@@ -123,28 +121,6 @@ function buildOpenCodeConfig({ req, models, apiKey }) {
     provider: buildOpenCodeProviderBlock({ req, models, apiKey }),
     model: selectedModel ? `ieti-agents/${selectedModel}` : ''
   };
-}
-
-function tomlString(value) {
-  return JSON.stringify(String(value || ''));
-}
-
-function buildCodexConfig({ req, models }) {
-  const selectedModel = models[0]?.id || config.publicModelName;
-  return `model = ${tomlString(selectedModel)}
-model_provider = "ieti-agents"
-
-[model_providers.ieti-agents]
-name = "IETI Agents"
-base_url = ${tomlString(`${getRequestBaseUrl(req)}/v1`)}
-wire_api = "responses"
-stream_idle_timeout_ms = 600000
-
-[model_providers.ieti-agents.auth]
-command = "printenv"
-args = ["IETI_AGENT_KEY"]
-refresh_interval_ms = 0
-`;
 }
 
 function render(req, res, { title = 'User Portal', content = '', message = '' }) {
@@ -323,12 +299,6 @@ router.get('/portal', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const usage = getUsageTotals(user.id);
   const models = getActiveModelsForUser(user);
-  const openCodeSnippet = `export IETI_AGENT_KEY="ieti_sk_..."
-
-${JSON.stringify(buildOpenCodeConfig({ req, models, apiKey: '{env:IETI_AGENT_KEY}' }), null, 2)}`;
-  const codexSnippet = `export IETI_AGENT_KEY="ieti_sk_..."
-
-${buildCodexConfig({ req, models })}`;
   const usageRows = recentUsage(25, user.id).map((row) => `
     <tr>
       <td>${escapeHtml(row.created_at)}</td>
@@ -373,42 +343,14 @@ ${buildCodexConfig({ req, models })}`;
       <p class="muted">${escapeHtml(user.email)}</p>
       ${usageLimitCards(models[0]?.group, usage)}
       <div class="panel" style="margin-top:16px">
-        <h2>Client configuration</h2>
-        <p>Provider base URL: <span class="key">${escapeHtml(`${getRequestBaseUrl(req)}/v1`)}</span></p>
-        <p>Available models: <span class="key">${escapeHtml(models.map((model) => model.id).join(', ') || config.publicModelName)}</span></p>
-        <div role="tablist" aria-label="Client configuration" class="actions" style="margin-bottom:16px">
-          <button type="button" role="tab" id="tab-opencode" aria-controls="panel-opencode" aria-selected="true" data-config-tab="opencode">OpenCode</button>
-          <button type="button" role="tab" id="tab-codex" aria-controls="panel-codex" aria-selected="false" data-config-tab="codex" class="secondary">Codex</button>
+        <h2>OpenCode launchers</h2>
+        <p>Download the launcher for your operating system. On first use it will request the proxy URL and your API key, discover the available models and capabilities, and then start OpenCode.</p>
+        <div class="actions">
+          <a class="button" href="/portal/run_opencode.sh" download="run_opencode.sh">Download for macOS/Linux (.sh)</a>
+          <a class="button secondary" href="/portal/run_opencode.ps1" download="run_opencode.ps1">Download for Windows (.ps1)</a>
         </div>
-        <section role="tabpanel" id="panel-opencode" aria-labelledby="tab-opencode" data-config-panel="opencode">
-          <p>Set the environment variable, then save the JSON as <span class="key">opencode.json</span>.</p>
-          <pre class="key">${escapeHtml(openCodeSnippet)}</pre>
-        </section>
-        <section role="tabpanel" id="panel-codex" aria-labelledby="tab-codex" data-config-panel="codex" hidden>
-          <p>Set the environment variable, then merge the TOML block into <span class="key">~/.codex/config.toml</span>. Context and capabilities are loaded automatically from the proxy.</p>
-          <pre class="key">${escapeHtml(codexSnippet)}</pre>
-        </section>
-        <script>
-          (function(){
-            var tabs = document.querySelectorAll('[data-config-tab]');
-            var panels = document.querySelectorAll('[data-config-panel]');
-            tabs.forEach(function(tab){
-              tab.addEventListener('click', function(){
-                var selected = tab.getAttribute('data-config-tab');
-                tabs.forEach(function(item){
-                  var active = item === tab;
-                  item.setAttribute('aria-selected', active ? 'true' : 'false');
-                  item.classList.toggle('secondary', !active);
-                });
-                panels.forEach(function(panel){
-                  panel.hidden = panel.getAttribute('data-config-panel') !== selected;
-                });
-              });
-            });
-          })();
-        </script>
-        ${user.api_key_hash ? '' : '<p class="muted">Create an API key before using either client configuration.</p>'}
-        </div>
+        ${user.api_key_hash ? '' : '<p class="muted">Create an API key before running either launcher.</p>'}
+      </div>
       <h2>Recent usage</h2>
       <table>
         <thead><tr><th>When</th><th>Model</th><th>Input</th><th>Output</th><th>Total</th><th>Status</th></tr></thead>
@@ -497,7 +439,7 @@ router.post('/portal/key/revoke', requireStudentSession, (req, res) => {
 router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const models = getActiveModelsForUser(user);
-  const apiKey = '{env:IETI_AGENT_KEY}';
+  const apiKey = '{env:PROXY_AGENTS_KEY}';
   const opencodeConfig = buildOpenCodeConfig({ req, models, apiKey });
 
   res.set({
@@ -508,14 +450,21 @@ router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
   res.send(`${JSON.stringify(opencodeConfig, null, 2)}\n`);
 });
 
-router.get('/portal/codex.toml', requireStudentSession, (req, res) => {
-  const models = getActiveModelsForUser(req.portalUser);
+function sendClientScript(res, filename) {
   res.set({
-    'Content-Type': 'application/toml; charset=utf-8',
-    'Content-Disposition': 'attachment; filename="codex.toml"',
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${filename}"`,
     'Cache-Control': 'no-store'
   });
-  res.send(buildCodexConfig({ req, models }));
+  res.sendFile(path.join(CLIENT_SCRIPT_DIRECTORY, filename));
+}
+
+router.get('/portal/run_opencode.sh', requireStudentSession, (_req, res) => {
+  sendClientScript(res, 'run_opencode.sh');
+});
+
+router.get('/portal/run_opencode.ps1', requireStudentSession, (_req, res) => {
+  sendClientScript(res, 'run_opencode.ps1');
 });
 
 module.exports = router;

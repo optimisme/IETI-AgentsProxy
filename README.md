@@ -8,7 +8,7 @@ L'objectiu és que l'alumnat pugui treballar amb eines compatibles amb OpenAI, c
 
 - API compatible amb OpenAI per a `GET /v1/models`, `POST /v1/chat/completions` i `POST /v1/responses`.
 - Suport per respostes normals JSON i streaming SSE.
-- Portal web per a estudiants amb inici de sessio, gestio de clau API i descarrega d'`opencode.json`.
+- Portal web per a estudiants amb inici de sessio, gestio de clau API i descarrega dels llançadors d'OpenCode per Bash i PowerShell.
 - Backoffice d'administracio per crear usuaris, grups, proveidors, quotes i configuracio del servidor.
 - Quotes per grup: crides i tokens per dia/hora.
 - Rate limit per usuari.
@@ -181,10 +181,10 @@ Valors principals:
 
 ## Us amb OpenCode
 
-Cada usuari pot descarregar un `opencode.json` personalitzat des del portal. La configuracio fa servir una variable d'entorn per no escriure la clau dins del fitxer:
+Cada usuari pot descarregar `run_opencode.sh` o `run_opencode.ps1` des del portal. El llançador genera o actualitza l'`opencode.json` local i fa servir una variable d'entorn per no escriure la clau dins del fitxer:
 
 ```bash
-export IETI_AGENT_KEY="ieti_sk_..."
+export PROXY_AGENTS_KEY="ieti_sk_..."
 ```
 
 Exemple de configuracio generada:
@@ -198,18 +198,16 @@ Exemple de configuracio generada:
       "name": "IETI Agents",
       "options": {
         "baseURL": "https://your-public-domain.example/v1",
-        "apiKey": "{env:IETI_AGENT_KEY}",
+        "apiKey": "{env:PROXY_AGENTS_KEY}",
         "timeout": 900000,
         "chunkTimeout": 600000
       },
       "models": {
         "active-model": {
-          "name": "active-model",
           "limit": {
             "context": 65536,
             "output": 8192
           },
-          "max_tokens": 8192,
           "tool_call": true,
           "reasoning": true,
           "modalities": {
@@ -224,6 +222,18 @@ Exemple de configuracio generada:
 }
 ```
 
+`GET /v1/model-capabilities` publica, amb autenticacio Bearer, el cataleg dinamic de models virtuals assignat a l'usuari. El contracte IETI inclou `schema_version`, limits de context i sortida, modalitats, eines i raonament; es manté separat de l'endpoint OpenAI estandard `GET /v1/models`. Si encara no existeix `run_opencode_settings.env`, `run_opencode.sh` demana primer la URL base IETI i després la clau, valida la connexio i nomes llavors desa totes dues amb permisos `600`. L'script combina les capacitats IETI amb el cataleg oficial de Models.dev a `.opencode/ieti-models.json` i arrenca OpenCode amb `OPENCODE_MODELS_PATH`. L'`opencode.json` conserva els altres proveidors i nomes rep la configuracio de connexio d'`ieti-agents`; les capacitats no s'hi dupliquen. Amb `./run_opencode.sh --sync-only` es pot actualitzar la configuracio i el cataleg sense arrencar el client.
+
+A Windows, `run_opencode.ps1` ofereix el mateix flux des de PowerShell i comparteix `run_opencode_settings.env`, `opencode.json` i el cataleg generat amb la versio Bash:
+
+```powershell
+.\run_opencode.ps1
+.\run_opencode.ps1 desktop
+.\run_opencode.ps1 --sync-only
+```
+
+Les dues versions exporten també les altres variables definides a `run_opencode_settings.env`, com ara `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`, perquè OpenCode les pugui utilitzar amb els proveidors corresponents. El llançador nomes exigeix i valida `PROXY_AGENTS_BASE_URL` i `PROXY_AGENTS_KEY`.
+
 ## Us amb Codex
 
 Codex fa servir la Responses API. El mateix servidor publica el cataleg i les capacitats dels models virtuals a `GET /v1/models?client_version=...`; Codex consulta aquest endpoint automaticament. Els limits de context publicats son el minim segur entre els proveidors del pool que poden servir cada alias virtual.
@@ -233,6 +243,7 @@ Configuracio minima de `~/.codex/config.toml`:
 ```toml
 model = "active-model"
 model_provider = "ieti-agents"
+show_raw_agent_reasoning = true
 
 [model_providers.ieti-agents]
 name = "IETI Agents"
@@ -241,18 +252,18 @@ wire_api = "responses"
 stream_idle_timeout_ms = 600000
 
 [model_providers.ieti-agents.auth]
-command = "printenv"
-args = ["IETI_AGENT_KEY"]
+command = "/usr/bin/printenv"
+args = ["PROXY_AGENTS_KEY"]
 refresh_interval_ms = 0
 ```
 
 La clau es proporciona amb la mateixa variable d'entorn usada per OpenCode:
 
 ```bash
-export IETI_AGENT_KEY="ieti_sk_..."
+export PROXY_AGENTS_KEY="ieti_sk_..."
 ```
 
-No cal configurar manualment `model_context_window`, `model_auto_compact_token_limit` ni `model_catalog_json`: el servidor genera aquestes metadades a partir dels models i pools assignats a cada grup. L'helper `printenv` no canvia l'autenticacio remota: Codex continua enviant la mateixa clau com a Bearer token, pero aquesta modalitat permet que el client actualitzi el cataleg remot automaticament.
+No cal configurar manualment `model_context_window`, `model_auto_compact_token_limit` ni `model_catalog_json`: el servidor genera aquestes metadades a partir dels models i pools assignats a cada grup. L'helper `printenv` no canvia l'autenticacio remota: Codex continua enviant la mateixa clau com a Bearer token, pero aquesta modalitat permet que el client actualitzi el cataleg remot automaticament. `show_raw_agent_reasoning` mostra el raonament brut quan l'endpoint seleccionat el proporciona.
 
 Cada `public_model` es publica una sola vegada. El balanceig es fa entre tots els endpoints assignats al grup que publiquen el mateix `public_model`; cada endpoint pot traduir-lo a un `upstream_model` diferent. El context publicat es el minim segur del pool, mentre que les capacitats de text, imatge, eines, raonament i eines paral.leles s'agreguen. En cada peticio, el proxy descarta els endpoints que no suporten les capacitats requerides abans d'aplicar el balanceig.
 
@@ -330,7 +341,7 @@ Serveis destacats:
 El projecte inclou un `.gitignore` per evitar publicar dades locals. No s'han de versionar:
 
 - `settings.env`
-- `keys.env`
+- `run_opencode_settings.env`
 - `data/`
 - `node_modules/`
 - `proxmox/`

@@ -20,45 +20,75 @@ const {
 
 const router = express.Router();
 
+function getPublishedModels(providerSlugs) {
+  const allowed = new Set(providerSlugs || []);
+  const grouped = new Map();
+  for (const entry of getEnabledModelEntries().filter((model) => allowed.has(model.id))) {
+    if (!entry.publicModel) continue;
+    const current = grouped.get(entry.publicModel);
+    const contextWindow = Number(entry.limit?.context || config.defaultModelContextLimit);
+    const outputLimit = Number(entry.limit?.output || config.defaultModelOutputLimit);
+    grouped.set(entry.publicModel, {
+      id: entry.publicModel,
+      contextWindow: current ? Math.min(current.contextWindow, contextWindow) : contextWindow,
+      outputLimit: current ? Math.min(current.outputLimit, outputLimit) : outputLimit,
+      capabilities: {
+        text: Boolean(current?.capabilities?.text || entry.capabilities?.text),
+        image: Boolean(current?.capabilities?.image || entry.capabilities?.image),
+        tools: Boolean(current?.capabilities?.tools || entry.capabilities?.tools),
+        reasoning: Boolean(current?.capabilities?.reasoning || entry.capabilities?.reasoning),
+        parallelTools: Boolean(current?.capabilities?.parallelTools || entry.capabilities?.parallelTools)
+      },
+      priority: current?.priority || grouped.size + 1
+    });
+  }
+  return [...grouped.values()];
+}
+
 router.get('/v1/models', authStudent, studentRateLimit, (req, res) => {
   const group = getUserGroup(req.student.id);
-  const providerSlugs = new Set(group?.provider_slugs || []);
-  const models = [...new Set(getEnabledModelEntries()
-    .filter((model) => providerSlugs.has(model.id))
-    .map((model) => model.publicModel)
-    .filter(Boolean))];
+  const models = getPublishedModels(group?.provider_slugs || []);
   if (req.query.client_version) {
-    const entries = getEnabledModelEntries().filter((entry) => providerSlugs.has(entry.id));
-    const grouped = new Map();
-    for (const entry of entries) {
-      if (!entry.publicModel) continue;
-      const current = grouped.get(entry.publicModel);
-      const contextWindow = Number(entry.limit?.context || config.defaultModelContextLimit);
-      grouped.set(entry.publicModel, {
-        model: entry.publicModel,
-        contextWindow: current ? Math.min(current.contextWindow, contextWindow) : contextWindow,
-        capabilities: {
-          text: Boolean(current?.capabilities?.text || entry.capabilities?.text),
-          image: Boolean(current?.capabilities?.image || entry.capabilities?.image),
-          tools: Boolean(current?.capabilities?.tools || entry.capabilities?.tools),
-          reasoning: Boolean(current?.capabilities?.reasoning || entry.capabilities?.reasoning),
-          parallelTools: Boolean(current?.capabilities?.parallelTools || entry.capabilities?.parallelTools)
-        },
-        priority: current?.priority || grouped.size + 1
-      });
-    }
     return res.json({
-      models: [...grouped.values()].map(codexModelMetadata)
+      models: models.map((model) => codexModelMetadata({ ...model, model: model.id }))
     });
   }
 
   return res.json({
     object: 'list',
     data: models.map((model) => ({
-      id: model,
+      id: model.id,
       object: 'model',
       created: 0,
       owned_by: 'ieti-agents'
+    }))
+  });
+});
+
+router.get('/v1/model-capabilities', authStudent, studentRateLimit, (req, res) => {
+  const group = getUserGroup(req.student.id);
+  const models = getPublishedModels(group?.provider_slugs || []);
+  return res.json({
+    object: 'ieti.model_capabilities.list',
+    schema_version: 1,
+    data: models.map((model) => ({
+      id: model.id,
+      context_window: model.contextWindow,
+      max_output_tokens: model.outputLimit,
+      capabilities: {
+        text: model.capabilities.text,
+        image: model.capabilities.image,
+        tools: model.capabilities.tools,
+        reasoning: model.capabilities.reasoning,
+        parallel_tools: model.capabilities.parallelTools
+      },
+      modalities: {
+        input: [
+          ...(model.capabilities.text ? ['text'] : []),
+          ...(model.capabilities.image ? ['image'] : [])
+        ],
+        output: ['text']
+      }
     }))
   });
 });
@@ -266,6 +296,24 @@ function startTextOutput(res, state) {
   return entry;
 }
 
+function startReasoningOutput(res, state) {
+  if (state.reasoning) return state.reasoning;
+  const item = {
+    id: outputItemId('rs'),
+    type: 'reasoning',
+    summary: [],
+    content: []
+  };
+  const entry = { item, outputIndex: state.nextOutputIndex++, text: '' };
+  state.reasoning = entry;
+  state.outputs.push(entry);
+  writeResponseEvent(res, state, 'response.output_item.added', {
+    output_index: entry.outputIndex,
+    item
+  });
+  return entry;
+}
+
 function startToolOutput(res, state, index, delta = {}) {
   let entry = state.toolCalls.get(index);
   if (entry) return entry;
@@ -288,6 +336,15 @@ function startToolOutput(res, state, index, delta = {}) {
 }
 
 function finishResponseOutputs(res, state) {
+  if (state.reasoning) {
+    const { item, outputIndex, text } = state.reasoning;
+    item.content = [{ type: 'reasoning_text', text }];
+    writeResponseEvent(res, state, 'response.output_item.done', {
+      output_index: outputIndex,
+      item
+    });
+  }
+
   if (state.message) {
     const { item, outputIndex, text } = state.message;
     const part = { type: 'output_text', annotations: [], logprobs: [], text };
@@ -342,6 +399,7 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
     sequence: 0,
     nextOutputIndex: 0,
     outputs: [],
+    reasoning: null,
     message: null,
     toolCalls: new Map(),
     usage: null,
@@ -380,6 +438,18 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
           if (choice.finish_reason) state.finishReason = choice.finish_reason;
           const delta = choice.delta || {};
 
+          const reasoningDelta = delta.reasoning ?? delta.reasoning_content;
+          if (reasoningDelta) {
+            const entry = startReasoningOutput(res, state);
+            entry.text += reasoningDelta;
+            writeResponseEvent(res, state, 'response.reasoning_text.delta', {
+              item_id: entry.item.id,
+              output_index: entry.outputIndex,
+              content_index: 0,
+              delta: reasoningDelta
+            });
+          }
+
           if (delta.content) {
             const entry = startTextOutput(res, state);
             entry.text += delta.content;
@@ -413,7 +483,8 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
 
     finishResponseOutputs(res, state);
     response.output = state.outputs.map(({ item }) => item);
-    const outputEstimate = estimateTokensFromText(state.message?.text || '') +
+    const outputEstimate = estimateTokensFromText(state.reasoning?.text || '') +
+      estimateTokensFromText(state.message?.text || '') +
       estimateTokensFromText([...state.toolCalls.values()].map((entry) => entry.arguments).join(''));
     response.usage = chatUsageToResponses(state.usage, estimatedInputTokens, outputEstimate);
 
