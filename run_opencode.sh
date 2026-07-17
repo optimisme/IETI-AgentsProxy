@@ -219,8 +219,8 @@ config.provider['ieti-agents'] = {
   options: {
     baseURL,
     apiKey: '{env:PROXY_AGENTS_KEY}',
-    timeout: 900000,
-    chunkTimeout: 600000
+    timeout: 1800000,
+    chunkTimeout: 1200000
   }
 };
 
