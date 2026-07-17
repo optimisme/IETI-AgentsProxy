@@ -47,10 +47,14 @@ function getModelEntries(models) {
         name: model.id,
         limit,
         max_tokens: modelOutput,
-        tool_call: true,
-        reasoning: true,
+        tool_call: model.capabilities?.tools ?? true,
+        reasoning: model.capabilities?.reasoning ?? true,
+        parallel_tool_call: model.capabilities?.parallelTools ?? true,
         modalities: {
-          input: ['text', 'image'],
+          input: [
+            ...(model.capabilities?.text === false ? [] : ['text']),
+            ...(model.capabilities?.image === false ? [] : ['image'])
+          ],
           output: ['text']
         }
       }
@@ -74,6 +78,7 @@ function getActiveModelsForUser(user) {
       providerSlug: entry.id,
       providerSlugs: [],
       limit: null,
+      capabilities: { text: false, image: false, tools: false, reasoning: false, parallelTools: false },
       group
     };
     current.providerSlugs.push(entry.id);
@@ -85,6 +90,11 @@ function getActiveModelsForUser(user) {
       context: current.limit ? Math.min(current.limit.context, entryLimit.context) : entryLimit.context,
       output: current.limit ? Math.min(current.limit.output, entryLimit.output) : entryLimit.output
     };
+    current.capabilities.text ||= entry.capabilities?.text ?? true;
+    current.capabilities.image ||= entry.capabilities?.image ?? true;
+    current.capabilities.tools ||= entry.capabilities?.tools ?? true;
+    current.capabilities.reasoning ||= entry.capabilities?.reasoning ?? true;
+    current.capabilities.parallelTools ||= entry.capabilities?.parallelTools ?? true;
     byAlias.set(entry.publicModel, current);
   }
   return [...byAlias.values()];
@@ -113,6 +123,28 @@ function buildOpenCodeConfig({ req, models, apiKey }) {
     provider: buildOpenCodeProviderBlock({ req, models, apiKey }),
     model: selectedModel ? `ieti-agents/${selectedModel}` : ''
   };
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value || ''));
+}
+
+function buildCodexConfig({ req, models }) {
+  const selectedModel = models[0]?.id || config.publicModelName;
+  return `model = ${tomlString(selectedModel)}
+model_provider = "ieti-agents"
+
+[model_providers.ieti-agents]
+name = "IETI Agents"
+base_url = ${tomlString(`${getRequestBaseUrl(req)}/v1`)}
+wire_api = "responses"
+stream_idle_timeout_ms = 600000
+
+[model_providers.ieti-agents.auth]
+command = "printenv"
+args = ["IETI_AGENT_KEY"]
+refresh_interval_ms = 0
+`;
 }
 
 function render(req, res, { title = 'User Portal', content = '', message = '' }) {
@@ -291,13 +323,12 @@ router.get('/portal', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const usage = getUsageTotals(user.id);
   const models = getActiveModelsForUser(user);
-  const providerSnippet = JSON.stringify({
-    provider: buildOpenCodeProviderBlock({
-      req,
-      models,
-      apiKey: '{env:IETI_AGENT_KEY}'
-    })
-  }, null, 2);
+  const openCodeSnippet = `export IETI_AGENT_KEY="ieti_sk_..."
+
+${JSON.stringify(buildOpenCodeConfig({ req, models, apiKey: '{env:IETI_AGENT_KEY}' }), null, 2)}`;
+  const codexSnippet = `export IETI_AGENT_KEY="ieti_sk_..."
+
+${buildCodexConfig({ req, models })}`;
   const usageRows = recentUsage(25, user.id).map((row) => `
     <tr>
       <td>${escapeHtml(row.created_at)}</td>
@@ -342,16 +373,42 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <p class="muted">${escapeHtml(user.email)}</p>
       ${usageLimitCards(models[0]?.group, usage)}
       <div class="panel" style="margin-top:16px">
-        <h2>OpenCode</h2>
+        <h2>Client configuration</h2>
         <p>Provider base URL: <span class="key">${escapeHtml(`${getRequestBaseUrl(req)}/v1`)}</span></p>
-        <p>Model: <span class="key">${escapeHtml(models.map((model) => model.id).join(', ') || config.publicModelName)}</span></p>
-        <label>Provider section</label>
-        <pre class="key">${escapeHtml(providerSnippet)}</pre>
-        <div class="actions">
-          <a class="button" href="/portal/opencode.json">Download opencode.json</a>
+        <p>Available models: <span class="key">${escapeHtml(models.map((model) => model.id).join(', ') || config.publicModelName)}</span></p>
+        <div role="tablist" aria-label="Client configuration" class="actions" style="margin-bottom:16px">
+          <button type="button" role="tab" id="tab-opencode" aria-controls="panel-opencode" aria-selected="true" data-config-tab="opencode">OpenCode</button>
+          <button type="button" role="tab" id="tab-codex" aria-controls="panel-codex" aria-selected="false" data-config-tab="codex" class="secondary">Codex</button>
         </div>
-        ${user.api_key_hash ? '' : '<p class="muted">Create an API key before downloading a config that embeds it.</p>'}
-      </div>
+        <section role="tabpanel" id="panel-opencode" aria-labelledby="tab-opencode" data-config-panel="opencode">
+          <p>Set the environment variable, then save the JSON as <span class="key">opencode.json</span>.</p>
+          <pre class="key">${escapeHtml(openCodeSnippet)}</pre>
+        </section>
+        <section role="tabpanel" id="panel-codex" aria-labelledby="tab-codex" data-config-panel="codex" hidden>
+          <p>Set the environment variable, then merge the TOML block into <span class="key">~/.codex/config.toml</span>. Context and capabilities are loaded automatically from the proxy.</p>
+          <pre class="key">${escapeHtml(codexSnippet)}</pre>
+        </section>
+        <script>
+          (function(){
+            var tabs = document.querySelectorAll('[data-config-tab]');
+            var panels = document.querySelectorAll('[data-config-panel]');
+            tabs.forEach(function(tab){
+              tab.addEventListener('click', function(){
+                var selected = tab.getAttribute('data-config-tab');
+                tabs.forEach(function(item){
+                  var active = item === tab;
+                  item.setAttribute('aria-selected', active ? 'true' : 'false');
+                  item.classList.toggle('secondary', !active);
+                });
+                panels.forEach(function(panel){
+                  panel.hidden = panel.getAttribute('data-config-panel') !== selected;
+                });
+              });
+            });
+          })();
+        </script>
+        ${user.api_key_hash ? '' : '<p class="muted">Create an API key before using either client configuration.</p>'}
+        </div>
       <h2>Recent usage</h2>
       <table>
         <thead><tr><th>When</th><th>Model</th><th>Input</th><th>Output</th><th>Total</th><th>Status</th></tr></thead>
@@ -449,6 +506,16 @@ router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
     'Cache-Control': 'no-store'
   });
   res.send(`${JSON.stringify(opencodeConfig, null, 2)}\n`);
+});
+
+router.get('/portal/codex.toml', requireStudentSession, (req, res) => {
+  const models = getActiveModelsForUser(req.portalUser);
+  res.set({
+    'Content-Type': 'application/toml; charset=utf-8',
+    'Content-Disposition': 'attachment; filename="codex.toml"',
+    'Cache-Control': 'no-store'
+  });
+  res.send(buildCodexConfig({ req, models }));
 });
 
 module.exports = router;

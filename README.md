@@ -6,7 +6,7 @@ L'objectiu és que l'alumnat pugui treballar amb eines compatibles amb OpenAI, c
 
 ## Funcionalitats
 
-- API compatible amb OpenAI per a `GET /v1/models` i `POST /v1/chat/completions`.
+- API compatible amb OpenAI per a `GET /v1/models`, `POST /v1/chat/completions` i `POST /v1/responses`.
 - Suport per respostes normals JSON i streaming SSE.
 - Portal web per a estudiants amb inici de sessio, gestio de clau API i descarrega d'`opencode.json`.
 - Backoffice d'administracio per crear usuaris, grups, proveidors, quotes i configuracio del servidor.
@@ -224,6 +224,38 @@ Exemple de configuracio generada:
 }
 ```
 
+## Us amb Codex
+
+Codex fa servir la Responses API. El mateix servidor publica el cataleg i les capacitats dels models virtuals a `GET /v1/models?client_version=...`; Codex consulta aquest endpoint automaticament. Els limits de context publicats son el minim segur entre els proveidors del pool que poden servir cada alias virtual.
+
+Configuracio minima de `~/.codex/config.toml`:
+
+```toml
+model = "active-model"
+model_provider = "ieti-agents"
+
+[model_providers.ieti-agents]
+name = "IETI Agents"
+base_url = "https://your-public-domain.example/v1"
+wire_api = "responses"
+stream_idle_timeout_ms = 600000
+
+[model_providers.ieti-agents.auth]
+command = "printenv"
+args = ["IETI_AGENT_KEY"]
+refresh_interval_ms = 0
+```
+
+La clau es proporciona amb la mateixa variable d'entorn usada per OpenCode:
+
+```bash
+export IETI_AGENT_KEY="ieti_sk_..."
+```
+
+No cal configurar manualment `model_context_window`, `model_auto_compact_token_limit` ni `model_catalog_json`: el servidor genera aquestes metadades a partir dels models i pools assignats a cada grup. L'helper `printenv` no canvia l'autenticacio remota: Codex continua enviant la mateixa clau com a Bearer token, pero aquesta modalitat permet que el client actualitzi el cataleg remot automaticament.
+
+Cada `public_model` es publica una sola vegada. El balanceig es fa entre tots els endpoints assignats al grup que publiquen el mateix `public_model`; cada endpoint pot traduir-lo a un `upstream_model` diferent. El context publicat es el minim segur del pool, mentre que les capacitats de text, imatge, eines, raonament i eines paral.leles s'agreguen. En cada peticio, el proxy descarta els endpoints que no suporten les capacitats requerides abans d'aplicar el balanceig.
+
 ## API
 
 Autenticacio d'usuari:
@@ -235,8 +267,10 @@ Authorization: Bearer <user_api_key>
 Endpoints principals:
 
 - `GET /health`: comprovacio de salut.
-- `GET /v1/models`: models disponibles per a l'usuari.
-- `POST /v1/chat/completions`: proxy OpenAI-compatible.
+- `GET /v1/models`: models disponibles per a OpenCode i altres clients OpenAI-compatible.
+- `GET /v1/models?client_version=...`: cataleg dinamic de models virtuals i capacitats per a Codex.
+- `POST /v1/chat/completions`: entrada Chat Completions usada per OpenCode.
+- `POST /v1/responses`: entrada Responses API usada per Codex; es tradueix al mateix encaminament intern de Chat Completions.
 
 ## Com es guarden les dades
 

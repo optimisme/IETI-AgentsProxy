@@ -101,6 +101,11 @@ function initSchema(database) {
       enabled INTEGER NOT NULL DEFAULT 1,
       context_limit INTEGER,
       output_limit INTEGER,
+      supports_text_input INTEGER NOT NULL DEFAULT 1,
+      supports_image_input INTEGER NOT NULL DEFAULT 1,
+      supports_tools INTEGER NOT NULL DEFAULT 1,
+      supports_reasoning INTEGER NOT NULL DEFAULT 1,
+      supports_parallel_tools INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(provider_id, public_model)
@@ -171,6 +176,14 @@ function migrateSchema(database) {
   }
 
   const providerModelColumns = database.prepare('PRAGMA table_info(provider_models)').all().map((column) => column.name);
+  const addProviderModelColumn = (name, definition) => {
+    if (!providerModelColumns.includes(name)) database.exec(`ALTER TABLE provider_models ADD COLUMN ${name} ${definition}`);
+  };
+  addProviderModelColumn('supports_text_input', 'INTEGER NOT NULL DEFAULT 1');
+  addProviderModelColumn('supports_image_input', 'INTEGER NOT NULL DEFAULT 1');
+  addProviderModelColumn('supports_tools', 'INTEGER NOT NULL DEFAULT 1');
+  addProviderModelColumn('supports_reasoning', 'INTEGER NOT NULL DEFAULT 1');
+  addProviderModelColumn('supports_parallel_tools', 'INTEGER NOT NULL DEFAULT 1');
   for (const name of ['input_eur_per_1m', 'output_eur_per_1m']) {
     if (providerModelColumns.includes(name)) database.exec(`ALTER TABLE provider_models DROP COLUMN ${name}`);
   }

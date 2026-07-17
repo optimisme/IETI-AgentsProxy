@@ -130,6 +130,186 @@ test('valid user can call models', async () => {
   assert.equal(res.body.data[0].id, 'active-model');
 });
 
+test('codex model discovery returns virtual model metadata', async () => {
+  const student = createStudent();
+  const res = await request(app)
+    .get('/v1/models?client_version=0.145.0')
+    .set('Authorization', `Bearer ${student.key}`)
+    .expect(200);
+
+  assert.equal(res.body.models.length, 1);
+  assert.equal(res.body.models[0].slug, 'active-model');
+  assert.equal(res.body.models[0].display_name, 'active-model');
+  assert.equal(res.body.models[0].supported_in_api, true);
+  assert.equal(res.body.models[0].context_window, 131072);
+  assert.equal(res.body.models[0].supports_parallel_tool_calls, true);
+  assert.match(res.body.models[0].base_instructions, /coding agent/);
+  assert.equal(res.body.data, undefined);
+});
+
+test('codex model discovery publishes configured capabilities', async () => {
+  const student = createStudent();
+  const provider = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
+  db.prepare(`
+    UPDATE provider_models
+    SET supports_image_input = 0, supports_tools = 0, supports_reasoning = 0, supports_parallel_tools = 0
+    WHERE provider_id = ?
+  `).run(provider.id);
+
+  try {
+    const res = await request(app)
+      .get('/v1/models?client_version=0.145.0')
+      .set('Authorization', `Bearer ${student.key}`)
+      .expect(200);
+    const model = res.body.models[0];
+    assert.deepEqual(model.input_modalities, ['text']);
+    assert.equal(model.shell_type, 'disabled');
+    assert.equal(model.supports_parallel_tool_calls, false);
+    assert.equal(model.default_reasoning_level, null);
+    assert.deepEqual(model.supported_reasoning_levels, []);
+  } finally {
+    db.prepare(`
+      UPDATE provider_models
+      SET supports_image_input = 1, supports_tools = 1, supports_reasoning = 1, supports_parallel_tools = 1
+      WHERE provider_id = ?
+    `).run(provider.id);
+  }
+});
+
+test('responses api translates a non-streaming request and response', async () => {
+  const student = createStudent();
+  const res = await request(app)
+    .post('/v1/responses')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({
+      model: 'active-model',
+      instructions: 'Be concise.',
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Say OK.' }]
+      }],
+      stream: false,
+      max_output_tokens: 64
+    })
+    .expect(200);
+
+  assert.equal(res.body.object, 'response');
+  assert.equal(res.body.status, 'completed');
+  assert.equal(res.body.model, 'active-model');
+  assert.equal(res.body.output[0].type, 'message');
+  assert.equal(res.body.output[0].content[0].type, 'output_text');
+  assert.equal(res.body.output[0].content[0].text, 'OK');
+  assert.deepEqual(res.body.usage, {
+    input_tokens: 5,
+    input_tokens_details: { cached_tokens: 0 },
+    output_tokens: 2,
+    output_tokens_details: { reasoning_tokens: 0 },
+    total_tokens: 7
+  });
+
+  const usage = db.prepare(`
+    SELECT model, provider_slug, input_tokens, output_tokens, total_tokens, was_streaming, status
+    FROM usage_logs
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(student.id);
+  assert.deepEqual(usage, {
+    model: 'active-model',
+    provider_slug: 'deepseek',
+    input_tokens: 5,
+    output_tokens: 2,
+    total_tokens: 7,
+    was_streaming: 0,
+    status: 'success'
+  });
+});
+
+test('responses api translates chat streaming to responses events', async () => {
+  const student = createStudent();
+  const res = await request(app)
+    .post('/v1/responses')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'active-model', input: 'Say OK.', stream: true })
+    .expect(200);
+
+  assert.match(res.headers['content-type'], /text\/event-stream/);
+  assert.match(res.text, /event: response\.created/);
+  assert.match(res.text, /event: response\.output_text\.delta/);
+  assert.match(res.text, /"delta":"OK"/);
+  assert.match(res.text, /event: response\.completed/);
+  assert.match(res.text, /"status":"completed"/);
+
+  const usage = db.prepare(`
+    SELECT model, provider_slug, was_streaming, status
+    FROM usage_logs
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(student.id);
+  assert.deepEqual(usage, {
+    model: 'active-model',
+    provider_slug: 'deepseek',
+    was_streaming: 1,
+    status: 'success'
+  });
+});
+
+test('responses api converts Codex function tools and prior tool output', () => {
+  const { responsesToChatPayload } = require('../src/services/responsesService');
+  const payload = responsesToChatPayload({
+    model: 'active-model',
+    input: [
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Inspect.' }] },
+      { type: 'function_call', call_id: 'call_123', name: 'exec_command', arguments: '{"cmd":"pwd"}' },
+      { type: 'function_call_output', call_id: 'call_123', output: '/workspace' }
+    ],
+    tools: [{
+      type: 'function',
+      name: 'exec_command',
+      description: 'Run a command.',
+      strict: false,
+      parameters: {
+        type: 'object',
+        properties: { cmd: { type: 'string' } },
+        required: ['cmd'],
+        additionalProperties: false
+      }
+    }],
+    tool_choice: 'auto',
+    parallel_tool_calls: false,
+    stream: true
+  });
+
+  assert.equal(payload.messages[0].role, 'user');
+  assert.equal(payload.messages[1].tool_calls[0].function.name, 'exec_command');
+  assert.equal(payload.messages[2].role, 'tool');
+  assert.equal(payload.messages[2].tool_call_id, 'call_123');
+  assert.equal(payload.tools[0].function.name, 'exec_command');
+  assert.equal(payload.parallel_tool_calls, false);
+  assert.deepEqual(payload.stream_options, { include_usage: true });
+});
+
+test('responses api moves Codex developer messages to the initial system message', () => {
+  const { responsesToChatPayload } = require('../src/services/responsesService');
+  const payload = responsesToChatPayload({
+    model: 'active-model',
+    instructions: 'Base instructions.',
+    input: [
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'First turn.' }] },
+      { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Late developer instruction.' }] },
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Second turn.' }] }
+    ]
+  });
+
+  assert.deepEqual(payload.messages, [
+    { role: 'system', content: 'Base instructions.\n\nLate developer instruction.' },
+    { role: 'user', content: 'First turn.' },
+    { role: 'user', content: 'Second turn.' }
+  ]);
+});
+
 test('quota exceeded blocks requests', async () => {
   const student = createStudent({ dailyLimit: 1 });
   db.prepare(`
@@ -899,6 +1079,56 @@ test('group provider pool routes to the least busy provider', async () => {
   }
 });
 
+test('provider pool filters endpoints by required tool capability', async () => {
+  const toolProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
+    VALUES (?, ?, ?, ?, ?, 1, 100)
+  `).run('tool-capable-pool-test', 'Tool Capable Pool Test', 'openai-compatible', mockBaseUrl, 'local');
+  db.prepare(`
+    INSERT INTO provider_models
+      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+       supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+    VALUES (?, 'active-model', 'tool-capable-upstream', 'Tool Capable', 1, 32000, 4096, 1, 1, 1, 1, 1)
+  `).run(toolProvider.lastInsertRowid);
+
+  const student = createStudent();
+  const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
+  db.prepare('UPDATE provider_models SET supports_tools = 0 WHERE provider_id = ?').run(deepseek.id);
+  db.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, 100)
+  `).run(groupId, toolProvider.lastInsertRowid);
+
+  try {
+    const res = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        messages: [{ role: 'user', content: 'Use the tool.' }],
+        tools: [{ type: 'function', function: { name: 'noop', parameters: { type: 'object' } } }],
+        tool_choice: 'auto'
+      })
+      .expect(200);
+    assert.equal(res.body.model, 'tool-capable-upstream');
+
+    db.prepare('UPDATE provider_models SET supports_tools = 0 WHERE provider_id = ?').run(toolProvider.lastInsertRowid);
+    const unavailable = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        messages: [{ role: 'user', content: 'Use the tool.' }],
+        tools: [{ type: 'function', function: { name: 'noop', parameters: { type: 'object' } } }]
+      })
+      .expect(400);
+    assert.equal(unavailable.body.error.code, 'model_capability_unavailable');
+  } finally {
+    db.prepare('UPDATE provider_models SET supports_tools = 1 WHERE provider_id = ?').run(deepseek.id);
+  }
+});
+
 test('group provider pool randomizes equally loaded providers', () => {
   const firstProvider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
@@ -1046,8 +1276,10 @@ test('student portal shows usage and downloads default opencode config', async (
   await agent.get('/').expect(200).expect(/<h1>Login<\/h1>/);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
 
-  const portal = await agent.get('/portal').expect(200).expect(/Tokens today/).expect(/Provider section/).expect(/chunkTimeout/);
+  const portal = await agent.get('/portal').expect(200).expect(/Tokens today/).expect(/Client configuration/).expect(/OpenCode/).expect(/Codex/).expect(/chunkTimeout/);
   assert.doesNotMatch(portal.text, /Cost EUR/);
+  assert.match(portal.text, /command = &quot;printenv&quot;/);
+  assert.doesNotMatch(portal.text, /env_key/);
   const configRes = await agent
     .get('/portal/opencode.json')
     .set('Host', 'course.example.test')
@@ -1069,6 +1301,16 @@ test('student portal shows usage and downloads default opencode config', async (
     input: ['text', 'image'],
     output: ['text']
   });
+
+  const codexRes = await agent
+    .get('/portal/codex.toml')
+    .set('Host', 'course.example.test')
+    .set('X-Forwarded-Proto', 'https')
+    .expect(200);
+  assert.match(codexRes.text, /base_url = "https:\/\/course\.example\.test\/v1"/);
+  assert.match(codexRes.text, /\[model_providers\.ieti-agents\.auth\]/);
+  assert.match(codexRes.text, /command = "printenv"/);
+  assert.doesNotMatch(codexRes.text, /env_key/);
 });
 
 test('student can create and delete their own api key', async () => {

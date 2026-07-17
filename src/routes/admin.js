@@ -176,11 +176,22 @@ function isProviderApiKeyOnlyForm(body) {
 }
 
 function parseModelMappingForm(body) {
+  const capabilityValue = (name) => {
+    const value = body[name];
+    if (value === undefined) return 1;
+    const selected = Array.isArray(value) ? value.at(-1) : value;
+    return ['1', 'true', 'yes', 'on'].includes(String(selected).toLowerCase()) ? 1 : 0;
+  };
   return {
     publicModel: validatePublicModelAlias(body.public_model),
     upstreamModel: requiredText(body.upstream_model, 'Upstream model name', { max: 255 }),
     contextLimit: nonNegativeIntegerOrNull(body.context_limit, 'Context limit'),
-    outputLimit: nonNegativeIntegerOrNull(body.output_limit, 'Output limit')
+    outputLimit: nonNegativeIntegerOrNull(body.output_limit, 'Output limit'),
+    supportsTextInput: capabilityValue('supports_text_input'),
+    supportsImageInput: capabilityValue('supports_image_input'),
+    supportsTools: capabilityValue('supports_tools'),
+    supportsReasoning: capabilityValue('supports_reasoning'),
+    supportsParallelTools: capabilityValue('supports_parallel_tools')
   };
 }
 
@@ -207,15 +218,41 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
     db.prepare(`
       UPDATE provider_models
       SET public_model = ?, upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
+          supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?, supports_parallel_tools = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(form.publicModel, form.upstreamModel, providerName, form.contextLimit, form.outputLimit, existing.id);
+    `).run(
+      form.publicModel,
+      form.upstreamModel,
+      providerName,
+      form.contextLimit,
+      form.outputLimit,
+      form.supportsTextInput,
+      form.supportsImageInput,
+      form.supportsTools,
+      form.supportsReasoning,
+      form.supportsParallelTools,
+      existing.id
+    );
   } else {
     db.prepare(`
       INSERT INTO provider_models
-        (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-      VALUES (?, ?, ?, ?, 1, ?, ?)
-    `).run(providerId, form.publicModel, form.upstreamModel, providerName, form.contextLimit, form.outputLimit);
+        (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+         supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      providerId,
+      form.publicModel,
+      form.upstreamModel,
+      providerName,
+      form.contextLimit,
+      form.outputLimit,
+      form.supportsTextInput,
+      form.supportsImageInput,
+      form.supportsTools,
+      form.supportsReasoning,
+      form.supportsParallelTools
+    );
   }
 }
 
@@ -344,12 +381,20 @@ function activeProviderModel(providerId) {
 }
 
 function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
+  const capability = (name) => model[name] === undefined || Number(model[name]) === 1;
   return `
     <h2>Active Model Mapping</h2>
     <label>OpenCode model alias <span class="muted" style="display:block;font-weight:400">Providers with the same alias are load-balanced together and shown as one model in OpenCode.</span></label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
     <label>Upstream model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
     <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
     <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
+    <h3>Capabilities</h3>
+    <p class="muted">Capabilities are aggregated and published automatically to Codex and OpenCode.</p>
+    <input type="hidden" name="supports_text_input" value="0"><label><input name="supports_text_input" type="checkbox" value="1" style="width:auto" ${capability('supports_text_input') ? 'checked' : ''}> Text input</label>
+    <input type="hidden" name="supports_image_input" value="0"><label><input name="supports_image_input" type="checkbox" value="1" style="width:auto" ${capability('supports_image_input') ? 'checked' : ''}> Image input</label>
+    <input type="hidden" name="supports_tools" value="0"><label><input name="supports_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_tools') ? 'checked' : ''}> Tool calling</label>
+    <input type="hidden" name="supports_reasoning" value="0"><label><input name="supports_reasoning" type="checkbox" value="1" style="width:auto" ${capability('supports_reasoning') ? 'checked' : ''}> Reasoning</label>
+    <input type="hidden" name="supports_parallel_tools" value="0"><label><input name="supports_parallel_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_parallel_tools') ? 'checked' : ''}> Parallel tool calls</label>
   `;
 }
 

@@ -9,8 +9,10 @@ const COMPATIBLE_FIELDS = [
   'top_p',
   'max_tokens',
   'stream',
+  'stream_options',
   'tools',
   'tool_choice',
+  'parallel_tool_calls',
   'presence_penalty',
   'frequency_penalty',
   'reasoning_content',
@@ -54,6 +56,11 @@ function getEnabledModelEntries() {
       provider_models.name AS model_name,
       provider_models.context_limit,
       provider_models.output_limit,
+      provider_models.supports_text_input,
+      provider_models.supports_image_input,
+      provider_models.supports_tools,
+      provider_models.supports_reasoning,
+      provider_models.supports_parallel_tools,
       providers.priority
     FROM providers
     JOIN provider_models ON providers.id = provider_models.provider_id
@@ -68,6 +75,13 @@ function getEnabledModelEntries() {
       limit: {
         context: Number(row.context_limit || config.defaultModelContextLimit),
         output: Number(row.output_limit || config.defaultModelOutputLimit)
+      },
+      capabilities: {
+        text: Boolean(row.supports_text_input),
+        image: Boolean(row.supports_image_input),
+        tools: Boolean(row.supports_tools),
+        reasoning: Boolean(row.supports_reasoning),
+        parallelTools: Boolean(row.supports_parallel_tools)
       }
   }));
 }
@@ -116,7 +130,7 @@ function normalizeProviderSlugs(slugs) {
   return [...new Set(values.map((slug) => String(slug || '').trim()).filter(Boolean))];
 }
 
-function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null) {
+function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, requiredCapabilities = {}) {
   const slugs = normalizeProviderSlugs(assignedProviderSlugs);
   const params = { publicModelAlias };
   const providerFilter = slugs.length
@@ -133,7 +147,12 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null) {
       provider_models.public_model AS public_model_alias,
       provider_models.upstream_model,
       provider_models.context_limit,
-      provider_models.output_limit
+      provider_models.output_limit,
+      provider_models.supports_text_input,
+      provider_models.supports_image_input,
+      provider_models.supports_tools,
+      provider_models.supports_reasoning,
+      provider_models.supports_parallel_tools
     FROM provider_models
     JOIN providers ON providers.id = provider_models.provider_id
     WHERE providers.enabled = 1
@@ -146,7 +165,23 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null) {
     throw apiError(404, 'model_not_found', `Model ${publicModelAlias} is not available.`);
   }
 
-  const availableCandidates = candidates.filter(hasCapacity);
+  const capableCandidates = candidates.filter((provider) => {
+    if (requiredCapabilities.text && !provider.supports_text_input) return false;
+    if (requiredCapabilities.image && !provider.supports_image_input) return false;
+    if (requiredCapabilities.tools && !provider.supports_tools) return false;
+    if (requiredCapabilities.reasoning && !provider.supports_reasoning) return false;
+    if (requiredCapabilities.parallelTools && !provider.supports_parallel_tools) return false;
+    return true;
+  });
+  if (!capableCandidates.length) {
+    const missing = Object.entries(requiredCapabilities)
+      .filter(([, required]) => required)
+      .map(([capability]) => capability)
+      .join(', ');
+    throw apiError(400, 'model_capability_unavailable', `Model ${publicModelAlias} has no assigned provider supporting: ${missing}.`);
+  }
+
+  const availableCandidates = capableCandidates.filter(hasCapacity);
   if (!availableCandidates.length) {
     throw apiError(503, 'provider_capacity_exceeded', `All providers for ${publicModelAlias} are at capacity.`);
   }
@@ -159,8 +194,25 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null) {
   return candidate;
 }
 
-async function callChatCompletions(payload, { signal, providerSlug = null, providerSlugs = null } = {}) {
-  const provider = chooseProviderModel(payload.model, providerSlugs || providerSlug);
+function inferRequiredCapabilities(payload) {
+  const contentParts = (payload.messages || []).flatMap((message) => Array.isArray(message?.content) ? message.content : []);
+  const hasImages = contentParts.some((part) => part?.type === 'image_url' || part?.type === 'input_image');
+  const hasTools = Array.isArray(payload.tools) && payload.tools.length > 0 && payload.tool_choice !== 'none';
+  return {
+    text: true,
+    image: hasImages,
+    tools: hasTools,
+    parallelTools: Boolean(hasTools && payload.parallel_tool_calls),
+    reasoning: false
+  };
+}
+
+async function callChatCompletions(payload, { signal, providerSlug = null, providerSlugs = null, requiredCapabilities = {} } = {}) {
+  const inferred = inferRequiredCapabilities(payload);
+  const requirements = Object.fromEntries(
+    Object.keys(inferred).map((key) => [key, Boolean(inferred[key] || requiredCapabilities[key])])
+  );
+  const provider = chooseProviderModel(payload.model, providerSlugs || providerSlug, requirements);
   if (!provider.base_url) {
     throw apiError(503, 'provider_misconfigured', `Provider ${provider.slug} has no base URL.`);
   }
@@ -281,6 +333,7 @@ module.exports = {
   getPublicModelAliasesForProviderSlugs,
   getInFlight,
   getProviderBySlug,
+  inferRequiredCapabilities,
   listProviders,
   reserveProviderForTest,
   testProvider
