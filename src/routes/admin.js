@@ -2,7 +2,14 @@ const express = require('express');
 const config = require('../config');
 const { getDb } = require('../db');
 const { requireAdmin } = require('../middleware/authAdmin');
-const { generateStudentKey, hashApiKey, lookupHashApiKey, keyPrefixSuffix } = require('../services/keyService');
+const { generateStudentKey } = require('../services/keyService');
+const {
+  listUserApiKeys,
+  normalizeApiKeyName,
+  createUserApiKey,
+  revokeUserApiKey,
+  getAvailableLegacyName
+} = require('../services/userApiKeyService');
 const { createInviteForUser, getActiveInviteForUser } = require('../services/studentAuthService');
 const {
   cleanupUsageLogs,
@@ -14,7 +21,7 @@ const {
   countUsage
 } = require('../services/usageService');
 const { getAllSettings, getSetting, maskSecret, setSetting } = require('../services/settingsService');
-const { listProviders, testProvider } = require('../services/providerService');
+const { discoverProviderMetadata, listProviders, testProvider } = require('../services/providerService');
 const {
   getAllGroups,
   getUserGroup,
@@ -24,6 +31,12 @@ const {
 } = require('../services/accessService');
 const { renderTemplate } = require('../utils/templates');
 const { apiError } = require('../utils/errors');
+const {
+  REASONING_EFFORTS,
+  normalizeReasoningEffort,
+  parseReasoningEfforts,
+  serializeReasoningEfforts
+} = require('../utils/reasoning');
 const {
   escapeHtml,
   flash,
@@ -176,12 +189,27 @@ function isProviderApiKeyOnlyForm(body) {
 }
 
 function parseModelMappingForm(body) {
-  const capabilityValue = (name) => {
+  const capabilityValue = (name, fallback = 1) => {
     const value = body[name];
-    if (value === undefined) return 1;
+    if (value === undefined) return fallback;
     const selected = Array.isArray(value) ? value.at(-1) : value;
     return ['1', 'true', 'yes', 'on'].includes(String(selected).toLowerCase()) ? 1 : 0;
   };
+  const supportsReasoning = capabilityValue('supports_reasoning');
+  const hasReasoningEffortFields = Object.prototype.hasOwnProperty.call(body, 'reasoning_efforts_present');
+  const requestedEfforts = Array.isArray(body.reasoning_efforts)
+    ? body.reasoning_efforts
+    : (body.reasoning_efforts === undefined ? [] : [body.reasoning_efforts]);
+  const reasoningEfforts = supportsReasoning
+    ? (hasReasoningEffortFields ? parseReasoningEfforts(requestedEfforts) : null)
+    : [];
+  const requestedDefaultEffort = normalizeReasoningEffort(body.default_reasoning_effort);
+  if (body.default_reasoning_effort && !requestedDefaultEffort) {
+    throw apiError(400, 'invalid_form', `Default reasoning effort must be one of: ${REASONING_EFFORTS.join(', ')}.`);
+  }
+  if (requestedDefaultEffort && !reasoningEfforts?.includes(requestedDefaultEffort)) {
+    throw apiError(400, 'invalid_form', 'Default reasoning effort must also be selected as a supported level.');
+  }
   return {
     publicModel: validatePublicModelAlias(body.public_model),
     upstreamModel: requiredText(body.upstream_model, 'Upstream model name', { max: 255 }),
@@ -190,7 +218,10 @@ function parseModelMappingForm(body) {
     supportsTextInput: capabilityValue('supports_text_input'),
     supportsImageInput: capabilityValue('supports_image_input'),
     supportsTools: capabilityValue('supports_tools'),
-    supportsReasoning: capabilityValue('supports_reasoning'),
+    supportsReasoning,
+    reasoningEfforts: serializeReasoningEfforts(reasoningEfforts),
+    defaultReasoningEffort: supportsReasoning ? requestedDefaultEffort : null,
+    supportsChatTemplateKwargs: supportsReasoning ? capabilityValue('supports_chat_template_kwargs', 0) : 0,
     supportsParallelTools: capabilityValue('supports_parallel_tools')
   };
 }
@@ -218,7 +249,8 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
     db.prepare(`
       UPDATE provider_models
       SET public_model = ?, upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
-          supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?, supports_parallel_tools = ?,
+          supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?,
+          reasoning_efforts = ?, default_reasoning_effort = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -231,6 +263,9 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       form.supportsImageInput,
       form.supportsTools,
       form.supportsReasoning,
+      form.reasoningEfforts,
+      form.defaultReasoningEffort,
+      form.supportsChatTemplateKwargs,
       form.supportsParallelTools,
       existing.id
     );
@@ -238,8 +273,9 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
     db.prepare(`
       INSERT INTO provider_models
         (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-         supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+         supports_text_input, supports_image_input, supports_tools, supports_reasoning,
+         reasoning_efforts, default_reasoning_effort, supports_chat_template_kwargs, supports_parallel_tools)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       providerId,
       form.publicModel,
@@ -251,6 +287,9 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       form.supportsImageInput,
       form.supportsTools,
       form.supportsReasoning,
+      form.reasoningEfforts,
+      form.defaultReasoningEffort,
+      form.supportsChatTemplateKwargs,
       form.supportsParallelTools
     );
   }
@@ -382,6 +421,8 @@ function activeProviderModel(providerId) {
 
 function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
   const capability = (name) => model[name] === undefined || Number(model[name]) === 1;
+  const reasoningEfforts = parseReasoningEfforts(model.reasoning_efforts) || [];
+  const defaultReasoningEffort = normalizeReasoningEffort(model.default_reasoning_effort) || '';
   return `
     <h2>Active Model Mapping</h2>
     <label>OpenCode model alias <span class="muted" style="display:block;font-weight:400">Providers with the same alias are load-balanced together and shown as one model in OpenCode.</span></label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
@@ -394,13 +435,32 @@ function modelMappingFields(provider = {}, model = activeProviderModel(provider.
     <input type="hidden" name="supports_image_input" value="0"><label><input name="supports_image_input" type="checkbox" value="1" style="width:auto" ${capability('supports_image_input') ? 'checked' : ''}> Image input</label>
     <input type="hidden" name="supports_tools" value="0"><label><input name="supports_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_tools') ? 'checked' : ''}> Tool calling</label>
     <input type="hidden" name="supports_reasoning" value="0"><label><input name="supports_reasoning" type="checkbox" value="1" style="width:auto" ${capability('supports_reasoning') ? 'checked' : ''}> Reasoning</label>
+    <fieldset style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0 12px">
+      <legend>Reasoning controls</legend>
+      <p class="muted">Select only levels accepted by this upstream model. Leave all levels unselected for models with provider-managed reasoning and no selectable effort.</p>
+      <input type="hidden" name="reasoning_efforts_present" value="1">
+      <div class="actions">
+        ${REASONING_EFFORTS.map((effort) => `<label><input name="reasoning_efforts" type="checkbox" value="${effort}" style="width:auto" ${reasoningEfforts.includes(effort) ? 'checked' : ''}> ${effort}</label>`).join('')}
+      </div>
+      <label>Default reasoning effort</label>
+      <select name="default_reasoning_effort">
+        <option value="">Provider default</option>
+        ${REASONING_EFFORTS.map((effort) => `<option value="${effort}" ${defaultReasoningEffort === effort ? 'selected' : ''}>${effort}</option>`).join('')}
+      </select>
+      <input type="hidden" name="supports_chat_template_kwargs" value="0"><label><input name="supports_chat_template_kwargs" type="checkbox" value="1" style="width:auto" ${Number(model.supports_chat_template_kwargs || 0) === 1 ? 'checked' : ''}> Allow restricted vLLM chat template overrides</label>
+      <p class="muted">Only <code>enable_thinking</code>, <code>preserve_thinking</code>, and <code>reasoning_effort</code> are accepted.</p>
+    </fieldset>
     <input type="hidden" name="supports_parallel_tools" value="0"><label><input name="supports_parallel_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_parallel_tools') ? 'checked' : ''}> Parallel tool calls</label>
   `;
 }
 
 function providerForm(provider = {}, action = '/admin/providers') {
+  const deleteFormId = provider.id ? `provider-delete-${provider.id}` : '';
+  const deleteModalId = provider.id ? `provider-delete-modal-${provider.id}` : '';
+  const autoconfigureModalId = provider.id ? `provider-autoconfigure-modal-${provider.id}` : '';
+  const providerTestModalId = provider.id ? `provider-test-modal-${provider.id}` : '';
   return `
-    <form method="post" action="${action}" class="panel">
+    <form method="post" action="${action}" class="panel" data-provider-settings-form>
       <h2>Provider Settings</h2>
       <label>Provider slug</label><input name="slug" value="${escapeHtml(provider.slug)}" required>
       <label>Name</label><input name="name" value="${escapeHtml(provider.name)}" required>
@@ -411,11 +471,41 @@ function providerForm(provider = {}, action = '/admin/providers') {
       ${modelMappingFields(provider)}
       <div class="actions" style="margin-top:16px">
         <button type="submit">Save provider</button>
-        ${provider.id ? `<button type="button" class="secondary" data-test-url="/admin/providers/${provider.id}/mapping/test.json" data-result-target="mapping-test-result">Run mapping test request</button>` : ''}
-        <a class="button secondary" href="/admin/settings">Cancel</a>
+        ${provider.id ? `<button type="button" class="danger" data-open-modal="${deleteModalId}">Delete provider</button>` : ''}
+        ${provider.id ? `<button type="button" class="secondary" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json" data-autoconfigure-modal="${autoconfigureModalId}">Autoconfigure</button>` : ''}
       </div>
-      ${provider.id ? '<p id="mapping-test-result" class="muted" aria-live="polite" style="white-space:pre-wrap"></p>' : ''}
     </form>
+    ${provider.id ? `
+      <form id="${deleteFormId}" method="post" action="/admin/providers/${provider.id}/delete"></form>
+      <dialog id="${deleteModalId}" class="modal" aria-labelledby="${deleteModalId}-title">
+        <h2 id="${deleteModalId}-title">Delete provider?</h2>
+        <p>This will permanently delete <strong>${escapeHtml(provider.name)}</strong> (<code>${escapeHtml(provider.slug)}</code>), its model mapping, and its group assignments.</p>
+        <p class="muted">Existing usage history is preserved under the provider slug.</p>
+        <div class="actions">
+          <button type="button" class="secondary" data-close-modal>Cancel</button>
+          <button type="submit" form="${deleteFormId}" class="danger">Delete provider</button>
+        </div>
+      </dialog>
+      <dialog id="${autoconfigureModalId}" class="modal" aria-labelledby="${autoconfigureModalId}-title" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json">
+        <h2 id="${autoconfigureModalId}-title">Autoconfigure provider</h2>
+        <p data-autoconfigure-status class="muted" aria-live="polite">Querying the upstream model catalog...</p>
+        <label>Upstream model</label>
+        <select data-autoconfigure-model disabled></select>
+        <p data-autoconfigure-detail class="muted" style="white-space:pre-wrap"></p>
+        <div class="actions">
+          <button type="button" class="secondary" data-close-modal>Cancel</button>
+          <button type="button" data-apply-autoconfigure disabled>Apply</button>
+        </div>
+      </dialog>
+      <dialog id="${providerTestModalId}" class="modal" aria-labelledby="${providerTestModalId}-title">
+        <h2 id="${providerTestModalId}-title" data-test-title>Provider test result</h2>
+        <p data-test-status class="muted" aria-live="polite">Running test request...</p>
+        <p data-test-detail class="muted" style="white-space:pre-wrap"></p>
+        <div class="actions">
+          <button type="button" class="secondary" data-close-modal>Close</button>
+        </div>
+      </dialog>
+    ` : ''}
   `;
 }
 
@@ -656,9 +746,14 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
     : '';
   const activeInvite = getActiveInviteForUser(user.id);
   const activeInviteUrl = activeInvite ? `${getRequestBaseUrl(req)}/invite/${encodeURIComponent(activeInvite.token)}` : '';
-  const apiKeyStatus = user.api_key_prefix && user.api_key_suffix
-    ? `${user.api_key_prefix}...${user.api_key_suffix}`
-    : 'No API key configured';
+  const userApiKeys = listUserApiKeys(user.id);
+  const apiKeyRows = userApiKeys.map((apiKey) => `
+    <tr>
+      <td>${escapeHtml(apiKey.name)}</td>
+      <td><code>${escapeHtml(`${apiKey.api_key_prefix || 'ieti_sk_'}...${apiKey.api_key_suffix || ''}`)}</code></td>
+      <td class="actions"><form method="post" action="/admin/users/${user.id}/revoke-key/${apiKey.id}"><button class="danger">Revoke</button></form></td>
+    </tr>
+  `).join('');
   const content = `
     <div class="section-stack">
       ${userForm(user, `/admin/users/${user.id}`)}
@@ -674,11 +769,14 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
         </div>
       </section>
       <section class="panel">
-        <h2>API key</h2>
-        <p class="muted">${escapeHtml(apiKeyStatus)}</p>
+        <h2>API keys</h2>
+        ${userApiKeys.length ? `<table><thead><tr><th>Name</th><th>Key</th><th>Actions</th></tr></thead><tbody>${apiKeyRows}</tbody></table>` : '<p class="muted">No API keys configured.</p>'}
         <div class="actions">
-          <form method="post" action="/admin/users/${user.id}/regenerate-key"><button>Regenerate API key</button></form>
-          <form method="post" action="/admin/users/${user.id}/revoke-key"><button class="danger">Revoke API key</button></form>
+          <form method="post" action="/admin/users/${user.id}/regenerate-key">
+            <input name="key_name" maxlength="80" placeholder="Key name (optional)" aria-label="New API key name">
+            <button>Add API key</button>
+          </form>
+          <form method="post" action="/admin/users/${user.id}/revoke-key"><button class="danger">Revoke all keys</button></form>
         </div>
       </section>
       <section class="panel">
@@ -736,18 +834,30 @@ router.post('/admin/users/:id/invite', requireAdmin, (req, res) => {
 });
 
 router.post('/admin/users/:id/regenerate-key', requireAdmin, (req, res) => {
+  const user = getDb().prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).send('User not found');
   const key = generateStudentKey();
-  const { prefix, suffix } = keyPrefixSuffix(key);
-  getDb().prepare('UPDATE users SET api_key_hash = ?, api_key_lookup_hash = ?, api_key_prefix = ?, api_key_suffix = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(hashApiKey(key), lookupHashApiKey(key), prefix, suffix, req.params.id);
+  const requestedName = normalizeApiKeyName(req.body.key_name);
+  const name = requestedName || getAvailableLegacyName(user.id);
+  if (requestedName && getDb().prepare('SELECT 1 FROM user_api_keys WHERE user_id = ? AND name = ? COLLATE NOCASE').get(user.id, requestedName)) {
+    return res.redirect(`/admin/users/${user.id}?key_error=duplicate`);
+  }
+  createUserApiKey(user.id, name, key);
   render(req, res, 'user-detail', {
     title: 'New API Key',
-    flash: flash('Copy this regenerated API key now. It will not be shown again.'),
-    content: `<p class="key">${escapeHtml(key)}</p><p><a class="button" href="/admin/users/${req.params.id}">Back to user</a></p>`
+    flash: flash('Copy this API key now. It will not be shown again.'),
+    content: `<p><strong>${escapeHtml(name)}</strong></p><p class="key">${escapeHtml(key)}</p><p><a class="button" href="/admin/users/${req.params.id}">Back to user</a></p>`
   });
 });
 
 router.post('/admin/users/:id/revoke-key', requireAdmin, (req, res) => {
+  getDb().prepare('DELETE FROM user_api_keys WHERE user_id = ?').run(req.params.id);
   getDb().prepare('UPDATE users SET api_key_hash = NULL, api_key_lookup_hash = NULL, api_key_prefix = NULL, api_key_suffix = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+  res.redirect(`/admin/users/${req.params.id}?revoked=1`);
+});
+
+router.post('/admin/users/:id/revoke-key/:keyId', requireAdmin, (req, res) => {
+  revokeUserApiKey(req.params.id, Number.parseInt(req.params.keyId, 10));
   res.redirect(`/admin/users/${req.params.id}?revoked=1`);
 });
 
@@ -794,7 +904,11 @@ router.get('/admin/settings', requireAdmin, (req, res) => {
       </table>
     </div>
   `;
-  render(req, res, 'settings', { title: 'Providers', content, flash: flash(req.query.saved ? 'Provider saved.' : req.query.test || '') });
+  render(req, res, 'settings', {
+    title: 'Providers',
+    content,
+    flash: flash(req.query.deleted ? 'Provider deleted.' : (req.query.saved ? 'Provider saved.' : req.query.test || ''))
+  });
 });
 
 router.get('/admin/server', requireAdmin, (req, res) => {
@@ -905,27 +1019,32 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
         ${providerForm(provider, `/admin/providers/${provider.id}`)}
         <div class="panel">
           <h2>Provider API key</h2>
-          <form method="post" action="/admin/providers/${provider.id}">
+          <form id="provider-api-key-save-${provider.id}" method="post" action="/admin/providers/${provider.id}">
             <label>API key or local placeholder</label><input name="api_key" type="password" autocomplete="off" placeholder="${provider.api_key ? 'Leave blank to keep current value' : 'local'}">
-            <button type="submit" style="margin-top:16px">Save API key</button>
           </form>
           <p class="muted">API key: ${escapeHtml(providerApiKeyStatus(provider))}</p>
-          <form method="post" action="/admin/providers/${provider.id}/clear-key">
-            <button class="danger" ${provider.api_key ? '' : 'disabled'}>Delete API key</button>
-          </form>
+          <form id="provider-api-key-delete-${provider.id}" method="post" action="/admin/providers/${provider.id}/clear-key"></form>
+          <div class="actions">
+            <button type="submit" form="provider-api-key-save-${provider.id}">Save API key</button>
+            <button type="submit" form="provider-api-key-delete-${provider.id}" class="danger" ${provider.api_key ? '' : 'disabled'}>Delete API key</button>
+          </div>
         </div>
         <div class="panel">
           <h2>Test provider</h2>
           <div class="actions">
-            <button type="button" data-test-url="/admin/providers/${provider.id}/test.json" data-result-target="provider-test-result">Run server test request</button>
+            <button type="button" data-test-url="/admin/providers/${provider.id}/test.json" data-test-modal="provider-test-modal-${provider.id}" data-test-title="Server test request result" data-test-running="Running server test request...">Run server test request</button>
+            <button type="button" class="secondary" data-test-url="/admin/providers/${provider.id}/mapping/test.json" data-test-modal="provider-test-modal-${provider.id}" data-test-title="Mapping request result" data-test-running="Running mapping request...">Run mapping request</button>
           </div>
-          <p id="provider-test-result" class="muted" aria-live="polite" style="white-space:pre-wrap"></p>
         </div>
       </div>
       <script>
         document.querySelectorAll('[data-test-url]').forEach((button) => {
           button.addEventListener('click', async () => {
             const target = document.getElementById(button.dataset.resultTarget);
+            const modal = document.getElementById(button.dataset.testModal);
+            const modalTitle = modal?.querySelector('[data-test-title]');
+            const modalStatus = modal?.querySelector('[data-test-status]');
+            const modalDetail = modal?.querySelector('[data-test-detail]');
             const originalText = button.textContent;
             const clearResult = () => {
               if (!target) return;
@@ -937,6 +1056,14 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
             };
             button.disabled = true;
             button.textContent = 'Running...';
+            if (modal && modalStatus && modalDetail) {
+              if (modalTitle) modalTitle.textContent = button.dataset.testTitle || 'Provider test result';
+              modalStatus.className = 'muted';
+              modalStatus.textContent = button.dataset.testRunning || 'Running test request...';
+              modalDetail.textContent = '';
+              if (typeof modal.showModal === 'function') modal.showModal();
+              else modal.setAttribute('open', '');
+            }
             if (target) {
               window.clearTimeout(target._clearTimer);
               target.className = 'muted';
@@ -949,12 +1076,23 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
                 headers: { Accept: 'application/json' }
               });
               const body = await response.json();
+              const message = body.message || (response.ok ? 'Test completed.' : 'Test failed.');
+              if (modalStatus && modalDetail) {
+                modalStatus.className = body.ok ? 'notice' : 'error';
+                modalStatus.textContent = message;
+                modalDetail.textContent = body.detail || '';
+              }
               if (target) {
                 target.className = body.ok ? 'notice' : 'error';
-                target.textContent = [body.message || (response.ok ? 'Test completed.' : 'Test failed.'), body.detail || ''].filter(Boolean).join('\\n');
+                target.textContent = [message, body.detail || ''].filter(Boolean).join('\\n');
                 clearResult();
               }
             } catch (error) {
+              if (modalStatus && modalDetail) {
+                modalStatus.className = 'error';
+                modalStatus.textContent = error.message || 'Test request failed.';
+                modalDetail.textContent = '';
+              }
               if (target) {
                 target.className = 'error';
                 target.textContent = error.message || 'Test request failed.';
@@ -964,6 +1102,108 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
               button.disabled = false;
               button.textContent = originalText;
             }
+          });
+        });
+
+        document.querySelectorAll('[data-autoconfigure-url]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const originalText = button.textContent;
+            const modelInput = document.querySelector('input[name="upstream_model"]');
+            const modal = document.getElementById(button.dataset.autoconfigureModal);
+            const status = modal?.querySelector('[data-autoconfigure-status]');
+            const detail = modal?.querySelector('[data-autoconfigure-detail]');
+            const modelSelect = modal?.querySelector('[data-autoconfigure-model]');
+            const applyButton = modal?.querySelector('[data-apply-autoconfigure]');
+            if (!modal || !status || !detail || !modelSelect || !applyButton) return;
+            button.disabled = true;
+            button.textContent = 'Discovering...';
+            status.className = 'muted';
+            status.textContent = 'Querying the upstream model catalog...';
+            detail.textContent = '';
+            modelSelect.replaceChildren();
+            modelSelect.disabled = true;
+            applyButton.disabled = true;
+            applyButton.textContent = 'Apply';
+            delete applyButton.dataset.mode;
+            if (typeof modal.showModal === 'function') modal.showModal();
+            else modal.setAttribute('open', '');
+            try {
+              const response = await fetch(button.dataset.autoconfigureUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preferred_model: modelInput?.value || '', apply: false })
+              });
+              const body = await response.json();
+              status.className = body.ok ? 'notice' : 'error';
+              status.textContent = body.message || (response.ok ? 'Configuration discovered.' : 'Autoconfiguration failed.');
+              detail.textContent = body.detail || '';
+              if (body.ok && Array.isArray(body.models) && body.models.length) {
+                for (const model of body.models) {
+                  const option = document.createElement('option');
+                  option.value = model.id;
+                  option.textContent = [model.id, model.maxModelLen ? 'context ' + model.maxModelLen : ''].filter(Boolean).join(' — ');
+                  option.selected = model.id === body.selectedModel;
+                  option.dataset.contextLimit = model.maxModelLen || '';
+                  modelSelect.append(option);
+                }
+                modelSelect.disabled = false;
+                applyButton.disabled = false;
+              }
+            } catch (error) {
+              status.className = 'error';
+              status.textContent = error.message || 'Autoconfiguration failed.';
+            } finally {
+              button.disabled = false;
+              button.textContent = originalText;
+            }
+          });
+        });
+
+        document.querySelectorAll('[data-apply-autoconfigure]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const modal = button.closest('dialog');
+            const status = modal?.querySelector('[data-autoconfigure-status]');
+            const detail = modal?.querySelector('[data-autoconfigure-detail]');
+            const modelSelect = modal?.querySelector('[data-autoconfigure-model]');
+            const modelInput = document.querySelector('input[name="upstream_model"]');
+            const contextInput = document.querySelector('input[name="context_limit"]');
+            const providerForm = document.querySelector('[data-provider-settings-form]');
+            if (!modal || !status || !detail || !modelSelect || !providerForm) return;
+            if (button.dataset.mode === 'save') {
+              if (typeof modal.close === 'function') modal.close();
+              else modal.removeAttribute('open');
+              if (typeof providerForm.requestSubmit === 'function') providerForm.requestSubmit();
+              else providerForm.submit();
+              return;
+            }
+            const selectedOption = modelSelect.selectedOptions[0];
+            if (!selectedOption) return;
+            if (modelInput) modelInput.value = selectedOption.value;
+            if (contextInput && selectedOption.dataset.contextLimit) contextInput.value = selectedOption.dataset.contextLimit;
+            status.className = 'notice';
+            status.textContent = 'Configuration applied to the form. Save the provider to persist it.';
+            modelSelect.disabled = true;
+            button.dataset.mode = 'save';
+            button.textContent = 'Save provider';
+            button.disabled = false;
+          });
+        });
+
+        document.querySelectorAll('[data-open-modal]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const modal = document.getElementById(button.dataset.openModal);
+            if (!modal) return;
+            if (typeof modal.showModal === 'function') modal.showModal();
+            else modal.setAttribute('open', '');
+          });
+        });
+        document.querySelectorAll('[data-close-modal]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const modal = button.closest('dialog');
+            if (!modal) return;
+            if (typeof modal.close === 'function') modal.close();
+            else modal.removeAttribute('open');
           });
         });
       </script>
@@ -1013,6 +1253,13 @@ router.post('/admin/providers/:id/clear-key', requireAdmin, (req, res) => {
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
 });
 
+router.post('/admin/providers/:id/delete', requireAdmin, (req, res) => {
+  const provider = getDb().prepare('SELECT id FROM providers WHERE id = ?').get(req.params.id);
+  if (!provider) return res.status(404).send('Provider not found');
+  getDb().prepare('DELETE FROM providers WHERE id = ?').run(provider.id);
+  res.redirect('/admin/settings?deleted=1');
+});
+
 router.post('/admin/providers/:id/test', requireAdmin, async (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
@@ -1024,8 +1271,135 @@ router.post('/admin/providers/:id/test.json', requireAdmin, async (req, res, nex
   try {
     const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
     if (!provider) return res.status(404).json({ ok: false, message: 'Provider not found.' });
-    const result = await testProvider({ slug: provider.slug });
-    res.status(result.ok ? 200 : 502).json(testResultPayload('Server test request', result));
+    if (!provider.api_key) {
+      return res.status(502).json({
+        ok: false,
+        status: 0,
+        message: 'Server test request failed.',
+        detail: 'API key is not configured.'
+      });
+    }
+    const discovery = await discoverProviderMetadata({ slug: provider.slug });
+    if (!discovery.ok) {
+      return res.status(502).json({
+        ok: false,
+        status: discovery.status,
+        message: `Server test request failed${discovery.status ? ` with status ${discovery.status}` : ''}.`,
+        detail: discovery.errorMessage
+      });
+    }
+    const detail = [
+      `Protocol: ${discovery.providerType}`,
+      discovery.version ? `Server version: ${discovery.version}` : '',
+      `Available models: ${discovery.models.map((model) => model.id).join(', ')}`,
+      ...discovery.warnings
+    ].filter(Boolean).join('\n');
+    return res.json({
+      ok: true,
+      status: discovery.status,
+      message: `Server test request passed with status ${discovery.status}.`,
+      detail
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req, res, next) => {
+  try {
+    const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
+    if (!provider) return res.status(404).json({ ok: false, message: 'Provider not found.' });
+
+    const discovery = await discoverProviderMetadata({ slug: provider.slug });
+    if (!discovery.ok) {
+      return res.status(502).json({
+        ok: false,
+        message: 'Autoconfiguration failed.',
+        detail: discovery.errorMessage,
+        models: []
+      });
+    }
+
+    const current = activeProviderModel(provider.id);
+    const preferredModel = optionalText(req.body?.preferred_model, { max: 255 }) || current.upstream_model || '';
+    const selected = discovery.models.find((model) => model.id === preferredModel) ||
+      (discovery.models.length === 1 ? discovery.models[0] : null);
+    const shouldApply = req.body?.apply === true || String(req.body?.apply || '').toLowerCase() === 'true';
+    const detectedContextLimit = selected?.maxModelLen || null;
+    const detected = [
+      `Protocol: ${discovery.providerType}`,
+      discovery.version ? `Server version: ${discovery.version}` : '',
+      `Available models: ${discovery.models.map((model) => model.id).join(', ')}`,
+      selected ? `Selected model: ${selected.id}` : 'Selected model: choose one before applying.',
+      selected?.root ? `Model root: ${selected.root}` : '',
+      selected
+        ? (detectedContextLimit ? `Context limit: ${detectedContextLimit}` : 'Context limit: not published; existing value will be kept.')
+        : '',
+      'Output limit and capabilities: manual values will be kept.',
+      ...discovery.warnings
+    ].filter(Boolean);
+
+    if (!shouldApply) {
+      return res.json({
+        ok: true,
+        message: 'Configuration discovered. Review it before applying.',
+        detail: detected.join('\n'),
+        providerType: discovery.providerType,
+        version: discovery.version,
+        models: discovery.models,
+        selectedModel: selected?.id || null,
+        applied: null
+      });
+    }
+
+    if (!selected) {
+      return res.status(409).json({
+        ok: false,
+        message: 'Choose an upstream model before applying the configuration.',
+        detail: `Available models: ${discovery.models.map((model) => model.id).join(', ')}`,
+        models: discovery.models,
+        selectedModel: null,
+        applied: null
+      });
+    }
+
+    const db = getDb();
+    if (current.id) {
+      db.prepare(`
+        UPDATE provider_models
+        SET upstream_model = ?, context_limit = COALESCE(?, context_limit), updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(selected.id, detectedContextLimit, current.id);
+    } else {
+      db.prepare(`
+        INSERT INTO provider_models
+          (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+           supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+        VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 0, 0, 0)
+      `).run(
+        provider.id,
+        config.publicModelName,
+        selected.id,
+        provider.name,
+        detectedContextLimit || Number(getSetting('default_model_context_limit')),
+        Number(getSetting('default_model_output_limit'))
+      );
+    }
+
+    const updated = activeProviderModel(provider.id);
+    return res.json({
+      ok: true,
+      message: 'Autoconfiguration applied.',
+      detail: detected.join('\n'),
+      providerType: discovery.providerType,
+      version: discovery.version,
+      models: discovery.models,
+      selectedModel: selected.id,
+      applied: {
+        upstreamModel: updated.upstream_model,
+        contextLimit: updated.context_limit
+      }
+    });
   } catch (error) {
     next(error);
   }

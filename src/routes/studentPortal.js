@@ -1,7 +1,16 @@
 const express = require('express');
+const fs = require('node:fs');
 const path = require('node:path');
 const { getDb } = require('../db');
-const { generateStudentKey, hashApiKey, lookupHashApiKey, keyPrefixSuffix } = require('../services/keyService');
+const { generateStudentKey } = require('../services/keyService');
+const {
+  KEY_NAME_MAX_LENGTH,
+  normalizeApiKeyName,
+  listUserApiKeys,
+  hasUserApiKeyName,
+  createUserApiKey,
+  revokeUserApiKey
+} = require('../services/userApiKeyService');
 const { verifyAdminCredentials } = require('../middleware/authAdmin');
 const { getUsageTotals, recentUsage } = require('../services/usageService');
 const { getSetting } = require('../services/settingsService');
@@ -19,6 +28,7 @@ const {
 } = require('../services/studentAuthService');
 const config = require('../config');
 const { renderTemplate } = require('../utils/templates');
+const { REASONING_EFFORTS } = require('../utils/reasoning');
 const {
   escapeHtml,
   flash,
@@ -29,10 +39,85 @@ const {
 
 const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
-const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..');
+const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..', 'assets');
+const BUILD_LITE_ARCHIVE_FILE = path.join(CLIENT_SCRIPT_DIRECTORY, 'buildlite_harness.zip');
 
 function getRequestBaseUrl(req) {
   return requestBaseUrl(req, getSetting('public_base_url', ''));
+}
+
+function normalizeAgentBaseUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      return null;
+    }
+    const pathname = url.pathname.replace(/\/+$/, '');
+    url.pathname = pathname && pathname.endsWith('/v1') ? pathname : `${pathname}/v1`;
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWebsiteBaseUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      return null;
+    }
+    let pathname = url.pathname.replace(/\/+$/, '');
+    if (pathname.endsWith('/v1')) pathname = pathname.slice(0, -3).replace(/\/+$/, '');
+    url.pathname = pathname || '/';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function getScriptDefaultBaseUrl(req) {
+  const configured = normalizeAgentBaseUrl(req.query?.default_base_url);
+  return configured || getNormalizedRequestBaseUrl(req);
+}
+
+function getNormalizedRequestBaseUrl(req) {
+  return normalizeAgentBaseUrl(getRequestBaseUrl(req)) ||
+    normalizeAgentBaseUrl(`${req.protocol}://${req.get('host')}`);
+}
+
+function getWebsiteBaseUrl(req) {
+  return normalizeWebsiteBaseUrl(getRequestBaseUrl(req)) ||
+    normalizeWebsiteBaseUrl(`${req.protocol}://${req.get('host')}`);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+function powershellQuote(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function getClientScriptUrl(req, filename) {
+  const defaultBaseUrl = getScriptDefaultBaseUrl(req);
+  const query = defaultBaseUrl ? `?default_base_url=${encodeURIComponent(defaultBaseUrl)}` : '';
+  return `${getWebsiteBaseUrl(req)}/downloads/${filename}${query}`;
+}
+
+function getClientScriptCommand(req, filename) {
+  const scriptUrl = getClientScriptUrl(req, filename);
+  if (filename.endsWith('.sh')) {
+    return `bash -c "$(curl -fsSL ${shellQuote(scriptUrl)})"`;
+  }
+  return `$p=Join-Path $env:TEMP 'ieti-set-agents-server.ps1'; Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item $p -Force`;
+}
+
+function getBuildLiteScriptCommand(req, filename) {
+  const scriptUrl = `${getWebsiteBaseUrl(req)}/downloads/${filename}`;
+  if (filename.endsWith('.sh')) {
+    return `bash -c "$(curl -fsSL ${shellQuote(scriptUrl)})"`;
+  }
+  return `$p=Join-Path $env:TEMP 'ieti-set-harness-buildlite.ps1'; Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item $p -Force`;
 }
 
 function getModelEntries(models) {
@@ -42,19 +127,34 @@ function getModelEntries(models) {
   return Object.fromEntries(models.map((model) => {
     const entry = configured.get(model.id);
     const limit = model.limit || entry?.limit || { context, output };
+    const capabilities = model.capabilities || entry?.capabilities || {};
+    const reasoningEfforts = capabilities.reasoning
+      ? REASONING_EFFORTS.filter((effort) => capabilities.reasoningEfforts?.includes(effort))
+      : [];
+    const defaultReasoningEffort = reasoningEfforts.includes(capabilities.defaultReasoningEffort)
+      ? capabilities.defaultReasoningEffort
+      : null;
+    const variants = capabilities.reasoning
+      ? Object.fromEntries(REASONING_EFFORTS.map((effort) => [
+          effort,
+          reasoningEfforts.includes(effort) ? { reasoningEffort: effort } : { disabled: true }
+        ]))
+      : {};
     return [
       model.id,
       {
         limit,
-        tool_call: model.capabilities?.tools ?? true,
-        reasoning: model.capabilities?.reasoning ?? true,
+        tool_call: capabilities.tools ?? true,
+        reasoning: capabilities.reasoning ?? true,
         modalities: {
           input: [
-            ...(model.capabilities?.text === false ? [] : ['text']),
-            ...(model.capabilities?.image === false ? [] : ['image'])
+            ...(capabilities.text === false ? [] : ['text']),
+            ...(capabilities.image === false ? [] : ['image'])
           ],
           output: ['text']
-        }
+        },
+        variants,
+        ...(defaultReasoningEffort ? { options: { reasoningEffort: defaultReasoningEffort } } : {})
       }
     ];
   }));
@@ -76,7 +176,16 @@ function getActiveModelsForUser(user) {
       providerSlug: entry.id,
       providerSlugs: [],
       limit: null,
-      capabilities: { text: false, image: false, tools: false, reasoning: false, parallelTools: false },
+      capabilities: {
+        text: false,
+        image: false,
+        tools: false,
+        reasoning: false,
+        reasoningEfforts: [],
+        defaultReasoningEffort: null,
+        chatTemplateKwargs: false,
+        parallelTools: false
+      },
       group
     };
     current.providerSlugs.push(entry.id);
@@ -92,6 +201,13 @@ function getActiveModelsForUser(user) {
     current.capabilities.image ||= entry.capabilities?.image ?? true;
     current.capabilities.tools ||= entry.capabilities?.tools ?? true;
     current.capabilities.reasoning ||= entry.capabilities?.reasoning ?? true;
+    current.capabilities.reasoningEfforts = REASONING_EFFORTS.filter((effort) =>
+      current.capabilities.reasoningEfforts.includes(effort) || entry.capabilities?.reasoningEfforts?.includes(effort));
+    if (!current.capabilities.defaultReasoningEffort &&
+        current.capabilities.reasoningEfforts.includes(entry.capabilities?.defaultReasoningEffort)) {
+      current.capabilities.defaultReasoningEffort = entry.capabilities.defaultReasoningEffort;
+    }
+    current.capabilities.chatTemplateKwargs ||= entry.capabilities?.chatTemplateKwargs ?? false;
     current.capabilities.parallelTools ||= entry.capabilities?.parallelTools ?? true;
     byAlias.set(entry.publicModel, current);
   }
@@ -104,7 +220,7 @@ function buildOpenCodeProviderBlock({ req, models, apiKey }) {
       npm: '@ai-sdk/openai-compatible',
       name: 'IETI Agents',
       options: {
-        baseURL: `${getRequestBaseUrl(req)}/v1`,
+        baseURL: getNormalizedRequestBaseUrl(req),
         apiKey,
         timeout: 900000,
         chunkTimeout: 600000
@@ -121,6 +237,62 @@ function buildOpenCodeConfig({ req, models, apiKey }) {
     provider: buildOpenCodeProviderBlock({ req, models, apiKey }),
     model: selectedModel ? `ieti-agents/${selectedModel}` : ''
   };
+}
+
+function yesNo(value) {
+  return value ? 'Yes' : 'No';
+}
+
+function renderActiveModels(req, models) {
+  const baseUrl = getNormalizedRequestBaseUrl(req);
+  const modelEntries = getModelEntries(models);
+  const modelList = models.map((model) => {
+    const entry = modelEntries[model.id];
+    const capabilities = model.capabilities || {};
+    const reasoningEfforts = capabilities.reasoningEfforts?.length
+      ? capabilities.reasoningEfforts.join(', ')
+      : (capabilities.reasoning ? 'Provider-managed' : 'Not supported');
+    const inputs = entry.modalities.input.join(', ') || 'None';
+    const openCodeEntry = JSON.stringify({ [model.id]: entry }, null, 2);
+
+    return `
+      <details class="active-model">
+        <summary>
+          <code>${escapeHtml(model.id)}</code>
+          <span>${escapeHtml(entry.limit.context)} context · ${escapeHtml(entry.limit.output)} max output</span>
+        </summary>
+        <div class="active-model-details">
+          <dl class="model-config-grid">
+            <div><dt>Protocol</dt><dd>OpenAI-compatible</dd></div>
+            <div><dt>Base URL</dt><dd><code>${escapeHtml(baseUrl)}</code></dd></div>
+            <div><dt>Model ID</dt><dd><code>${escapeHtml(model.id)}</code></dd></div>
+            <div><dt>OpenCode model</dt><dd><code>ieti-agents/${escapeHtml(model.id)}</code></dd></div>
+            <div><dt>OpenCode package</dt><dd><code>@ai-sdk/openai-compatible</code></dd></div>
+            <div><dt>Context window</dt><dd>${escapeHtml(entry.limit.context)} tokens</dd></div>
+            <div><dt>Maximum output</dt><dd>${escapeHtml(entry.limit.output)} tokens</dd></div>
+            <div><dt>Input modalities</dt><dd>${escapeHtml(inputs)}</dd></div>
+            <div><dt>Tool calling</dt><dd>${yesNo(entry.tool_call)}</dd></div>
+            <div><dt>Reasoning</dt><dd>${yesNo(entry.reasoning)}</dd></div>
+            <div><dt>Reasoning efforts</dt><dd>${escapeHtml(reasoningEfforts)}</dd></div>
+          </dl>
+          <p class="muted">Authenticate with an active <code>ieti_sk_…</code> key as a Bearer token. OpenCode can read that key from <code>{file:.secrets/agents_server_key}</code>, as used by the setup scripts.</p>
+          <h3>OpenCode model entry</h3>
+          <p class="muted">Add this entry under <code>provider.ieti-agents.models</code> when configuring OpenCode manually.</p>
+          <div class="command-scroll model-config-json"><pre><code>${escapeHtml(openCodeEntry)}</code></pre></div>
+        </div>
+      </details>
+    `;
+  }).join('');
+
+  return `
+    <section class="active-models" aria-labelledby="active-models-heading">
+      <h2 id="active-models-heading">Active models</h2>
+      <p class="muted">Models available to your account. Select a model to see the same connection and capability parameters used by the setup scripts.</p>
+      <div class="active-model-list">
+        ${modelList || '<div class="panel muted">No active models are assigned to your account.</div>'}
+      </div>
+    </section>
+  `;
 }
 
 function render(req, res, { title = 'User Portal', content = '', message = '' }) {
@@ -299,6 +471,10 @@ router.get('/portal', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const usage = getUsageTotals(user.id);
   const models = getActiveModelsForUser(user);
+  const shellCommand = getClientScriptCommand(req, 'set_agents_opencode.sh');
+  const powershellCommand = getClientScriptCommand(req, 'set_agents_opencode.ps1');
+  const buildLiteShellCommand = getBuildLiteScriptCommand(req, 'set_harness_buildlite.sh');
+  const buildLitePowerShellCommand = getBuildLiteScriptCommand(req, 'set_harness_buildlite.ps1');
   const usageRows = recentUsage(25, user.id).map((row) => `
     <tr>
       <td>${escapeHtml(row.created_at)}</td>
@@ -314,43 +490,118 @@ router.get('/portal', requireStudentSession, (req, res) => {
     title: 'User Portal',
     message: '',
     content: `
-      ${req.session.studentOneTimeApiKey && req.query.created ? `
-      <dialog id="api-key-modal" style="border:none;border-radius:8px;padding:24px;max-width:600px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.2)">
-        <h2>New API Key</h2>
-        <p>Please save this API key somewhere safe and accessible. For security reasons, you won't be able to view it again through your account.</p>
-        <div style="display:flex;gap:8px;align-items:center;margin:16px 0">
-          <code style="flex:1;padding:8px;background:#f5f5f5;border-radius:4px;word-break:break-all">${escapeHtml(req.session.studentOneTimeApiKey)}</code>
-          <button id="copy-key-btn">Copy</button>
-        </div>
-        <form method="post" action="/portal/key/dismiss-modal" style="margin:0">
-          <button type="submit" class="secondary">Close</button>
-        </form>
-      </dialog>
-      <script>
-        (function(){
-          var m = document.getElementById('api-key-modal');
-          if (m) m.showModal();
-          var b = document.getElementById('copy-key-btn');
-          if (b) b.addEventListener('click', function(){
-            navigator.clipboard.writeText(${JSON.stringify(req.session.studentOneTimeApiKey)}).then(function(){
-              b.textContent = 'Copied!';
-            });
-          });
-        })();
-      </script>
-      ` : ''}
       <h1>${escapeHtml(user.name)}</h1>
       <p class="muted">${escapeHtml(user.email)}</p>
       ${usageLimitCards(models[0]?.group, usage)}
       <div class="panel" style="margin-top:16px">
-        <h2>OpenCode launchers</h2>
-        <p>Download the launcher for your operating system. On first use it will request the proxy URL and your API key, discover the available models and capabilities, and then start OpenCode.</p>
-        <div class="actions">
-          <a class="button" href="/portal/run_opencode.sh" download="run_opencode.sh">Download for macOS/Linux (.sh)</a>
-          <a class="button secondary" href="/portal/run_opencode.ps1" download="run_opencode.ps1">Download for Windows (.ps1)</a>
+        <h2>OpenCode configuration</h2>
+        <p>Run the command for your operating system. It downloads the configuration script from this server, stores the IETI Agents key in <code>.secrets/agents_server_key</code>, and updates <code>opencode.json</code>.</p>
+        <label>macOS/Linux</label>
+        <div class="command-row">
+          <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>
+          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="ieti-shell-command" data-copy-value="${escapeHtml(shellCommand)}" title="Copy macOS/Linux command" aria-label="Copy macOS/Linux command">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+            <span class="copy-label">Copy</span>
+          </button>
         </div>
-        ${user.api_key_hash ? '' : '<p class="muted">Create an API key before running either launcher.</p>'}
+        <label>Windows PowerShell</label>
+        <div class="command-row">
+          <div class="command-scroll"><pre><code id="ieti-powershell-command">${escapeHtml(powershellCommand)}</code></pre></div>
+          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="ieti-powershell-command" data-copy-value="${escapeHtml(powershellCommand)}" title="Copy Windows PowerShell command" aria-label="Copy Windows PowerShell command">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+            <span class="copy-label">Copy</span>
+          </button>
+        </div>
+        <script>
+          (function(){
+            function copyText(text) {
+              if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+              var area = document.createElement('textarea');
+              area.value = text;
+              area.setAttribute('readonly', '');
+              area.style.position = 'fixed';
+              area.style.opacity = '0';
+              document.body.appendChild(area);
+              area.select();
+              var copied = document.execCommand('copy');
+              area.remove();
+              return copied ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
+            }
+            document.querySelectorAll('[data-copy-command]').forEach(function(button){
+              button.addEventListener('click', function(){
+                var target = document.getElementById(button.dataset.copyTarget);
+                var label = button.querySelector('.copy-label');
+                var text = button.dataset.copyValue || (target && target.textContent);
+                if (!text || !label) return;
+                copyText(text).then(function(){
+                  label.textContent = 'Copied';
+                  window.setTimeout(function(){ label.textContent = 'Copy'; }, 1600);
+                }).catch(function(){
+                  label.textContent = 'Copy failed';
+                  window.setTimeout(function(){ label.textContent = 'Copy'; }, 1600);
+                });
+              });
+            });
+          })();
+        </script>
+        <p class="muted">Manage your API keys from <a href="/portal/settings">Settings</a>.</p>
       </div>
+      <div class="panel" style="margin-top:16px">
+        <h2>BuildLite Configuration</h2>
+        <p>Run the command for your operating system. It downloads and extracts the BuildLite harness into the current project folder, keeping <code>.agents/</code> and <code>AGENTS.md</code> at the project root. It then creates <code>.opencode</code> as a link to <code>.agents</code>.</p>
+        <label>macOS/Linux</label>
+        <div class="command-row">
+          <div class="command-scroll"><pre><code id="buildlite-shell-command">${escapeHtml(buildLiteShellCommand)}</code></pre></div>
+          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="buildlite-shell-command" data-copy-value="${escapeHtml(buildLiteShellCommand)}" title="Copy BuildLite macOS/Linux command" aria-label="Copy BuildLite macOS/Linux command">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2-2-2h10c1.1 0 2 .9 2 2"></path></svg>
+            <span class="copy-label">Copy</span>
+          </button>
+        </div>
+        <label>Windows PowerShell</label>
+        <div class="command-row">
+          <div class="command-scroll"><pre><code id="buildlite-powershell-command">${escapeHtml(buildLitePowerShellCommand)}</code></pre></div>
+          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="buildlite-powershell-command" data-copy-value="${escapeHtml(buildLitePowerShellCommand)}" title="Copy BuildLite Windows PowerShell command" aria-label="Copy BuildLite Windows PowerShell command">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2-2-2h10c1.1 0 2 .9 2 2"></path></svg>
+            <span class="copy-label">Copy</span>
+          </button>
+        </div>
+        <p class="muted">Linux creates a symbolic link with <code>.opencode -&gt; .agents</code>. Windows creates a directory junction with <code>mklink /J .opencode .agents</code>.</p>
+        <script>
+          (function(){
+            function copyText(text) {
+              if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+              var area = document.createElement('textarea');
+              area.value = text;
+              area.setAttribute('readonly', '');
+              area.style.position = 'fixed';
+              area.style.opacity = '0';
+              document.body.appendChild(area);
+              area.select();
+              var copied = document.execCommand('copy');
+              area.remove();
+              return copied ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
+            }
+            document.querySelectorAll('[data-copy-command]').forEach(function(button){
+              if (button.dataset.copyReady) return;
+              button.dataset.copyReady = '1';
+              button.addEventListener('click', function(){
+                var target = document.getElementById(button.dataset.copyTarget);
+                var label = button.querySelector('.copy-label');
+                var text = button.dataset.copyValue || (target && target.textContent);
+                if (!text || !label) return;
+                copyText(text).then(function(){
+                  label.textContent = 'Copied';
+                  window.setTimeout(function(){ label.textContent = 'Copy'; }, 1600);
+                }).catch(function(){
+                  label.textContent = 'Copy failed';
+                  window.setTimeout(function(){ label.textContent = 'Copy'; }, 1600);
+                });
+              });
+            });
+          })();
+        </script>
+      </div>
+      ${renderActiveModels(req, models)}
       <h2>Recent usage</h2>
       <table>
         <thead><tr><th>When</th><th>Model</th><th>Input</th><th>Output</th><th>Total</th><th>Status</th></tr></thead>
@@ -381,22 +632,130 @@ router.post('/portal/settings/password', requireStudentSession, (req, res) => {
 
 router.get('/portal/settings', requireStudentSession, (req, res) => {
   const user = req.portalUser;
+  const apiKeys = listUserApiKeys(user.id);
+  const pendingApiKey = req.session.pendingStudentApiKey?.key || '';
+  const keyNameError = req.query.key_error === 'duplicate'
+    ? 'That key name is already in use. Choose another name.'
+    : req.query.key_error === 'invalid'
+      ? `Enter a unique key name with 1-${KEY_NAME_MAX_LENGTH} characters.`
+      : '';
+  const existingKeyNames = JSON.stringify(apiKeys.map((apiKey) => apiKey.name)).replaceAll('<', '\\u003c');
+  const apiKeyRows = apiKeys.map((apiKey) => `
+    <tr>
+      <td>${escapeHtml(apiKey.name)}</td>
+      <td><code>${escapeHtml(`${apiKey.api_key_prefix || 'ieti_sk_'}...${apiKey.api_key_suffix || ''}`)}</code></td>
+      <td>${escapeHtml(apiKey.created_at)}</td>
+      <td class="actions"><form class="delete-api-key-form" method="post" action="/portal/key/${apiKey.id}/revoke" data-key-name="${escapeHtml(apiKey.name)}"><button type="submit" class="danger">Delete</button></form></td>
+    </tr>
+  `).join('');
   render(req, res, {
     title: 'Settings',
     message: '',
     content: `
       <h1>Settings</h1>
+      ${req.query.created ? '<div class="notice">API key added.</div>' : ''}
+      ${req.query.revoked ? '<div class="notice">API key deleted.</div>' : ''}
       ${req.query.name_saved ? '<div class="notice">Name updated.</div>' : ''}
       ${req.query.password_error ? '<div class="notice" style="background:#fee;color:#c33">Current password is incorrect or passwords do not match.</div>' : ''}
       ${req.query.password_saved ? '<div class="notice">Password updated.</div>' : ''}
       <div class="panel" style="margin-top:16px">
-        <h2>API Key</h2>
-        ${user.api_key_prefix && user.api_key_suffix ? `<p>API key: <span class="key">${escapeHtml(user.api_key_prefix + '...' + user.api_key_suffix)}</span></p>` : '<p class="muted">No API key configured.</p>'}
-        <div class="actions">
-          <form method="post" action="/portal/key/regenerate"><button type="submit">Create new API key</button></form>
-          <form method="post" action="/portal/key/revoke"><button type="submit" class="danger">Delete API key</button></form>
+        <h2>API keys</h2>
+        <p class="muted">Each key has its own name and can be deleted independently.</p>
+        ${apiKeys.length ? `
+        <table>
+          <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody>${apiKeyRows}</tbody>
+        </table>
+        ` : '<p class="muted">No API keys configured.</p>'}
+        <div class="actions" style="margin-top:16px">
+          <form method="post" action="/portal/key/regenerate"><button type="submit">Add API key</button></form>
         </div>
       </div>
+      <dialog id="delete-api-key-modal" class="modal">
+        <h2>Delete API key?</h2>
+        <p>This will revoke <strong id="delete-api-key-name"></strong>. Applications using it will stop working.</p>
+        <form id="delete-api-key-confirm-form" method="post">
+          <div class="actions">
+            <button type="button" id="cancel-delete-api-key" class="secondary">Cancel</button>
+            <button type="submit" class="danger">Delete</button>
+          </div>
+        </form>
+      </dialog>
+      <script>
+        (function(){
+          var modal = document.getElementById('delete-api-key-modal');
+          var confirmForm = document.getElementById('delete-api-key-confirm-form');
+          var keyName = document.getElementById('delete-api-key-name');
+          var cancelButton = document.getElementById('cancel-delete-api-key');
+          function closeModal() {
+            if (!modal || !modal.open) return;
+            modal.classList.add('is-closing');
+            window.setTimeout(function(){ modal.close(); modal.classList.remove('is-closing'); }, 150);
+          }
+          if (!modal || !confirmForm) return;
+          modal.addEventListener('cancel', function(event){ event.preventDefault(); closeModal(); });
+          if (cancelButton) cancelButton.addEventListener('click', closeModal);
+          document.querySelectorAll('.delete-api-key-form').forEach(function(form){
+            form.addEventListener('submit', function(event){
+              event.preventDefault();
+              confirmForm.action = form.action;
+              keyName.textContent = form.dataset.keyName || 'this key';
+              modal.showModal();
+            });
+          });
+        })();
+      </script>
+      ${pendingApiKey ? `
+      <dialog id="api-key-modal" class="modal">
+        <h2>Add API key</h2>
+        <p>Copy this key now. It will not be shown again after you add it.</p>
+        <div class="key" style="display:flex;gap:8px;align-items:center;margin:16px 0">
+          <code id="new-api-key" style="flex:1;word-break:break-all">${escapeHtml(pendingApiKey)}</code>
+          <button type="button" id="copy-key-btn" class="secondary">Copy</button>
+        </div>
+        <form method="post" action="/portal/key/add">
+          <label for="api-key-name">Key name</label>
+          <input id="api-key-name" name="key_name" maxlength="${KEY_NAME_MAX_LENGTH}" autocomplete="off" required>
+          <p id="api-key-name-error" class="error" style="display:${keyNameError ? 'block' : 'none'}">${escapeHtml(keyNameError)}</p>
+          <div class="actions" style="justify-content:flex-end;margin-top:16px">
+            <button type="submit" id="add-key-btn" disabled>Add key</button>
+          </div>
+        </form>
+      </dialog>
+      <script>
+        (function(){
+          var modal = document.getElementById('api-key-modal');
+          var nameInput = document.getElementById('api-key-name');
+          var addButton = document.getElementById('add-key-btn');
+          var error = document.getElementById('api-key-name-error');
+          var existingNames = new Set(${existingKeyNames}.map(function(name){ return name.toLocaleLowerCase(); }));
+          function updateNameState() {
+            var value = nameInput.value.trim();
+            var duplicate = existingNames.has(value.toLocaleLowerCase());
+            var valid = value.length > 0 && value.length <= ${KEY_NAME_MAX_LENGTH} && !/[\\u0000-\\u001f\\u007f]/.test(value) && !duplicate;
+            addButton.disabled = !valid;
+            if (duplicate) error.textContent = 'That key name is already in use. Choose another name.';
+            else if (value.length > ${KEY_NAME_MAX_LENGTH}) error.textContent = 'The key name is too long.';
+            else if (value.length > 0 && /[\\u0000-\\u001f\\u007f]/.test(value)) error.textContent = 'The key name contains invalid characters.';
+            error.style.display = valid || value.length === 0 ? 'none' : 'block';
+          }
+          function closeModal() {
+            if (!modal || !modal.open) return;
+            modal.classList.add('is-closing');
+            window.setTimeout(function(){ modal.close(); modal.classList.remove('is-closing'); }, 150);
+          }
+          if (modal) {
+            modal.addEventListener('cancel', function(event){ event.preventDefault(); closeModal(); });
+            modal.showModal();
+          }
+          if (nameInput) { nameInput.addEventListener('input', updateNameState); nameInput.focus(); updateNameState(); }
+          var copyButton = document.getElementById('copy-key-btn');
+          if (copyButton) copyButton.addEventListener('click', function(){
+            navigator.clipboard.writeText(${JSON.stringify(pendingApiKey)}).then(function(){ copyButton.textContent = 'Copied'; });
+          });
+        })();
+      </script>
+      ` : ''}
       <div class="panel" style="margin-top:16px">
         <h2>Account</h2>
         <form method="post" action="/portal/settings/name" style="margin-bottom:16px">
@@ -420,26 +779,43 @@ router.get('/portal/settings', requireStudentSession, (req, res) => {
 
 router.post('/portal/key/regenerate', requireStudentSession, (req, res) => {
   const key = generateStudentKey();
-  const { prefix, suffix } = keyPrefixSuffix(key);
-  getDb().prepare('UPDATE users SET api_key_hash = ?, api_key_lookup_hash = ?, api_key_prefix = ?, api_key_suffix = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(hashApiKey(key), lookupHashApiKey(key), prefix, suffix, req.portalUser.id);
-  req.session.studentOneTimeApiKey = key;
-  res.redirect('/portal?created=1');
+  req.session.pendingStudentApiKey = { key };
+  res.redirect('/portal/settings?new_key=1');
+});
+
+router.post('/portal/key/add', requireStudentSession, (req, res) => {
+  const pending = req.session.pendingStudentApiKey;
+  if (!pending?.key) return res.redirect('/portal/settings');
+  const name = normalizeApiKeyName(req.body.key_name);
+  if (!name) return res.redirect('/portal/settings?new_key=1&key_error=invalid');
+  if (hasUserApiKeyName(req.portalUser.id, name)) return res.redirect('/portal/settings?new_key=1&key_error=duplicate');
+  try {
+    createUserApiKey(req.portalUser.id, name, pending.key);
+  } catch (error) {
+    if (String(error.code || '').includes('SQLITE_CONSTRAINT')) {
+      return res.redirect('/portal/settings?new_key=1&key_error=duplicate');
+    }
+    throw error;
+  }
+  req.session.pendingStudentApiKey = null;
+  res.redirect('/portal/settings?created=1');
 });
 
 router.post('/portal/key/dismiss-modal', requireStudentSession, (req, res) => {
-  res.redirect('/portal');
+  req.session.pendingStudentApiKey = null;
+  res.redirect('/portal/settings');
 });
 
-router.post('/portal/key/revoke', requireStudentSession, (req, res) => {
-  getDb().prepare('UPDATE users SET api_key_hash = NULL, api_key_lookup_hash = NULL, api_key_prefix = NULL, api_key_suffix = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.portalUser.id);
-  req.session.studentOneTimeApiKey = null;
-  res.redirect('/portal');
+router.post('/portal/key/:keyId/revoke', requireStudentSession, (req, res) => {
+  const keyId = Number.parseInt(req.params.keyId, 10);
+  if (Number.isInteger(keyId)) revokeUserApiKey(req.portalUser.id, keyId);
+  res.redirect('/portal/settings?revoked=1');
 });
 
 router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const models = getActiveModelsForUser(user);
-  const apiKey = '{env:PROXY_AGENTS_KEY}';
+  const apiKey = '{file:.secrets/agents_server_key}';
   const opencodeConfig = buildOpenCodeConfig({ req, models, apiKey });
 
   res.set({
@@ -450,21 +826,46 @@ router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
   res.send(`${JSON.stringify(opencodeConfig, null, 2)}\n`);
 });
 
-function sendClientScript(res, filename) {
+function sendClientScript(req, res, filename) {
+  const source = fs.readFileSync(path.join(CLIENT_SCRIPT_DIRECTORY, filename), 'utf8');
+  const defaultBaseUrl = getScriptDefaultBaseUrl(req);
+  const baseUrlReplacement = filename.endsWith('.sh')
+    ? defaultBaseUrl.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
+    : defaultBaseUrl.replaceAll("'", "''");
+  const buildLiteArchiveUrl = `${getWebsiteBaseUrl(req)}/downloads/buildlite_harness.zip`;
+  const buildLiteArchiveReplacement = filename.endsWith('.sh')
+    ? buildLiteArchiveUrl.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
+    : buildLiteArchiveUrl.replaceAll("'", "''");
+  const script = source
+    .replaceAll('__IETI_DEFAULT_BASE_URL__', baseUrlReplacement)
+    .replaceAll('__IETI_BUILD_LITE_ZIP_URL__', buildLiteArchiveReplacement);
   res.set({
     'Content-Type': 'text/plain; charset=utf-8',
     'Content-Disposition': `attachment; filename="${filename}"`,
     'Cache-Control': 'no-store'
   });
-  res.sendFile(path.join(CLIENT_SCRIPT_DIRECTORY, filename));
+  res.send(script);
 }
 
-router.get('/portal/run_opencode.sh', requireStudentSession, (_req, res) => {
-  sendClientScript(res, 'run_opencode.sh');
+router.get('/downloads/set_agents_opencode.sh', (req, res) => {
+  sendClientScript(req, res, 'set_agents_opencode.sh');
 });
 
-router.get('/portal/run_opencode.ps1', requireStudentSession, (_req, res) => {
-  sendClientScript(res, 'run_opencode.ps1');
+router.get('/downloads/set_agents_opencode.ps1', (req, res) => {
+  sendClientScript(req, res, 'set_agents_opencode.ps1');
+});
+
+router.get('/downloads/set_harness_buildlite.sh', (req, res) => {
+  sendClientScript(req, res, 'set_harness_buildlite.sh');
+});
+
+router.get('/downloads/set_harness_buildlite.ps1', (req, res) => {
+  sendClientScript(req, res, 'set_harness_buildlite.ps1');
+});
+
+router.get('/downloads/buildlite_harness.zip', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  res.download(BUILD_LITE_ARCHIVE_FILE, 'buildlite_harness.zip', next);
 });
 
 module.exports = router;

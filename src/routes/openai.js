@@ -9,6 +9,7 @@ const { getUserGroup } = require('../services/accessService');
 const { estimateChatTokens, estimateTokensFromText } = require('../utils/tokens');
 const { validateRequestPayload } = require('../utils/payloadValidation');
 const { apiError } = require('../utils/errors');
+const { REASONING_EFFORTS } = require('../utils/reasoning');
 const {
   chatCompletionToResponse,
   chatUsageToResponses,
@@ -28,6 +29,12 @@ function getPublishedModels(providerSlugs) {
     const current = grouped.get(entry.publicModel);
     const contextWindow = Number(entry.limit?.context || config.defaultModelContextLimit);
     const outputLimit = Number(entry.limit?.output || config.defaultModelOutputLimit);
+    const reasoningEffortSet = new Set([
+      ...(current?.capabilities?.reasoningEfforts || []),
+      ...(entry.capabilities?.reasoningEfforts || [])
+    ]);
+    const reasoningEfforts = REASONING_EFFORTS.filter((effort) => reasoningEffortSet.has(effort));
+    const proposedDefaultEffort = current?.capabilities?.defaultReasoningEffort || entry.capabilities?.defaultReasoningEffort || null;
     grouped.set(entry.publicModel, {
       id: entry.publicModel,
       contextWindow: current ? Math.min(current.contextWindow, contextWindow) : contextWindow,
@@ -37,6 +44,12 @@ function getPublishedModels(providerSlugs) {
         image: Boolean(current?.capabilities?.image || entry.capabilities?.image),
         tools: Boolean(current?.capabilities?.tools || entry.capabilities?.tools),
         reasoning: Boolean(current?.capabilities?.reasoning || entry.capabilities?.reasoning),
+        reasoningEfforts,
+        reasoningEffortsKnown: Boolean(current
+          ? current.capabilities?.reasoningEffortsKnown && entry.capabilities?.reasoningEffortsKnown
+          : entry.capabilities?.reasoningEffortsKnown),
+        defaultReasoningEffort: reasoningEfforts.includes(proposedDefaultEffort) ? proposedDefaultEffort : null,
+        chatTemplateKwargs: Boolean(current?.capabilities?.chatTemplateKwargs || entry.capabilities?.chatTemplateKwargs),
         parallelTools: Boolean(current?.capabilities?.parallelTools || entry.capabilities?.parallelTools)
       },
       priority: current?.priority || grouped.size + 1
@@ -75,6 +88,9 @@ router.get('/v1/model-capabilities', authStudent, studentRateLimit, (req, res) =
       id: model.id,
       context_window: model.contextWindow,
       max_output_tokens: model.outputLimit,
+      reasoning_efforts: model.capabilities.reasoningEfforts,
+      default_reasoning_effort: model.capabilities.defaultReasoningEffort,
+      supports_chat_template_kwargs: model.capabilities.chatTemplateKwargs,
       capabilities: {
         text: model.capabilities.text,
         image: model.capabilities.image,
@@ -130,7 +146,17 @@ router.post('/v1/chat/completions', authStudent, studentRateLimit, async (req, r
     providerSlug = provider.slug;
 
     if (wasStreaming) {
-      await streamResponse({ upstream, res, userId: user.id, model, providerSlug: provider.slug, estimatedInputTokens });
+      clearTimeout(timeout);
+      timeout = undefined;
+      await streamResponse({
+        upstream,
+        res,
+        userId: user.id,
+        model,
+        providerSlug: provider.slug,
+        estimatedInputTokens,
+        controller
+      });
       return;
     }
 
@@ -216,6 +242,8 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
     providerSlug = provider.slug;
 
     if (wasStreaming) {
+      clearTimeout(timeout);
+      timeout = undefined;
       await streamResponsesCompatibility({
         upstream,
         res,
@@ -223,7 +251,8 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
         model,
         providerSlug,
         estimatedInputTokens,
-        responsesPayload
+        responsesPayload,
+        controller
       });
       return;
     }
@@ -269,6 +298,17 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
 function writeResponseEvent(res, state, type, fields = {}) {
   const event = { type, sequence_number: state.sequence++, ...fields };
   res.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+}
+
+function createStreamInactivityTimer(controller) {
+  let timer;
+  const reset = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), config.streamInactivityTimeoutMs);
+  };
+  const clear = () => clearTimeout(timer);
+  reset();
+  return { clear, reset };
 }
 
 function startTextOutput(res, state) {
@@ -384,7 +424,7 @@ function finishResponseOutputs(res, state) {
   }
 }
 
-async function streamResponsesCompatibility({ upstream, res, userId, model, providerSlug, estimatedInputTokens, responsesPayload }) {
+async function streamResponsesCompatibility({ upstream, res, userId, model, providerSlug, estimatedInputTokens, responsesPayload, controller }) {
   res.status(upstream.status);
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -410,12 +450,14 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
 
   const decoder = new TextDecoder();
   const reader = upstream.body.getReader();
+  const inactivityTimer = createStreamInactivityTimer(controller);
   let buffer = '';
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      inactivityTimer.reset();
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split('\n\n');
       buffer = events.pop() || '';
@@ -523,10 +565,12 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
       errorMessage: error.message
     });
     res.end();
+  } finally {
+    inactivityTimer.clear();
   }
 }
 
-async function streamResponse({ upstream, res, userId, model, providerSlug, estimatedInputTokens }) {
+async function streamResponse({ upstream, res, userId, model, providerSlug, estimatedInputTokens, controller }) {
   res.status(upstream.status);
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -538,6 +582,7 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
 
   const decoder = new TextDecoder();
   const reader = upstream.body.getReader();
+  const inactivityTimer = createStreamInactivityTimer(controller);
   let buffer = '';
   let outputText = '';
   let usageFromStream = null;
@@ -546,6 +591,7 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      inactivityTimer.reset();
       const chunk = decoder.decode(value, { stream: true });
       res.write(chunk);
       buffer += chunk;
@@ -596,6 +642,8 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
     });
     res.write(`event: error\ndata: ${JSON.stringify({ error: { message: 'Streaming failed.', code: 'stream_error' } })}\n\n`);
     res.end();
+  } finally {
+    inactivityTimer.clear();
   }
 }
 

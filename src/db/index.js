@@ -38,6 +38,19 @@ function initSchema(database) {
       last_used_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS user_api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL COLLATE NOCASE,
+      api_key_hash TEXT NOT NULL,
+      api_key_lookup_hash TEXT NOT NULL UNIQUE,
+      api_key_prefix TEXT,
+      api_key_suffix TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_used_at TEXT,
+      UNIQUE(user_id, name)
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -105,6 +118,9 @@ function initSchema(database) {
       supports_image_input INTEGER NOT NULL DEFAULT 1,
       supports_tools INTEGER NOT NULL DEFAULT 1,
       supports_reasoning INTEGER NOT NULL DEFAULT 1,
+      reasoning_efforts TEXT,
+      default_reasoning_effort TEXT,
+      supports_chat_template_kwargs INTEGER NOT NULL DEFAULT 0,
       supports_parallel_tools INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -183,6 +199,9 @@ function migrateSchema(database) {
   addProviderModelColumn('supports_image_input', 'INTEGER NOT NULL DEFAULT 1');
   addProviderModelColumn('supports_tools', 'INTEGER NOT NULL DEFAULT 1');
   addProviderModelColumn('supports_reasoning', 'INTEGER NOT NULL DEFAULT 1');
+  addProviderModelColumn('reasoning_efforts', 'TEXT');
+  addProviderModelColumn('default_reasoning_effort', 'TEXT');
+  addProviderModelColumn('supports_chat_template_kwargs', 'INTEGER NOT NULL DEFAULT 0');
   addProviderModelColumn('supports_parallel_tools', 'INTEGER NOT NULL DEFAULT 1');
   for (const name of ['input_eur_per_1m', 'output_eur_per_1m']) {
     if (providerModelColumns.includes(name)) database.exec(`ALTER TABLE provider_models DROP COLUMN ${name}`);
@@ -211,6 +230,19 @@ function migrateSchema(database) {
   `);
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_user_groups_one_group ON user_groups(user_id)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_users_api_key_lookup_hash ON users(api_key_lookup_hash)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_user_api_keys_user_id ON user_api_keys(user_id)');
+
+  database.exec(`
+    INSERT OR IGNORE INTO user_api_keys
+      (user_id, name, api_key_hash, api_key_lookup_hash, api_key_prefix, api_key_suffix, created_at, last_used_at)
+    SELECT id, 'Default', api_key_hash, api_key_lookup_hash, api_key_prefix, api_key_suffix, created_at, last_used_at
+    FROM users
+    WHERE api_key_hash IS NOT NULL
+      AND api_key_lookup_hash IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_api_keys WHERE user_api_keys.user_id = users.id
+      )
+  `);
 
   const groupProviderColumns = database.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
   const legacyProviderPoolColumn = ['wei', 'ght'].join('');
@@ -265,15 +297,6 @@ function migrateSchema(database) {
       AND base_url LIKE 'https://api.deepseek.com%'
       AND EXISTS (SELECT 1 FROM providers WHERE slug = 'deepseek' AND enabled = 1)
   `).run();
-
-  database.exec(`
-    DELETE FROM provider_models
-    WHERE id NOT IN (
-      SELECT MAX(id)
-      FROM provider_models
-      GROUP BY provider_id
-    )
-  `);
 }
 
 function seedSettings(database) {

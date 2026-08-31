@@ -41,5 +41,6 @@ module.exports = {
   allowVideoInput: boolEnv('ALLOW_VIDEO_INPUT', false),
   enableStreaming: boolEnv('ENABLE_STREAMING', true),
   logRequestBody: boolEnv('LOG_REQUEST_BODY', false),
-  requestTimeoutMs: numberEnv('REQUEST_TIMEOUT_MS', 120000)
+  requestTimeoutMs: numberEnv('REQUEST_TIMEOUT_MS', 120000),
+  streamInactivityTimeoutMs: numberEnv('STREAM_INACTIVITY_TIMEOUT_MS', 600000)
 };

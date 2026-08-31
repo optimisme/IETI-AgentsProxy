@@ -128,7 +128,12 @@ ALLOW_VIDEO_INPUT=false
 ENABLE_STREAMING=true
 LOG_REQUEST_BODY=false
 REQUEST_TIMEOUT_MS=120000
+STREAM_INACTIVITY_TIMEOUT_MS=600000
 ```
+
+`REQUEST_TIMEOUT_MS` limits the upstream connection and non-streaming request. Once a streaming response starts, `STREAM_INACTIVITY_TIMEOUT_MS` is reset whenever an upstream chunk arrives, so an active agent run is not aborted merely because its total duration exceeds the request timeout.
+
+From the provider edit page, **Autoconfigure** queries the standard OpenAI-compatible `/v1/models` catalog. It imports the selected upstream model ID and, when published by servers such as vLLM, `max_model_len`. Provider-specific capabilities, output limits, and runtime flags remain explicit administrator settings because the OpenAI-compatible model catalog does not standardize them.
 
 Inicialitza la base de dades:
 
@@ -181,10 +186,27 @@ Valors principals:
 
 ## Us amb OpenCode
 
-Cada usuari pot descarregar `run_opencode.sh` o `run_opencode.ps1` des del portal. El llançador genera o actualitza l'`opencode.json` local i fa servir una variable d'entorn per no escriure la clau dins del fitxer:
+Cada usuari pot executar des del portal la comanda del seu sistema operatiu. La comanda descarrega `set_agents_opencode.sh` o `set_agents_opencode.ps1` des del mateix servidor i executa l'script en el directori actual. L'script:
+
+- detecta automaticament el domini i port publicats pel portal i els utilitza com a URL per defecte;
+- reutilitza la URL de `provider.ieti-agents.options.baseURL` si ja existeix a `opencode.json` i nomes la demana si no la pot trobar;
+- demana la clau API nomes la primera vegada, si no existeix `.secrets/agents_server_key`;
+- crea `.secrets/agents_server_key` amb permisos restrictius i reutilitza la clau existent en execucions posteriors, sense tornar-la a demanar;
+- consulta `GET /v1/model-capabilities` amb la clau autenticada per obtenir els models i les seves capacitats;
+- genera o actualitza automaticament el proveidor `ieti-agents` i els models visibles a l'`opencode.json` local;
+- valida la connexio abans de modificar la configuracio i no desa la clau en cap variable d'entorn;
+- no inicia ni obre OpenCode.
+
+El portal mostra una comanda copiable per a cada sistema operatiu. A macOS/Linux té aquesta forma:
 
 ```bash
-export PROXY_AGENTS_KEY="ieti_sk_..."
+bash -c "$(curl -fsSL 'https://your-public-domain.example/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fyour-public-domain.example%2Fv1')"
+```
+
+El valor de `default_base_url` s'injecta automaticament en generar la comanda. També es pot indicar manualment per a una execució no interactiva:
+
+```bash
+PROXY_AGENTS_BASE_URL=https://agents.ieti.site/v1 ./set_agents_opencode.sh
 ```
 
 Exemple de configuracio generada:
@@ -198,7 +220,7 @@ Exemple de configuracio generada:
       "name": "IETI Agents",
       "options": {
         "baseURL": "https://your-public-domain.example/v1",
-        "apiKey": "{env:PROXY_AGENTS_KEY}",
+        "apiKey": "{file:.secrets/agents_server_key}",
         "timeout": 900000,
         "chunkTimeout": 600000
       },
@@ -222,17 +244,38 @@ Exemple de configuracio generada:
 }
 ```
 
-`GET /v1/model-capabilities` publica, amb autenticacio Bearer, el cataleg dinamic de models virtuals assignat a l'usuari. El contracte IETI inclou `schema_version`, limits de context i sortida, modalitats, eines i raonament; es manté separat de l'endpoint OpenAI estandard `GET /v1/models`. Si encara no existeix `run_opencode_settings.env`, `run_opencode.sh` demana primer la URL base IETI i després la clau, valida la connexio i nomes llavors desa totes dues amb permisos `600`. L'script combina les capacitats IETI amb el cataleg oficial de Models.dev a `.opencode/ieti-models.json` i arrenca OpenCode amb `OPENCODE_MODELS_PATH`. L'`opencode.json` conserva els altres proveidors i nomes rep la configuracio de connexio d'`ieti-agents`; les capacitats no s'hi dupliquen. Amb `./run_opencode.sh --sync-only` es pot actualitzar la configuracio i el cataleg sense arrencar el client.
+`GET /v1/model-capabilities` publica, amb autenticacio Bearer, el cataleg dinamic de models virtuals assignat a l'usuari. El contracte IETI inclou `schema_version`, limits de context i sortida, modalitats, eines i raonament; es manté separat de l'endpoint OpenAI estandard `GET /v1/models`. Cada model pot publicar també `reasoning_efforts`, `default_reasoning_effort` i `supports_chat_template_kwargs`.
 
-A Windows, `run_opencode.ps1` ofereix el mateix flux des de PowerShell i comparteix `run_opencode_settings.env`, `opencode.json` i el cataleg generat amb la versio Bash:
+Els nivells de raonament es configuren per mapping des de l'administracio. Si no se'n selecciona cap, el client no envia `reasoning_effort` i es conserva el comportament per defecte del proveidor. Si el model no admet raonament, OpenCode no mostra variants. Si n'admet, el llançador crea variants nomes per als nivells publicats i desactiva explicitament els nivells generics no compatibles.
 
-```powershell
-.\run_opencode.ps1
-.\run_opencode.ps1 desktop
-.\run_opencode.ps1 --sync-only
+El proxy accepta `reasoning_effort` a Chat Completions i `reasoning.effort` a Responses. Per als servidors vLLM que ho necessitin es pot habilitar el pas restringit de `chat_template_kwargs`; nomes s'accepten `enable_thinking`, `preserve_thinking` i `reasoning_effort`. Un nivell o override no declarat pel mapping es rebutja abans de contactar el proveidor.
+
+L'script substitueix exclusivament els models de `provider.ieti-agents` pels models disponibles per a aquella clau. Conserva la resta de l'`opencode.json`, inclosos altres proveidors, MCPs, plugins, permisos i opcions personalitzades. Sempre acaba despres d'actualitzar la configuracio; per iniciar OpenCode, executa'l per separat.
+
+```bash
+./set_agents_opencode.sh
 ```
 
-Les dues versions exporten també les altres variables definides a `run_opencode_settings.env`, com ara `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`, perquè OpenCode les pugui utilitzar amb els proveidors corresponents. El llançador nomes exigeix i valida `PROXY_AGENTS_BASE_URL` i `PROXY_AGENTS_KEY`.
+El portal mostra una comanda per a cada sistema operatiu. La comanda descarrega l'script des del domini i port publics de la peticio —o des de `PUBLIC_BASE_URL`— i inclou automaticament la URL de l'API com a valor per defecte. L'usuari encara pot substituir-la quan l'executa.
+
+A Windows, `set_agents_opencode.ps1` ofereix el mateix flux des de PowerShell i comparteix `.secrets/agents_server_key` i `opencode.json` amb la versio Bash. Encara que el fitxer `.ps1` es descarregui temporalment a `%TEMP%`, les dades es llegeixen i s'escriuen en el directori actual; per tant, una clau existent es reutilitza correctament:
+
+```powershell
+.\set_agents_opencode.ps1
+```
+
+Les dues versions nomes configuren el proveidor `ieti-agents`; no obren ni executen el binari d'OpenCode.
+
+### BuildLite
+
+El portal també ofereix una comanda separada per instal·lar el BuildLite harness. La comanda descarrega `buildlite_harness.zip` a la carpeta actual, extreu el seu contingut directament a l'arrel del projecte —mantenint `.agents/` i `AGENTS.md` fora d'una carpeta contenidora— i crea l'enllaç que necessita OpenCode:
+
+- macOS/Linux: enllaç simbòlic `.opencode -> .agents`;
+- Windows: junction de directoris amb `mklink /J .opencode .agents`.
+
+Els scripts són `set_harness_buildlite.sh` i `set_harness_buildlite.ps1`. El portal mostra la comanda corresponent per a cada sistema operatiu.
+
+Cada usuari pot tenir diverses claus API actives. Des de `Settings`, **Add API key** obre el popup de creacio, on l'usuari copia la clau i defineix un nom unic per al seu compte. El boto **Add key** nomes s'activa quan el nom no esta buit i no existeix encara, sense distingir majuscules i minuscules. Les claus es mostren emmascarades a la llista i es poden eliminar individualment; tant l'alta com la baixa tornen a `Settings` i el popup de la clau nova no apareix al dashboard.
 
 ## Us amb Codex
 
@@ -257,7 +300,7 @@ args = ["PROXY_AGENTS_KEY"]
 refresh_interval_ms = 0
 ```
 
-La clau es proporciona amb la mateixa variable d'entorn usada per OpenCode:
+La clau de Codex es proporciona amb una variable d'entorn del sistema:
 
 ```bash
 export PROXY_AGENTS_KEY="ieti_sk_..."
@@ -341,7 +384,6 @@ Serveis destacats:
 El projecte inclou un `.gitignore` per evitar publicar dades locals. No s'han de versionar:
 
 - `settings.env`
-- `run_opencode_settings.env`
 - `data/`
 - `node_modules/`
 - `proxmox/`

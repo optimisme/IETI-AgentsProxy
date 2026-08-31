@@ -1,6 +1,13 @@
 const config = require('../config');
 const { getDb } = require('../db');
 const { apiError } = require('../utils/errors');
+const {
+  CHAT_TEMPLATE_KWARG_NAMES,
+  CHAT_TEMPLATE_KWARG_SET,
+  REASONING_EFFORTS,
+  normalizeReasoningEffort,
+  parseReasoningEfforts
+} = require('../utils/reasoning');
 
 const COMPATIBLE_FIELDS = [
   'model',
@@ -16,16 +23,96 @@ const COMPATIBLE_FIELDS = [
   'presence_penalty',
   'frequency_penalty',
   'reasoning_content',
+  'reasoning_effort',
+  'chat_template_kwargs',
   'response_format',
   'stop'
 ];
 
 const inFlightByProvider = new Map();
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateReasoningControls(payload = {}) {
+  const hasReasoningEffort = payload.reasoning_effort !== undefined && payload.reasoning_effort !== null;
+  const reasoningEffort = hasReasoningEffort ? normalizeReasoningEffort(payload.reasoning_effort) : null;
+  if (hasReasoningEffort && !reasoningEffort) {
+    throw apiError(
+      400,
+      'invalid_reasoning_effort',
+      `reasoning_effort must be one of: ${REASONING_EFFORTS.join(', ')}.`
+    );
+  }
+
+  const hasChatTemplateKwargs = payload.chat_template_kwargs !== undefined && payload.chat_template_kwargs !== null;
+  let chatTemplateKwargs = null;
+  if (hasChatTemplateKwargs) {
+    if (!isPlainObject(payload.chat_template_kwargs)) {
+      throw apiError(400, 'invalid_chat_template_kwargs', 'chat_template_kwargs must be an object.');
+    }
+    const unknown = Object.keys(payload.chat_template_kwargs)
+      .filter((name) => !CHAT_TEMPLATE_KWARG_SET.has(name));
+    if (unknown.length) {
+      throw apiError(
+        400,
+        'invalid_chat_template_kwargs',
+        `Unsupported chat_template_kwargs: ${unknown.join(', ')}. Allowed fields: ${CHAT_TEMPLATE_KWARG_NAMES.join(', ')}.`
+      );
+    }
+    chatTemplateKwargs = {};
+    for (const name of ['enable_thinking', 'preserve_thinking']) {
+      if (payload.chat_template_kwargs[name] === undefined) continue;
+      if (typeof payload.chat_template_kwargs[name] !== 'boolean') {
+        throw apiError(400, 'invalid_chat_template_kwargs', `${name} must be a boolean.`);
+      }
+      chatTemplateKwargs[name] = payload.chat_template_kwargs[name];
+    }
+    if (payload.chat_template_kwargs.reasoning_effort !== undefined) {
+      const nestedEffort = normalizeReasoningEffort(payload.chat_template_kwargs.reasoning_effort);
+      if (!nestedEffort) {
+        throw apiError(
+          400,
+          'invalid_reasoning_effort',
+          `chat_template_kwargs.reasoning_effort must be one of: ${REASONING_EFFORTS.join(', ')}.`
+        );
+      }
+      if (reasoningEffort && nestedEffort !== reasoningEffort) {
+        throw apiError(400, 'conflicting_reasoning_effort', 'reasoning_effort and chat_template_kwargs.reasoning_effort must match.');
+      }
+      chatTemplateKwargs.reasoning_effort = nestedEffort;
+    }
+  }
+
+  const effectiveEffort = reasoningEffort || chatTemplateKwargs?.reasoning_effort || null;
+  if (effectiveEffort && effectiveEffort !== 'none' && chatTemplateKwargs?.enable_thinking === false) {
+    throw apiError(400, 'conflicting_reasoning_controls', 'enable_thinking=false cannot be combined with an active reasoning_effort.');
+  }
+  if (effectiveEffort === 'none' && chatTemplateKwargs?.enable_thinking === true) {
+    throw apiError(400, 'conflicting_reasoning_controls', 'reasoning_effort=none cannot be combined with enable_thinking=true.');
+  }
+
+  return {
+    reasoningEffort: effectiveEffort,
+    chatTemplateKwargs,
+    hasChatTemplateKwargs,
+    reasoningRequested: Boolean(effectiveEffort || chatTemplateKwargs?.enable_thinking === true)
+  };
+}
+
 function buildPayload(payload, upstreamModel) {
+  const reasoning = validateReasoningControls(payload);
   const next = {};
   for (const field of COMPATIBLE_FIELDS) {
-    if (payload[field] !== undefined) next[field] = payload[field];
+    if (payload[field] === undefined || payload[field] === null) continue;
+    if (field === 'chat_template_kwargs') {
+      next[field] = reasoning.chatTemplateKwargs;
+    } else if (field === 'reasoning_effort') {
+      next[field] = normalizeReasoningEffort(payload[field]);
+    } else {
+      next[field] = payload[field];
+    }
   }
   next.model = upstreamModel;
   return next;
@@ -34,6 +121,16 @@ function buildPayload(payload, upstreamModel) {
 function chatCompletionsUrl(baseUrl) {
   const clean = String(baseUrl || '').replace(/\/+$/, '');
   return clean.endsWith('/v1') ? `${clean}/chat/completions` : `${clean}/v1/chat/completions`;
+}
+
+function modelsUrl(baseUrl) {
+  const clean = String(baseUrl || '').replace(/\/+$/, '');
+  return clean.endsWith('/v1') ? `${clean}/models` : `${clean}/v1/models`;
+}
+
+function providerRootUrl(baseUrl) {
+  const clean = String(baseUrl || '').replace(/\/+$/, '');
+  return clean.endsWith('/v1') ? clean.slice(0, -3) : clean;
 }
 
 function getProviderBySlug(slug) {
@@ -60,13 +157,15 @@ function getEnabledModelEntries() {
       provider_models.supports_image_input,
       provider_models.supports_tools,
       provider_models.supports_reasoning,
+      provider_models.reasoning_efforts,
+      provider_models.default_reasoning_effort,
+      provider_models.supports_chat_template_kwargs,
       provider_models.supports_parallel_tools,
       providers.priority
     FROM providers
     JOIN provider_models ON providers.id = provider_models.provider_id
     WHERE providers.enabled = 1 AND provider_models.enabled = 1
-    GROUP BY providers.id
-    ORDER BY providers.priority DESC, providers.name ASC
+    ORDER BY providers.priority DESC, providers.name ASC, provider_models.id ASC
   `).all();
   return rows.map((row) => ({
       id: row.slug,
@@ -81,6 +180,10 @@ function getEnabledModelEntries() {
         image: Boolean(row.supports_image_input),
         tools: Boolean(row.supports_tools),
         reasoning: Boolean(row.supports_reasoning),
+        reasoningEfforts: parseReasoningEfforts(row.reasoning_efforts) || [],
+        reasoningEffortsKnown: row.reasoning_efforts !== null,
+        defaultReasoningEffort: normalizeReasoningEffort(row.default_reasoning_effort),
+        chatTemplateKwargs: Boolean(row.supports_chat_template_kwargs),
         parallelTools: Boolean(row.supports_parallel_tools)
       }
   }));
@@ -152,6 +255,9 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
       provider_models.supports_image_input,
       provider_models.supports_tools,
       provider_models.supports_reasoning,
+      provider_models.reasoning_efforts,
+      provider_models.default_reasoning_effort,
+      provider_models.supports_chat_template_kwargs,
       provider_models.supports_parallel_tools
     FROM provider_models
     JOIN providers ON providers.id = provider_models.provider_id
@@ -170,12 +276,32 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
     if (requiredCapabilities.image && !provider.supports_image_input) return false;
     if (requiredCapabilities.tools && !provider.supports_tools) return false;
     if (requiredCapabilities.reasoning && !provider.supports_reasoning) return false;
+    if (requiredCapabilities.reasoningEffort) {
+      if (!provider.supports_reasoning) return false;
+      const supportedEfforts = parseReasoningEfforts(provider.reasoning_efforts);
+      if (supportedEfforts !== null && !supportedEfforts.includes(requiredCapabilities.reasoningEffort)) return false;
+    }
+    if (requiredCapabilities.chatTemplateKwargs && !provider.supports_chat_template_kwargs) return false;
     if (requiredCapabilities.parallelTools && !provider.supports_parallel_tools) return false;
     return true;
   });
   if (!capableCandidates.length) {
+    if (requiredCapabilities.reasoningEffort) {
+      throw apiError(
+        400,
+        'reasoning_effort_not_supported',
+        `Model ${publicModelAlias} does not support reasoning_effort=${requiredCapabilities.reasoningEffort} in the assigned provider pool.`
+      );
+    }
+    if (requiredCapabilities.chatTemplateKwargs) {
+      throw apiError(
+        400,
+        'chat_template_kwargs_not_supported',
+        `Model ${publicModelAlias} does not support chat_template_kwargs in the assigned provider pool.`
+      );
+    }
     const missing = Object.entries(requiredCapabilities)
-      .filter(([, required]) => required)
+      .filter(([capability, required]) => required && !['reasoningEffort', 'chatTemplateKwargs'].includes(capability))
       .map(([capability]) => capability)
       .join(', ');
     throw apiError(400, 'model_capability_unavailable', `Model ${publicModelAlias} has no assigned provider supporting: ${missing}.`);
@@ -195,6 +321,7 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
 }
 
 function inferRequiredCapabilities(payload) {
+  const reasoning = validateReasoningControls(payload);
   const contentParts = (payload.messages || []).flatMap((message) => Array.isArray(message?.content) ? message.content : []);
   const hasImages = contentParts.some((part) => part?.type === 'image_url' || part?.type === 'input_image');
   const hasTools = Array.isArray(payload.tools) && payload.tools.length > 0 && payload.tool_choice !== 'none';
@@ -203,15 +330,23 @@ function inferRequiredCapabilities(payload) {
     image: hasImages,
     tools: hasTools,
     parallelTools: Boolean(hasTools && payload.parallel_tool_calls),
-    reasoning: false
+    reasoning: reasoning.reasoningRequested,
+    reasoningEffort: reasoning.reasoningEffort,
+    chatTemplateKwargs: reasoning.hasChatTemplateKwargs
   };
 }
 
 async function callChatCompletions(payload, { signal, providerSlug = null, providerSlugs = null, requiredCapabilities = {} } = {}) {
   const inferred = inferRequiredCapabilities(payload);
-  const requirements = Object.fromEntries(
-    Object.keys(inferred).map((key) => [key, Boolean(inferred[key] || requiredCapabilities[key])])
-  );
+  const requirements = {
+    text: Boolean(inferred.text || requiredCapabilities.text),
+    image: Boolean(inferred.image || requiredCapabilities.image),
+    tools: Boolean(inferred.tools || requiredCapabilities.tools),
+    parallelTools: Boolean(inferred.parallelTools || requiredCapabilities.parallelTools),
+    reasoning: Boolean(inferred.reasoning || requiredCapabilities.reasoning),
+    reasoningEffort: requiredCapabilities.reasoningEffort || inferred.reasoningEffort || null,
+    chatTemplateKwargs: Boolean(inferred.chatTemplateKwargs || requiredCapabilities.chatTemplateKwargs)
+  };
   const provider = chooseProviderModel(payload.model, providerSlugs || providerSlug, requirements);
   if (!provider.base_url) {
     throw apiError(503, 'provider_misconfigured', `Provider ${provider.slug} has no base URL.`);
@@ -324,17 +459,125 @@ async function testProvider({ slug, apiKey, baseUrl, model }) {
   };
 }
 
+async function discoverProviderMetadata({ slug, apiKey, baseUrl }) {
+  const provider = slug ? getProviderBySlug(slug) : null;
+  const targetBaseUrl = String(baseUrl || provider?.base_url || '').replace(/\/+$/, '');
+  const targetApiKey = apiKey || provider?.api_key || '';
+  const timeoutMs = Math.min(Math.max(Number(provider?.timeout_ms || config.requestTimeoutMs), 1000), 30000);
+
+  if (!targetBaseUrl) {
+    return { ok: false, status: 0, errorMessage: 'Base URL is missing.', models: [], warnings: [] };
+  }
+
+  const requestJson = async (url) => {
+    const response = await fetch(url, {
+      headers: targetApiKey ? { Authorization: `Bearer ${targetApiKey}` } : {},
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const text = await response.text();
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+    return { response, body, text };
+  };
+
+  let modelResponse;
+  try {
+    modelResponse = await requestJson(modelsUrl(targetBaseUrl));
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      errorMessage: `Could not query the upstream model catalog: ${error.message}`,
+      models: [],
+      warnings: []
+    };
+  }
+
+  if (!modelResponse.response.ok) {
+    const upstreamMessage = modelResponse.body?.error?.message || modelResponse.body?.message || modelResponse.body?.detail;
+    return {
+      ok: false,
+      status: modelResponse.response.status,
+      errorMessage: upstreamMessage || 'The upstream provider does not expose a compatible model catalog.',
+      models: [],
+      warnings: []
+    };
+  }
+
+  if (!Array.isArray(modelResponse.body?.data)) {
+    return {
+      ok: false,
+      status: modelResponse.response.status,
+      errorMessage: 'The upstream /models response does not contain a model list.',
+      models: [],
+      warnings: []
+    };
+  }
+
+  const models = modelResponse.body.data.map((model) => {
+    const maxModelLen = Number(model?.max_model_len);
+    return {
+      id: String(model?.id || '').trim(),
+      ownedBy: String(model?.owned_by || '').trim() || null,
+      root: String(model?.root || '').trim() || null,
+      maxModelLen: Number.isFinite(maxModelLen) && maxModelLen > 0 ? maxModelLen : null
+    };
+  }).filter((model) => model.id);
+
+  if (!models.length) {
+    return {
+      ok: false,
+      status: modelResponse.response.status,
+      errorMessage: 'The upstream provider returned no usable models.',
+      models: [],
+      warnings: []
+    };
+  }
+
+  const isVllm = models.some((model) => model.ownedBy?.toLowerCase() === 'vllm');
+  const warnings = [];
+  let version = null;
+  if (isVllm) {
+    try {
+      const versionResponse = await requestJson(`${providerRootUrl(targetBaseUrl)}/version`);
+      if (versionResponse.response.ok) {
+        version = String(versionResponse.body?.version || '').trim() || null;
+      } else if (versionResponse.response.status !== 404) {
+        warnings.push(`The optional version endpoint returned HTTP ${versionResponse.response.status}.`);
+      }
+    } catch (error) {
+      warnings.push(`The optional version endpoint could not be queried: ${error.message}`);
+    }
+  }
+
+  return {
+    ok: true,
+    status: modelResponse.response.status,
+    providerType: isVllm ? 'vllm' : 'openai-compatible',
+    version,
+    models,
+    warnings
+  };
+}
+
 module.exports = {
   buildPayload,
   callChatCompletions,
   chatCompletionsUrl,
   chooseProviderModel,
+  discoverProviderMetadata,
   getEnabledModelEntries,
   getPublicModelAliasesForProviderSlugs,
   getInFlight,
   getProviderBySlug,
   inferRequiredCapabilities,
   listProviders,
+  modelsUrl,
+  providerRootUrl,
   reserveProviderForTest,
   testProvider
 };

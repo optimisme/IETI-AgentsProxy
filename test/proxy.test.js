@@ -13,16 +13,58 @@ let db;
 let keyService;
 let studentAuthService;
 let createApp;
+let lastChatPayload;
 
 test.before(async () => {
   mockServer = http.createServer((req, res) => {
+    if (req.url === '/v1/models' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        object: 'list',
+        data: [{
+          id: 'active-model',
+          object: 'model',
+          owned_by: 'vllm',
+          root: 'test/model-root',
+          max_model_len: 65536
+        }]
+      }));
+      return;
+    }
+    if (req.url === '/version' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ version: 'test-vllm-version' }));
+      return;
+    }
+    if (req.url === '/official/v1/models' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        object: 'list',
+        data: [
+          { id: 'official-model-a', object: 'model', owned_by: 'official' },
+          { id: 'official-model-b', object: 'model', owned_by: 'official' }
+        ]
+      }));
+      return;
+    }
     if (req.url === '/v1/chat/completions' && req.method === 'POST') {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
         const payload = JSON.parse(body || '{}');
+        lastChatPayload = payload;
         if (payload.stream) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (payload.messages?.[0]?.content === 'Stream beyond the request timeout.') {
+            res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"}}]}\n\n');
+            setTimeout(() => {
+              res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"content":"STILL"}}]}\n\n');
+            }, 150);
+            setTimeout(() => {
+              res.end('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"content":" OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+            }, 300);
+            return;
+          }
           if (payload.stream_options?.include_usage) {
             res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"reasoning":"Checked the request."}}]}\n\n');
           }
@@ -153,6 +195,9 @@ test('valid user can publish current model capabilities for client configuration
     reasoning: true,
     parallel_tools: true
   });
+  assert.deepEqual(res.body.data[0].reasoning_efforts, []);
+  assert.equal(res.body.data[0].default_reasoning_effort, null);
+  assert.equal(res.body.data[0].supports_chat_template_kwargs, false);
   assert.deepEqual(res.body.data[0].modalities, { input: ['text', 'image'], output: ['text'] });
 });
 
@@ -307,6 +352,7 @@ test('responses api converts Codex function tools and prior tool output', () => 
     }],
     tool_choice: 'auto',
     parallel_tool_calls: false,
+    reasoning: { effort: 'xhigh' },
     stream: true
   });
 
@@ -316,7 +362,133 @@ test('responses api converts Codex function tools and prior tool output', () => 
   assert.equal(payload.messages[2].tool_call_id, 'call_123');
   assert.equal(payload.tools[0].function.name, 'exec_command');
   assert.equal(payload.parallel_tool_calls, false);
+  assert.equal(payload.reasoning_effort, 'xhigh');
   assert.deepEqual(payload.stream_options, { include_usage: true });
+});
+
+test('configured reasoning levels are advertised, validated, and forwarded unchanged', async () => {
+  const provider = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
+  const original = db.prepare(`
+    SELECT reasoning_efforts, default_reasoning_effort, supports_chat_template_kwargs
+    FROM provider_models
+    WHERE provider_id = ?
+  `).get(provider.id);
+  db.prepare(`
+    UPDATE provider_models
+    SET reasoning_efforts = ?, default_reasoning_effort = ?, supports_chat_template_kwargs = 1
+    WHERE provider_id = ?
+  `).run(JSON.stringify(['low', 'medium', 'xhigh']), 'low', provider.id);
+
+  try {
+    const student = createStudent();
+    const capabilities = await request(app)
+      .get('/v1/model-capabilities')
+      .set('Authorization', `Bearer ${student.key}`)
+      .expect(200);
+    assert.deepEqual(capabilities.body.data[0].reasoning_efforts, ['low', 'medium', 'xhigh']);
+    assert.equal(capabilities.body.data[0].default_reasoning_effort, 'low');
+    assert.equal(capabilities.body.data[0].supports_chat_template_kwargs, true);
+
+    const portal = request.agent(app);
+    await portal.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+    const openCodeConfig = await portal.get('/portal/opencode.json').expect(200);
+    const openCodeModel = openCodeConfig.body.provider['ieti-agents'].models['active-model'];
+    assert.equal(openCodeModel.options.reasoningEffort, 'low');
+    assert.deepEqual(openCodeModel.variants.low, { reasoningEffort: 'low' });
+    assert.deepEqual(openCodeModel.variants.xhigh, { reasoningEffort: 'xhigh' });
+    assert.deepEqual(openCodeModel.variants.high, { disabled: true });
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        messages: [{ role: 'user', content: 'Think carefully.' }],
+        reasoning_effort: 'xhigh',
+        chat_template_kwargs: { enable_thinking: true, preserve_thinking: true }
+      })
+      .expect(200);
+    assert.equal(lastChatPayload.reasoning_effort, 'xhigh');
+    assert.deepEqual(lastChatPayload.chat_template_kwargs, {
+      enable_thinking: true,
+      preserve_thinking: true
+    });
+    assert.equal(lastChatPayload.model, 'deepseek-chat');
+
+    const unsupported = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        messages: [{ role: 'user', content: 'Use maximum effort.' }],
+        reasoning_effort: 'max'
+      })
+      .expect(400);
+    assert.equal(unsupported.body.error.code, 'reasoning_effort_not_supported');
+
+    const unsafeKwarg = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        messages: [{ role: 'user', content: 'Override the template.' }],
+        chat_template_kwargs: { arbitrary_template_option: true }
+      })
+      .expect(400);
+    assert.equal(unsafeKwarg.body.error.code, 'invalid_chat_template_kwargs');
+  } finally {
+    db.prepare(`
+      UPDATE provider_models
+      SET reasoning_efforts = ?, default_reasoning_effort = ?, supports_chat_template_kwargs = ?
+      WHERE provider_id = ?
+    `).run(
+      original.reasoning_efforts,
+      original.default_reasoning_effort,
+      original.supports_chat_template_kwargs,
+      provider.id
+    );
+  }
+});
+
+test('a reasoning model with no selectable levels preserves provider defaults', async () => {
+  const provider = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
+  const original = db.prepare(`
+    SELECT reasoning_efforts, default_reasoning_effort
+    FROM provider_models
+    WHERE provider_id = ?
+  `).get(provider.id);
+  db.prepare(`
+    UPDATE provider_models
+    SET reasoning_efforts = '[]', default_reasoning_effort = NULL
+    WHERE provider_id = ?
+  `).run(provider.id);
+
+  try {
+    const student = createStudent();
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({ model: 'active-model', messages: [{ role: 'user', content: 'Use the provider default.' }] })
+      .expect(200);
+    assert.equal(lastChatPayload.reasoning_effort, undefined);
+
+    const unsupported = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        messages: [{ role: 'user', content: 'Try low.' }],
+        reasoning_effort: 'low'
+      })
+      .expect(400);
+    assert.equal(unsupported.body.error.code, 'reasoning_effort_not_supported');
+  } finally {
+    db.prepare(`
+      UPDATE provider_models
+      SET reasoning_efforts = ?, default_reasoning_effort = ?
+      WHERE provider_id = ?
+    `).run(original.reasoning_efforts, original.default_reasoning_effort, provider.id);
+  }
 });
 
 test('responses api preserves raw upstream reasoning in non-streaming output', () => {
@@ -601,6 +773,10 @@ test('database startup preserves configured provider pools, aliases, limits, and
     SET context_limit = 32768
     WHERE provider_id = ?
   `).run(activeProvider.lastInsertRowid);
+  database.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 8192, 2048)
+  `).run(activeProvider.lastInsertRowid, 'custom-secondary-alias', 'custom-secondary-upstream', 'Custom Secondary Model');
   const updateSetting = database.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?');
   updateSetting.run('16384', 'default_model_context_limit');
   updateSetting.run('8192', 'default_model_output_limit');
@@ -631,6 +807,10 @@ test('database startup preserves configured provider pools, aliases, limits, and
   const model = database.prepare('SELECT public_model, context_limit FROM provider_models WHERE provider_id = ?').get(activeProvider.lastInsertRowid);
   assert.equal(model.public_model, 'custom-public-alias');
   assert.equal(model.context_limit, 32768);
+  assert.deepEqual(
+    database.prepare('SELECT public_model FROM provider_models WHERE provider_id = ? ORDER BY id').all(activeProvider.lastInsertRowid).map((row) => row.public_model),
+    ['custom-public-alias', 'custom-secondary-alias']
+  );
   const settings = Object.fromEntries(database.prepare(`
     SELECT key, value
     FROM settings
@@ -706,9 +886,9 @@ test('admin user edit page separates management and stats', async () => {
     .expect(200)
     .expect(/<h2>Invitation key<\/h2>/)
     .expect(/Generate invitation key/)
-    .expect(/<h2>API key<\/h2>/)
-    .expect(/Regenerate API key/)
-    .expect(/Revoke API key/)
+    .expect(/<h2>API keys<\/h2>/)
+    .expect(/Add API key/)
+    .expect(/Revoke all keys/)
     .expect(/<h2>Stats<\/h2>/)
     .expect(/Calls today/)
     .expect(/Calls this hour/)
@@ -814,6 +994,9 @@ test('admin groups do not expose description and usage section is removed', asyn
   assert.doesNotMatch(usageColumns.join(','), /estimated_cost_eur/);
   const providerModelColumns = db.prepare('PRAGMA table_info(provider_models)').all().map((column) => column.name);
   assert.doesNotMatch(providerModelColumns.join(','), /input_eur_per_1m|output_eur_per_1m/);
+  assert.equal(providerModelColumns.includes('reasoning_efforts'), true);
+  assert.equal(providerModelColumns.includes('default_reasoning_effort'), true);
+  assert.equal(providerModelColumns.includes('supports_chat_template_kwargs'), true);
   const groupProviderColumns = db.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
   assert.equal(groupProviderColumns.includes(['wei', 'ght'].join('')), false);
   const legacyAccessTables = db.prepare(`
@@ -911,6 +1094,11 @@ test('admin json endpoints return json auth errors', async () => {
     .set('Accept', 'application/json')
     .expect(401);
   assert.equal(res.body.error.code, 'admin_auth_required');
+  const autoconfigure = await request(app)
+    .post(`/admin/providers/${provider.id}/autoconfigure.json`)
+    .set('Accept', 'application/json')
+    .expect(401);
+  assert.equal(autoconfigure.body.error.code, 'admin_auth_required');
 });
 
 test('provider key can be tested', async () => {
@@ -933,7 +1121,11 @@ test('admin can see and delete provider api key', async () => {
   assert.match(list.text, /<th>Groups<\/th>/);
   assert.doesNotMatch(list.text, /<th>Models<\/th>/);
   assert.doesNotMatch(list.text, /In progress/);
-  await agent.get(`/admin/providers/${provider.id}`).expect(200).expect(/API key: configured/).expect(/Delete API key/);
+  const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200).expect(/API key: configured/).expect(/Delete API key/);
+  const apiKeyActions = edit.text.match(/<div class="actions">([\s\S]*?Save API key[\s\S]*?Delete API key[\s\S]*?)<\/div>/);
+  assert.ok(apiKeyActions, 'Save API key and Delete API key should share one actions row');
+  assert.match(apiKeyActions[1], new RegExp(`form="provider-api-key-save-${provider.id}"`));
+  assert.match(apiKeyActions[1], new RegExp(`form="provider-api-key-delete-${provider.id}"`));
   await agent.post(`/admin/providers/${provider.id}/clear-key`).expect(302);
 
   const updated = db.prepare('SELECT api_key FROM providers WHERE id = ?').get(provider.id);
@@ -958,6 +1150,47 @@ test('admin can update only provider api key', async () => {
   assert.equal(updated.base_url, provider.base_url);
   assert.equal(updated.slug, provider.slug);
   db.prepare('UPDATE providers SET api_key = ? WHERE id = ?').run(provider.api_key, provider.id);
+});
+
+test('admin deletes a provider through an explicit modal without deleting usage history', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const provider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
+    VALUES (?, ?, ?, ?, ?, 1)
+  `).run('delete-provider-test', 'Delete Provider Test', 'openai-compatible', mockBaseUrl, 'local');
+  db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 32000, 4096)
+  `).run(provider.lastInsertRowid, 'delete-provider-alias', 'delete-provider-upstream', 'Delete Provider Test');
+  const group = db.prepare(`
+    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, ?, NULL, NULL, NULL, NULL)
+  `).run(`Delete Provider Group ${Date.now()}`, provider.lastInsertRowid);
+  db.prepare(`
+    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
+    VALUES (?, ?, 1, 100)
+  `).run(group.lastInsertRowid, provider.lastInsertRowid);
+  db.prepare(`
+    INSERT INTO usage_logs (user_id, model, provider_slug, input_tokens, output_tokens, total_tokens, was_streaming, status)
+    VALUES (NULL, ?, ?, 1, 1, 2, 0, 'success')
+  `).run('delete-provider-alias', 'delete-provider-test');
+
+  const edit = await agent.get(`/admin/providers/${provider.lastInsertRowid}`).expect(200);
+  assert.match(edit.text, /data-open-modal="provider-delete-modal-/);
+  assert.match(edit.text, /<dialog[^>]+class="modal"/);
+  assert.match(edit.text, />Delete provider</);
+  assert.doesNotMatch(edit.text, /window\.confirm|\balert\s*\(/);
+
+  await agent.post(`/admin/providers/${provider.lastInsertRowid}/delete`)
+    .expect(302)
+    .expect('Location', '/admin/settings?deleted=1');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM providers WHERE id = ?').get(provider.lastInsertRowid).count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
+  assert.equal(db.prepare('SELECT provider_id FROM groups WHERE id = ?').get(group.lastInsertRowid).provider_id, null);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM usage_logs WHERE provider_slug = ?').get('delete-provider-test').count, 1);
+  await agent.get('/admin/settings?deleted=1').expect(200).expect(/Provider deleted/);
 });
 
 test('admin can edit provider slug and sees edit title', async () => {
@@ -1012,7 +1245,7 @@ test('admin can edit provider slug and sees edit title', async () => {
   `).run(originalModel.public_model, originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id);
 });
 
-test('provider active mapping can be saved and tested inline', async () => {
+test('provider active mapping can be saved and both provider tests return modal-ready results', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get('deepseek');
@@ -1022,26 +1255,152 @@ test('provider active mapping can be saved and tested inline', async () => {
     public_model: 'saved-alias',
     upstream_model: 'deepseek-chat',
     context_limit: '65536',
-    output_limit: '8192'
+    output_limit: '8192',
+    supports_reasoning: '1',
+    reasoning_efforts_present: '1',
+    reasoning_efforts: ['low', 'medium', 'xhigh'],
+    default_reasoning_effort: 'low',
+    supports_chat_template_kwargs: '1'
   }).expect(302);
 
   const models = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').all(provider.id);
   assert.equal(models.length, 1);
   assert.equal(models[0].public_model, 'saved-alias');
   assert.equal(models[0].upstream_model, 'deepseek-chat');
+  assert.deepEqual(JSON.parse(models[0].reasoning_efforts), ['low', 'medium', 'xhigh']);
+  assert.equal(models[0].default_reasoning_effort, 'low');
+  assert.equal(models[0].supports_chat_template_kwargs, 1);
 
   const providerTest = await agent.post(`/admin/providers/${provider.id}/test.json`).expect(200);
   assert.equal(providerTest.body.ok, true);
   assert.match(providerTest.body.message, /Server test request passed/);
+  assert.match(providerTest.body.detail, /Available models: active-model/);
 
   const mappingTest = await agent.post(`/admin/providers/${provider.id}/mapping/test.json`).expect(200);
   assert.equal(mappingTest.body.ok, true);
   assert.match(mappingTest.body.message, /Mapping test request passed/);
+  assert.match(mappingTest.body.detail, /Model: deepseek-chat/);
+  const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200);
+  assert.match(edit.text, /<h2>Test provider<\/h2>/);
+  assert.match(edit.text, /Run server test request/);
+  assert.match(edit.text, /Run mapping request/);
+  assert.match(edit.text, /data-test-title="Server test request result"/);
+  assert.match(edit.text, /data-test-title="Mapping request result"/);
+  assert.match(edit.text, /name="reasoning_efforts"/);
+  assert.match(edit.text, /name="default_reasoning_effort"/);
+  assert.match(edit.text, /name="supports_chat_template_kwargs"/);
+  assert.doesNotMatch(edit.text, /data-result-target="provider-test-result"/);
+  const renderedScripts = [...edit.text.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  assert.ok(renderedScripts.length);
+  for (const script of renderedScripts) assert.doesNotThrow(() => new Function(script));
   db.prepare(`
     UPDATE provider_models
-    SET public_model = ?, upstream_model = ?, context_limit = ?, output_limit = ?
+    SET public_model = ?, upstream_model = ?, context_limit = ?, output_limit = ?,
+        supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?,
+        reasoning_efforts = ?, default_reasoning_effort = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?
     WHERE provider_id = ?
-  `).run(originalModel.public_model, originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id);
+  `).run(
+    originalModel.public_model,
+    originalModel.upstream_model,
+    originalModel.context_limit,
+    originalModel.output_limit,
+    originalModel.supports_text_input,
+    originalModel.supports_image_input,
+    originalModel.supports_tools,
+    originalModel.supports_reasoning,
+    originalModel.reasoning_efforts,
+    originalModel.default_reasoning_effort,
+    originalModel.supports_chat_template_kwargs,
+    originalModel.supports_parallel_tools,
+    provider.id
+  );
+});
+
+test('provider autoconfigure imports standard model IDs and optional vLLM context metadata', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const provider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
+    VALUES (?, ?, ?, ?, ?, 1)
+  `).run('autoconfigure-vllm', 'Autoconfigure vLLM', 'openai-compatible', `${mockBaseUrl}/v1`, 'local');
+  db.prepare(`
+    INSERT INTO provider_models
+      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+       supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+    VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 1, 1, 0)
+  `).run(provider.lastInsertRowid, 'autoconfigure-alias', 'stale-model', 'Autoconfigure vLLM', 32000, 4096);
+
+  const edit = await agent.get(`/admin/providers/${provider.lastInsertRowid}`)
+    .expect(200)
+    .expect(/Autoconfigure provider/)
+    .expect(/data-apply-autoconfigure/);
+  assert.match(edit.text, /<form method="post" action="\/admin\/providers\/\d+" class="panel" data-provider-settings-form>\s*<h2>Provider Settings<\/h2>/);
+  const providerActions = edit.text.match(/<div class="actions" style="margin-top:16px">([\s\S]*?)<\/div>/);
+  assert.ok(providerActions);
+  assert.deepEqual(
+    [...providerActions[1].matchAll(/>(Save provider|Delete provider|Autoconfigure|Run mapping request)</g)].map((match) => match[1]),
+    ['Save provider', 'Delete provider', 'Autoconfigure']
+  );
+  assert.doesNotMatch(providerActions[1], />Cancel</);
+  assert.doesNotMatch(edit.text, /Autoconfigure discovers model IDs/);
+  assert.match(edit.text, /Configuration applied to the form\. Save the provider to persist it\./);
+  assert.match(edit.text, /button\.textContent = 'Save provider'/);
+  assert.match(edit.text, /providerForm\.requestSubmit\(\)/);
+
+  const preview = await agent
+    .post(`/admin/providers/${provider.lastInsertRowid}/autoconfigure.json`)
+    .send({ preferred_model: '', apply: false })
+    .expect(200);
+  assert.equal(preview.body.ok, true);
+  assert.equal(preview.body.providerType, 'vllm');
+  assert.equal(preview.body.version, 'test-vllm-version');
+  assert.equal(preview.body.selectedModel, 'active-model');
+  assert.equal(preview.body.applied, null);
+  assert.match(preview.body.message, /Review it before applying/);
+  assert.match(preview.body.detail, /Model root: test\/model-root/);
+  assert.equal(db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid).upstream_model, 'stale-model');
+
+  const response = await agent
+    .post(`/admin/providers/${provider.lastInsertRowid}/autoconfigure.json`)
+    .send({ preferred_model: 'active-model', apply: true })
+    .expect(200);
+  assert.equal(response.body.applied.upstreamModel, 'active-model');
+  assert.equal(response.body.applied.contextLimit, 65536);
+
+  const updated = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
+  assert.equal(updated.public_model, 'autoconfigure-alias');
+  assert.equal(updated.upstream_model, 'active-model');
+  assert.equal(updated.context_limit, 65536);
+  assert.equal(updated.output_limit, 4096);
+  assert.equal(updated.supports_image_input, 0);
+  assert.equal(updated.supports_tools, 1);
+  assert.equal(updated.supports_reasoning, 1);
+  assert.equal(updated.supports_parallel_tools, 0);
+});
+
+test('provider autoconfigure remains generic for official OpenAI-compatible APIs', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const provider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
+    VALUES (?, ?, ?, ?, ?, 1)
+  `).run('autoconfigure-official', 'Autoconfigure Official', 'openai-compatible', `${mockBaseUrl}/official/v1`, 'official-key');
+  db.prepare(`
+    INSERT INTO provider_models
+      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+       supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+    VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 1, 0, 0)
+  `).run(provider.lastInsertRowid, 'official-alias', 'official-model-b', 'Autoconfigure Official', 32768, 2048);
+
+  const response = await agent
+    .post(`/admin/providers/${provider.lastInsertRowid}/autoconfigure.json`)
+    .send({ preferred_model: 'official-model-b', apply: true })
+    .expect(200);
+  assert.equal(response.body.providerType, 'openai-compatible');
+  assert.equal(response.body.version, null);
+  assert.equal(response.body.applied.upstreamModel, 'official-model-b');
+  assert.equal(response.body.applied.contextLimit, 32768);
+  assert.match(response.body.detail, /Context limit: not published; existing value will be kept/);
 });
 
 test('provider test explains common configuration failures', async () => {
@@ -1239,6 +1598,17 @@ test('user provider access controls api models and opencode download', async () 
   const configRes = await agent.get('/portal/opencode.json').expect(200);
   assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models), ['group-internal']);
   assert.equal(configRes.body.model, 'ieti-agents/group-internal');
+
+  const dashboard = await agent
+    .get('/portal')
+    .set('Host', 'portal.example.test')
+    .set('X-Forwarded-Proto', 'https')
+    .expect(200);
+  assert.match(dashboard.text, /<h2 id="active-models-heading">Active models<\/h2>/);
+  assert.match(dashboard.text, /<summary>\s*<code>group-internal<\/code>/);
+  assert.match(dashboard.text, /<dt>Base URL<\/dt><dd><code>https:\/\/portal\.example\.test\/v1<\/code><\/dd>/);
+  assert.match(dashboard.text, /&quot;context&quot;: 32000/);
+  assert.doesNotMatch(dashboard.text, /<summary>\s*<code>active-model<\/code>/);
 });
 
 test('opencode config lists every public model pool assigned to the user group', async () => {
@@ -1250,6 +1620,10 @@ test('opencode config lists every public model pool assigned to the user group',
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
     VALUES (?, ?, ?, ?, 1, 32000, 4096)
   `).run(fastProvider.lastInsertRowid, 'fast-model', 'fast-upstream', 'Fast Model');
+  db.prepare(`
+    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, ?, 1, 16000, 2048)
+  `).run(fastProvider.lastInsertRowid, 'fast-secondary-model', 'fast-secondary-upstream', 'Fast Secondary Model');
 
   const secondFastProvider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
@@ -1286,7 +1660,7 @@ test('opencode config lists every public model pool assigned to the user group',
   `).run(groupId, visionProvider.lastInsertRowid, 98);
 
   const modelsRes = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
-  assert.deepEqual(modelsRes.body.data.map((model) => model.id), ['fast-model', 'vision-model']);
+  assert.deepEqual(modelsRes.body.data.map((model) => model.id).sort(), ['fast-model', 'fast-secondary-model', 'vision-model']);
   const capabilitiesRes = await request(app)
     .get('/v1/model-capabilities')
     .set('Authorization', `Bearer ${student.key}`)
@@ -1297,7 +1671,7 @@ test('opencode config lists every public model pool assigned to the user group',
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const configRes = await agent.get('/portal/opencode.json').expect(200);
-  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models), ['fast-model', 'vision-model']);
+  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models).sort(), ['fast-model', 'fast-secondary-model', 'vision-model']);
   assert.equal(configRes.body.model, 'ieti-agents/fast-model');
   assert.equal(configRes.body.provider['ieti-agents'].models['fast-model'].limit.context, 32000);
   assert.equal(configRes.body.provider['ieti-agents'].models['fast-model'].limit.output, 4096);
@@ -1316,7 +1690,35 @@ test('streaming works with a small request', async () => {
   assert.match(res.text, /\[DONE]/);
 });
 
-test('student portal shows usage and downloads OpenCode launchers', async () => {
+test('active streams can outlive the request handshake timeout', async () => {
+  const config = require('../src/config');
+  const previousRequestTimeout = config.requestTimeoutMs;
+  const previousStreamTimeout = config.streamInactivityTimeoutMs;
+  config.requestTimeoutMs = 50;
+  config.streamInactivityTimeoutMs = 250;
+
+  try {
+    const student = createStudent();
+    const res = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({
+        model: 'active-model',
+        stream: true,
+        messages: [{ role: 'user', content: 'Stream beyond the request timeout.' }]
+      })
+      .expect(200);
+    assert.match(res.text, /STILL/);
+    assert.match(res.text, / OK/);
+    assert.match(res.text, /\[DONE]/);
+    assert.doesNotMatch(res.text, /stream_error/);
+  } finally {
+    config.requestTimeoutMs = previousRequestTimeout;
+    config.streamInactivityTimeoutMs = previousStreamTimeout;
+  }
+});
+
+test('student portal shows setup commands and serves configuration scripts', async () => {
   const student = createStudent();
   const agent = request.agent(app);
   db.prepare(`
@@ -1328,36 +1730,121 @@ test('student portal shows usage and downloads OpenCode launchers', async () => 
   await agent.get('/').expect(200).expect(/<h1>Login<\/h1>/);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
 
-  const portal = await agent.get('/portal').expect(200).expect(/Tokens today/).expect(/OpenCode launchers/).expect(/run_opencode\.sh/).expect(/run_opencode\.ps1/);
+  const portal = await agent.get('/portal')
+    .set('Host', 'course.example.test:8443')
+    .set('X-Forwarded-Proto', 'https')
+    .expect(200)
+    .expect(/Tokens today/)
+    .expect(/OpenCode configuration/)
+    .expect(/BuildLite Configuration/)
+    .expect(/set_harness_buildlite\.sh/)
+    .expect(/set_harness_buildlite\.ps1/)
+    .expect(/set_agents_opencode\.sh/)
+    .expect(/set_agents_opencode\.ps1/);
+  assert.match(portal.text, /bash -c/);
+  assert.match(portal.text, /powershell\.exe/);
+  assert.match(portal.text, /https%3A%2F%2Fcourse\.example\.test%3A8443%2Fv1/);
+  assert.match(portal.text, /https:\/\/course\.example\.test:8443\/downloads\/set_agents_opencode\.sh/);
+  assert.match(portal.text, /class="command-scroll"/);
+  assert.equal((portal.text.match(/data-copy-target=/g) || []).length, 4);
+  assert.equal((portal.text.match(/data-copy-value=/g) || []).length, 4);
+  assert.match(portal.text, /data-copy-target="ieti-shell-command" data-copy-value="bash -c/);
+  assert.match(portal.text, /data-copy-target="ieti-powershell-command" data-copy-value="\$p=Join-Path/);
+  assert.match(portal.text, /ieti-shell-command/);
+  assert.match(portal.text, /ieti-powershell-command/);
+  assert.match(portal.text, /buildlite-shell-command/);
+  assert.match(portal.text, /buildlite-powershell-command/);
+  assert.match(portal.text, /downloads\/set_harness_buildlite\.sh/);
+  assert.match(portal.text, /downloads\/set_harness_buildlite\.ps1/);
+  assert.match(portal.text, /mklink \/J \.opencode \.agents/);
+  assert.match(portal.text, /navigator\.clipboard/);
+  assert.match(portal.text, /<h2 id="active-models-heading">Active models<\/h2>/);
+  assert.match(portal.text, /<details class="active-model">/);
+  assert.match(portal.text, /<summary>\s*<code>active-model<\/code>/);
+  assert.match(portal.text, /<dt>Protocol<\/dt><dd>OpenAI-compatible<\/dd>/);
+  assert.match(portal.text, /<dt>Base URL<\/dt><dd><code>https:\/\/course\.example\.test:8443\/v1<\/code><\/dd>/);
+  assert.match(portal.text, /<dt>Context window<\/dt><dd>131072 tokens<\/dd>/);
+  assert.match(portal.text, /<dt>Maximum output<\/dt><dd>16384 tokens<\/dd>/);
+  assert.match(portal.text, /@ai-sdk\/openai-compatible/);
+  assert.match(portal.text, /\{file:\.secrets\/agents_server_key\}/);
+  assert.match(portal.text, /&quot;tool_call&quot;: true/);
+  assert.ok(portal.text.indexOf('Active models') < portal.text.indexOf('Recent usage'));
+  assert.doesNotMatch(portal.text, /run_opencode|PROXY_AGENTS_KEY|Qwen|DeepSeek Harness|install_deepseek_harness|dsh-ieti-agents|Harness plugin/i);
   assert.doesNotMatch(portal.text, /Cost EUR/);
   assert.doesNotMatch(portal.text, /Codex/);
   assert.doesNotMatch(portal.text, /config\.toml/);
   assert.doesNotMatch(portal.text, /env_key/);
   assert.doesNotMatch(portal.text, /chunkTimeout/);
 
-  const shellScript = await agent.get('/portal/run_opencode.sh').expect(200);
-  assert.match(shellScript.headers['content-disposition'], /attachment; filename="run_opencode\.sh"/);
+  const shellScript = await request(app).get('/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
+  assert.match(shellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.sh"/);
   assert.match(shellScript.headers['content-type'], /text\/plain/);
   assert.match(shellScript.text, /^#!\/usr\/bin\/env bash/);
-  assert.match(shellScript.text, /OPENCODE_MODELS_PATH/);
+  assert.match(shellScript.text, /\.secrets/);
+  assert.match(shellScript.text, /agents_server_key/);
+  assert.match(shellScript.text, /DEFAULT_BASE_URL="https:\/\/download\.example\.test\/v1"/);
+  assert.match(shellScript.text, /apiKey: '\{file:\.secrets\/agents_server_key\}'/);
+  assert.doesNotMatch(shellScript.text, /export PROXY_AGENTS_KEY|apiKey: '\{env:PROXY_AGENTS_KEY\}'|opencode:\/\/|OPENCODE_MODELS_PATH|ieti-models\.json|command -v opencode/);
 
-  const powerShellScript = await agent.get('/portal/run_opencode.ps1').expect(200);
-  assert.match(powerShellScript.headers['content-disposition'], /attachment; filename="run_opencode\.ps1"/);
+  const powerShellScript = await request(app).get('/downloads/set_agents_opencode.ps1?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
+  assert.match(powerShellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.ps1"/);
   assert.match(powerShellScript.headers['content-type'], /text\/plain/);
-  assert.match(powerShellScript.text, /\[CmdletBinding\(\)\]/);
-  assert.match(powerShellScript.text, /OPENCODE_MODELS_PATH/);
+  assert.match(powerShellScript.text, /\$ErrorActionPreference = 'Stop'/);
+  assert.match(powerShellScript.text, /\.secrets/);
+  assert.match(powerShellScript.text, /agents_server_key/);
+  assert.match(powerShellScript.text, /\$DefaultBaseUrl = 'https:\/\/download\.example\.test\/v1'/);
+  assert.match(powerShellScript.text, /apiKey: '\{file:\.secrets\/agents_server_key\}'/);
+  assert.doesNotMatch(powerShellScript.text, /EnvironmentVariable\([^)]*PROXY_AGENTS_KEY|apiKey: '\{env:PROXY_AGENTS_KEY\}'|opencode:\/\/|OPENCODE_MODELS_PATH|ieti-models\.json|Get-Command opencode/);
 
-  await request(app).get('/portal/run_opencode.sh').expect(302).expect('Location', '/');
-  await request(app).get('/portal/run_opencode.ps1').expect(302).expect('Location', '/');
+  const buildLiteShellScript = await request(app).get('/downloads/set_harness_buildlite.sh').expect(200);
+  assert.match(buildLiteShellScript.headers['content-disposition'], /attachment; filename="set_harness_buildlite\.sh"/);
+  assert.match(buildLiteShellScript.headers['content-type'], /text\/plain/);
+  assert.match(buildLiteShellScript.text, /^#!\/usr\/bin\/env bash/);
+  assert.match(buildLiteShellScript.text, /buildlite_harness\.zip/);
+  assert.match(buildLiteShellScript.text, /cp -a "\$SOURCE_DIRECTORY\/\." "\$WORKING_DIRECTORY\//);
+  assert.match(buildLiteShellScript.text, /ln -s \.agents/);
+  assert.doesNotMatch(buildLiteShellScript.text, /__IETI_BUILD_LITE_ZIP_URL__/);
 
-  const configRes = await agent
-    .get('/portal/opencode.json')
-    .set('Host', 'course.example.test')
-    .set('X-Forwarded-Proto', 'https')
-    .expect(200);
+  const buildLitePowerShellScript = await request(app).get('/downloads/set_harness_buildlite.ps1').expect(200);
+  assert.match(buildLitePowerShellScript.headers['content-disposition'], /attachment; filename="set_harness_buildlite\.ps1"/);
+  assert.match(buildLitePowerShellScript.headers['content-type'], /text\/plain/);
+  assert.match(buildLitePowerShellScript.text, /Expand-Archive/);
+  assert.match(buildLitePowerShellScript.text, /Copy-Item -LiteralPath \$Item\.FullName/);
+  assert.match(buildLitePowerShellScript.text, /mklink \/J/);
+  assert.doesNotMatch(buildLitePowerShellScript.text, /__IETI_BUILD_LITE_ZIP_URL__/);
 
-  assert.equal(configRes.body.provider['ieti-agents'].options.baseURL, 'https://course.example.test/v1');
-  assert.equal(configRes.body.provider['ieti-agents'].options.apiKey, '{env:PROXY_AGENTS_KEY}');
+  const buildLiteArchive = await request(app).get('/downloads/buildlite_harness.zip').expect(200);
+  assert.match(buildLiteArchive.headers['content-disposition'], /attachment; filename="buildlite_harness\.zip"/);
+  assert.match(buildLiteArchive.headers['content-type'], /application\/zip/);
+  assert.ok(Number(buildLiteArchive.headers['content-length']) > 1000);
+
+  await request(app).get('/portal/set_agents_opencode.sh').expect(404);
+  await request(app).get('/portal/set_agents_opencode.ps1').expect(404);
+  await request(app).get('/portal/set_harness_buildlite.sh').expect(404);
+  await request(app).get('/portal/set_harness_buildlite.ps1').expect(404);
+  await agent.get('/portal/run_opencode.sh').expect(404);
+  await agent.get('/portal/run_opencode.ps1').expect(404);
+  await agent.get('/portal/install_deepseek_harness.sh').expect(404);
+  await agent.get('/portal/install_deepseek_harness.ps1').expect(404);
+  await request(app).get('/downloads/dsh-ieti-agents-0.1.0.tgz').expect(404);
+
+  const publicBaseUrlSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('public_base_url');
+  db.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?')
+    .run('https://configured.example.test/v1', 'public_base_url');
+  let configRes;
+  try {
+    configRes = await agent
+      .get('/portal/opencode.json')
+      .set('Host', 'course.example.test')
+      .set('X-Forwarded-Proto', 'https')
+      .expect(200);
+  } finally {
+    db.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?')
+      .run(publicBaseUrlSetting?.value || '', 'public_base_url');
+  }
+
+  assert.equal(configRes.body.provider['ieti-agents'].options.baseURL, 'https://configured.example.test/v1');
+  assert.equal(configRes.body.provider['ieti-agents'].options.apiKey, '{file:.secrets/agents_server_key}');
   assert.equal(configRes.body.provider['ieti-agents'].options.timeout, 900000);
   assert.equal(configRes.body.provider['ieti-agents'].options.chunkTimeout, 600000);
   assert.equal(configRes.body.model, 'ieti-agents/active-model');
@@ -1375,22 +1862,67 @@ test('student portal shows usage and downloads OpenCode launchers', async () => 
   await agent.get('/portal/codex.toml').expect(404);
 });
 
-test('student can create and delete their own api key', async () => {
+test('student can create multiple named api keys and delete one from settings', async () => {
   const student = createStudent();
   const agent = request.agent(app);
 
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
-  await agent.post('/portal/key/regenerate').expect(302).expect('Location', '/portal?created=1');
-  const regenerated = await agent.get('/portal?created=1').expect(200);
-  const match = regenerated.text.match(/ieti_sk_[A-Za-z0-9_-]+/);
-  assert.ok(match);
-  assert.notEqual(match[0], student.key);
+  const settingsBefore = await agent.get('/portal/settings').expect(200);
+  assert.match(settingsBefore.text, /API keys/);
+  assert.match(settingsBefore.text, />Default</);
+  assert.match(settingsBefore.text, /delete-api-key-modal/);
+  assert.match(settingsBefore.text, /delete-api-key-confirm-form/);
+  assert.match(settingsBefore.text, /Applications using it will stop working/);
 
+  const firstRegenerate = await agent.post('/portal/key/regenerate');
+  assert.equal(firstRegenerate.status, 302, firstRegenerate.text);
+  assert.equal(firstRegenerate.headers.location, '/portal/settings?new_key=1');
+  const pending = await agent.get('/portal/settings?new_key=1').expect(200);
+  const firstMatch = pending.text.match(/ieti_sk_[A-Za-z0-9_-]+/);
+  assert.ok(firstMatch);
+  assert.notEqual(firstMatch[0], student.key);
+  assert.match(pending.text, /name="key_name"/);
+  assert.match(pending.text, /id="add-key-btn" disabled/);
+  assert.match(pending.text, /id="api-key-modal"/);
+  assert.match(pending.text, /modal-enter/);
+  assert.match(pending.text, /is-closing/);
+
+  await agent.post('/portal/key/add').type('form').send({ key_name: 'Laptop' }).expect(302).expect('Location', '/portal/settings?created=1');
+  const settingsAfterFirst = await agent.get('/portal/settings?created=1').expect(200);
+  assert.match(settingsAfterFirst.text, />Laptop</);
+  assert.doesNotMatch(settingsAfterFirst.text, /id="api-key-modal"/);
+
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${firstMatch[0]}`).expect(200);
+
+  const nextRegenerate = await agent.post('/portal/key/regenerate');
+  assert.equal(nextRegenerate.status, 302, nextRegenerate.text);
+  assert.equal(nextRegenerate.headers.location, '/portal/settings?new_key=1');
+  const secondPending = await agent.get('/portal/settings?new_key=1').expect(200);
+  const secondMatch = secondPending.text.match(/ieti_sk_[A-Za-z0-9_-]+/);
+  assert.ok(secondMatch);
+  await agent.post('/portal/key/add').type('form').send({ key_name: 'CI' }).expect(302).expect('Location', '/portal/settings?created=1');
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${firstMatch[0]}`).expect(200);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${secondMatch[0]}`).expect(200);
+
+  await agent.post('/portal/key/regenerate').expect(302).expect('Location', '/portal/settings?new_key=1');
+  await agent.post('/portal/key/add').type('form').send({ key_name: 'laptop' }).expect(302).expect('Location', '/portal/settings?new_key=1&key_error=duplicate');
+  await agent.get('/portal/settings?new_key=1&key_error=duplicate').expect(200).expect(/already in use/);
+
+  const laptopKey = db.prepare('SELECT id FROM user_api_keys WHERE user_id = ? AND name = ?').get(student.id, 'Laptop');
+  assert.ok(laptopKey);
+  await agent.post(`/portal/key/${laptopKey.id}/revoke`).expect(302).expect('Location', '/portal/settings?revoked=1');
+  await agent.get('/portal/settings?revoked=1').expect(200).expect(/API key deleted/);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${firstMatch[0]}`).expect(401);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${secondMatch[0]}`).expect(200);
+
+  const defaultKey = db.prepare('SELECT id FROM user_api_keys WHERE user_id = ? AND name = ?').get(student.id, 'Default');
+  await agent.post(`/portal/key/${defaultKey.id}/revoke`).expect(302).expect('Location', '/portal/settings?revoked=1');
   await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(401);
-  await request(app).get('/v1/models').set('Authorization', `Bearer ${match[0]}`).expect(200);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${secondMatch[0]}`).expect(200);
 
-  await agent.post('/portal/key/revoke').expect(302);
-  await request(app).get('/v1/models').set('Authorization', `Bearer ${match[0]}`).expect(401);
+  const dashboard = await agent.get('/portal').expect(200);
+  assert.doesNotMatch(dashboard.text, /api-key-modal/);
 });
 
 test('student sets password through invite and then logs in with email and password', async () => {

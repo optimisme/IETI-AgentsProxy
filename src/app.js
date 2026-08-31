@@ -52,7 +52,7 @@ function createApp() {
   }));
 
   app.use((req, res, next) => {
-    if (req.path.startsWith('/admin') || req.path === '/health' || req.path === '/' || req.path === '/login' || req.path.startsWith('/portal')) return next();
+    if (req.path.startsWith('/admin') || req.path === '/health' || req.path === '/' || req.path === '/login' || req.path.startsWith('/portal') || req.path.startsWith('/downloads')) return next();
     if (getSetting('maintenance_mode', 'false') === 'true') {
       return next(apiError(503, 'maintenance_mode', 'Server is in maintenance mode.'));
     }

@@ -36,6 +36,30 @@
     .progress span { display: block; height: 100%; background: #2f6fed; border-radius: inherit; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .actions form { display: inline; }
+    .command-row { display: flex; gap: 8px; align-items: stretch; margin: 0 0 12px; }
+    .command-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; border: 1px solid #bac3d4; border-radius: 6px; background: #172033; }
+    .command-scroll pre { margin: 0; padding: 12px; min-width: max-content; color: #f8fafc; }
+    .command-scroll code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+    .copy-command { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; }
+    .copy-command svg { width: 16px; height: 16px; }
+    .active-models { margin-top: 24px; }
+    .active-model-list { display: grid; gap: 10px; margin-bottom: 24px; }
+    .active-model { background: white; border: 1px solid #d9deea; border-radius: 8px; overflow: hidden; }
+    .active-model summary { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 14px 16px; cursor: pointer; font-weight: 700; list-style: none; }
+    .active-model summary::-webkit-details-marker { display: none; }
+    .active-model summary::before { content: '▸'; color: #667085; transition: transform 120ms ease; }
+    .active-model summary:hover { background: #f8fafc; }
+    .active-model summary code { margin-right: auto; }
+    .active-model summary span { color: #667085; font-size: 13px; font-weight: 500; text-align: right; }
+    .active-model[open] summary { border-bottom: 1px solid #e5e9f2; background: #f8fafc; }
+    .active-model[open] summary::before { transform: rotate(90deg); }
+    .active-model-details { padding: 16px; }
+    .active-model-details h3 { margin-bottom: 6px; }
+    .model-config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 0 0 16px; }
+    .model-config-grid div { min-width: 0; padding: 10px 12px; border: 1px solid #e5e9f2; border-radius: 6px; background: #f8fafc; }
+    .model-config-grid dt { color: #667085; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+    .model-config-grid dd { margin: 0; overflow-wrap: anywhere; }
+    .model-config-json { max-height: 360px; overflow: auto; }
     .section-stack { display: grid; gap: 24px; }
     .server-sections { display: grid; gap: 16px; }
     .provider-sections { display: grid; gap: 16px; }
@@ -46,6 +70,36 @@
     .pagination { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; }
     .modal-backdrop { position: fixed; inset: 0; background: rgb(23 32 51 / 48%); display: grid; place-items: center; padding: 24px; z-index: 10; }
     .modal { width: min(520px, 100%); background: white; border-radius: 8px; border: 1px solid #d9deea; box-shadow: 0 18px 44px rgb(23 32 51 / 22%); padding: 20px; }
+    dialog.modal::backdrop { background: rgb(23 32 51 / 48%); }
+    dialog.modal[open] { animation: modal-enter 180ms ease-out both; }
+    dialog.modal[open]::backdrop { animation: modal-backdrop-enter 180ms ease-out both; }
+    dialog.modal.is-closing { animation: modal-exit 150ms ease-in both; }
+    dialog.modal.is-closing::backdrop { animation: modal-backdrop-exit 150ms ease-in both; }
+    @keyframes modal-enter {
+      from { opacity: 0; transform: translateY(10px) scale(.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes modal-exit {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(10px) scale(.97); }
+    }
+    @keyframes modal-backdrop-enter {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes modal-backdrop-exit {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      dialog.modal[open], dialog.modal[open]::backdrop, dialog.modal.is-closing, dialog.modal.is-closing::backdrop { animation: none; }
+      .active-model summary::before { transition: none; }
+    }
+    @media (max-width: 640px) {
+      .active-model summary { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 4px 8px; }
+      .active-model summary code { margin-right: 0; }
+      .active-model summary span { grid-column: 2; text-align: left; }
+    }
     .modal h2 { margin-top: 0; }
     .modal .actions { justify-content: flex-end; margin-top: 16px; }
     .notice { background: #fff8df; border: 1px solid #e3c96a; border-radius: 8px; padding: 12px; margin-bottom: 18px; }

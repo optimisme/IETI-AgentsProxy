@@ -165,6 +165,9 @@ function responsesToChatPayload(payload) {
     : undefined;
   const toolChoice = responseToolChoiceToChat(payload.tool_choice);
   const textFormat = payload.text?.format;
+  const reasoningEffort = typeof payload.reasoning === 'object' && payload.reasoning
+    ? payload.reasoning.effort
+    : undefined;
 
   return {
     model: payload.model,
@@ -173,6 +176,7 @@ function responsesToChatPayload(payload) {
     ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
     ...(payload.top_p !== undefined ? { top_p: payload.top_p } : {}),
     ...(payload.max_output_tokens !== undefined ? { max_tokens: payload.max_output_tokens } : {}),
+    ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
     ...(tools?.length ? { tools } : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
     ...(payload.parallel_tool_calls !== undefined ? { parallel_tool_calls: payload.parallel_tool_calls } : {}),
@@ -290,15 +294,22 @@ function codexModelMetadata({ model, contextWindow, capabilities = {}, priority 
   const supportsImage = capabilities.image !== false;
   const supportsTools = capabilities.tools !== false;
   const supportsReasoning = capabilities.reasoning !== false;
+  const reasoningEfforts = supportsReasoning && Array.isArray(capabilities.reasoningEfforts)
+    ? capabilities.reasoningEfforts
+    : [];
+  const defaultReasoningEffort = reasoningEfforts.includes(capabilities.defaultReasoningEffort)
+    ? capabilities.defaultReasoningEffort
+    : null;
   const supportsParallelTools = supportsTools && capabilities.parallelTools !== false;
   return {
     slug: model,
     display_name: model,
     description: 'Virtual IETI model routed to the provider pool assigned to the student group.',
-    default_reasoning_level: supportsReasoning ? 'medium' : null,
-    supported_reasoning_levels: supportsReasoning
-      ? [{ effort: 'medium', description: 'Provider-managed reasoning level.' }]
-      : [],
+    default_reasoning_level: defaultReasoningEffort,
+    supported_reasoning_levels: reasoningEfforts.map((effort) => ({
+      effort,
+      description: `${effort} reasoning effort.`
+    })),
     shell_type: supportsTools ? 'default' : 'disabled',
     visibility: 'list',
     supported_in_api: true,
