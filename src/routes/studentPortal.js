@@ -253,8 +253,6 @@ function renderActiveModels(req, models) {
       ? capabilities.reasoningEfforts.join(', ')
       : (capabilities.reasoning ? 'Provider-managed' : 'Not supported');
     const inputs = entry.modalities.input.join(', ') || 'None';
-    const openCodeEntry = JSON.stringify({ [model.id]: entry }, null, 2);
-
     return `
       <details class="active-model">
         <summary>
@@ -275,10 +273,6 @@ function renderActiveModels(req, models) {
             <div><dt>Reasoning</dt><dd>${yesNo(entry.reasoning)}</dd></div>
             <div><dt>Reasoning efforts</dt><dd>${escapeHtml(reasoningEfforts)}</dd></div>
           </dl>
-          <p class="muted">Authenticate with an active <code>ieti_sk_…</code> key as a Bearer token. OpenCode can read that key from <code>{file:.secrets/agents_server_key}</code>, as used by the setup scripts.</p>
-          <h3>OpenCode model entry</h3>
-          <p class="muted">Add this entry under <code>provider.ieti-agents.models</code> when configuring OpenCode manually.</p>
-          <div class="command-scroll model-config-json"><pre><code>${escapeHtml(openCodeEntry)}</code></pre></div>
         </div>
       </details>
     `;
@@ -464,7 +458,11 @@ router.post('/invite/:token', (req, res) => {
   }
 
   setPasswordFromInvite(user.id, password);
-  res.redirect('/?ready=1');
+  req.session.regenerate((error) => {
+    if (error) return res.status(500).send('Password saved, but the session could not be created. Log in with your new password.');
+    req.session.studentUserId = user.id;
+    res.redirect('/portal');
+  });
 });
 
 router.get('/portal', requireStudentSession, (req, res) => {

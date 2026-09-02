@@ -38,7 +38,7 @@ cp settings.env.example settings.env
 Edita `settings.env` i canvia com a minim:
 
 ```env
-DEEPSEEK_API_KEY=your_deepseek_key_here
+DEFAULT_PROVIDER_API_KEY=your_deepseek_key_here
 ADMIN_PASSWORD=replace_with_a_secure_admin_password
 SESSION_SECRET=replace_with_a_long_random_session_secret
 ```
@@ -102,8 +102,8 @@ Edita `settings.env` amb valors reals i segurs:
 PORT=3000
 DATABASE_PATH=./data/agents_proxy.sqlite
 
-DEEPSEEK_API_KEY=dummy_provider_api_key_replace_me
-DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEFAULT_PROVIDER_API_KEY=dummy_deepseek_api_key_replace_me
+DEFAULT_PROVIDER_BASE_URL=https://api.deepseek.com
 DEFAULT_PROVIDER_SLUG=deepseek
 DEFAULT_PROVIDER_NAME=DeepSeek
 DEFAULT_UPSTREAM_MODEL=deepseek-chat
@@ -118,7 +118,7 @@ SESSION_SECRET=replace_with_a_long_random_session_secret
 MAX_REQUESTS_PER_MINUTE=1000
 MAX_TOKENS_PER_REQUEST=8192
 DEFAULT_DAILY_TOKEN_LIMIT=10000000
-DEFAULT_MODEL_CONTEXT_LIMIT=65536
+DEFAULT_MODEL_CONTEXT_LIMIT=90000
 DEFAULT_MODEL_OUTPUT_LIMIT=8192
 MAX_IMAGES_PER_REQUEST=4
 MAX_IMAGE_BYTES=8000000
@@ -172,17 +172,24 @@ Valors principals:
 
 - `PORT`: port HTTP local.
 - `DATABASE_PATH`: ruta del fitxer SQLite.
-- `DEEPSEEK_API_KEY`: clau inicial del proveidor per sembrar la primera base de dades.
-- `DEEPSEEK_BASE_URL`: URL base del proveidor OpenAI-compatible.
+- `DEFAULT_PROVIDER_API_KEY`: clau inicial del proveidor per sembrar la primera base de dades.
+- `DEFAULT_PROVIDER_BASE_URL`: URL base del proveidor OpenAI-compatible.
 - `PUBLIC_MODEL_NAME`: nom de model que veuran els clients, per defecte `active-model`.
-- `PUBLIC_BASE_URL`: URL publica usada per generar l'`opencode.json`.
+- `PUBLIC_BASE_URL`: origen HTTPS public i canonic de l'aplicacio web, sense `/v1` ni una barra final. Es fa servir per generar enllaços com `https://agents.ieti.site/invite/...` i les URL de descarrega. Quan existeix a `settings.env`, preval sobre el valor desat anteriorment a la taula `settings`.
+- `PROXY_AGENTS_BASE_URL`: URL base de l'API, normalment acabada en `/v1`, que els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` accepten com a override quan s'executen. No s'ha de confondre amb `PUBLIC_BASE_URL`, que identifica l'aplicacio web i construeix els enllaços d'invitacio.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`: credencials d'administracio.
 - `SESSION_SECRET`: secret de sessio Express. Ha de ser llarg i aleatori.
 - `MAX_REQUESTS_PER_MINUTE`: rate limit per usuari.
 - `MAX_TOKENS_PER_REQUEST`: maxim de `max_tokens` de sortida que pot demanar una peticio. Els tokens reals es registren a partir del `usage` del proveidor quan existeix.
 - `DEFAULT_DAILY_TOKEN_LIMIT`: limit global per defecte del servidor.
 
-`DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEFAULT_PROVIDER_SLUG`, `DEFAULT_PROVIDER_NAME` i `DEFAULT_UPSTREAM_MODEL` nomes s'usen per crear el primer proveidor en una base de dades nova. Un cop creada la base de dades, els proveidors es gestionen des de l'administracio.
+`DEFAULT_PROVIDER_API_KEY`, `DEFAULT_PROVIDER_BASE_URL`, `DEFAULT_PROVIDER_SLUG`, `DEFAULT_PROVIDER_NAME` i `DEFAULT_UPSTREAM_MODEL` nomes s'usen per crear el primer proveidor en una base de dades nova. Un cop creada la base de dades, els proveidors es gestionen des de l'administracio.
+
+## Enllaços d'invitacio
+
+Quan l'administrador crea un usuari, **Enabled** esta seleccionat per defecte i el servidor genera un enllaç d'invitacio individual d'un sol ús. L'enllaç es mostra a la fitxa de l'usuari perquè l'administrador el copiï i el comparteixi manualment. **Regenerate invitation key** invalida l'enllaç anterior i en genera un de nou.
+
+Quan l'usuari obre l'enllaç i desa la primera contrasenya, la invitacio queda consumida, la sessio es regenera i l'usuari entra directament al portal.
 
 ## Us amb OpenCode
 
@@ -227,7 +234,7 @@ Exemple de configuracio generada:
       "models": {
         "active-model": {
           "limit": {
-            "context": 65536,
+            "context": 90000,
             "output": 8192
           },
           "tool_call": true,

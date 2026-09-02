@@ -97,7 +97,7 @@ function testResultPayload(label, result) {
 }
 
 function getRequestBaseUrl(req) {
-  return requestBaseUrl(req, getSetting('public_base_url', ''));
+  return requestBaseUrl(req, config.publicBaseUrl || getSetting('public_base_url', ''));
 }
 
 function groupOptions(selectedId = null) {
@@ -345,14 +345,17 @@ function cleanupWarning(status = getUsageCleanupStatus()) {
 function userForm(user = {}, action = '/admin/users') {
   const selectedGroupId = user.id ? getUserGroups(user.id)[0]?.id : null;
   const formId = user.id ? `user-edit-${user.id}` : 'user-new';
+  const deleteFormId = user.id ? `user-delete-${user.id}` : '';
+  const deleteModalId = user.id ? `user-delete-modal-${user.id}` : '';
   const removable = user.id ? countUsage(user.id) === 0 : true;
+  const enabled = user.enabled === undefined ? true : Boolean(user.enabled);
   return `
     <div class="panel">
       <form id="${formId}" method="post" action="${action}">
         <label>Name</label><input name="name" value="${escapeHtml(user.name)}" required>
         <label>Email</label><input name="email" type="email" value="${escapeHtml(user.email)}" required>
         <label>Group</label><select name="group_id" required><option value="">Choose one group</option>${groupOptions(selectedGroupId)}</select>
-        <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${user.enabled === 0 ? '' : 'checked'}> Enabled</label>
+        <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${enabled ? 'checked' : ''}> Enabled</label>
       </form>
       <div class="form-actions">
         <div class="actions">
@@ -361,13 +364,42 @@ function userForm(user = {}, action = '/admin/users') {
         </div>
         ${user.id ? `
           ${removable ? `
-            <form method="post" action="/admin/users/${user.id}/delete" onsubmit="return window.confirm('Are you sure to delete this user?');">
-              <button class="danger">Delete</button>
-            </form>
+            <button type="button" class="danger" data-open-user-delete-modal="${deleteModalId}">Delete</button>
           ` : '<span class="muted">Non removable user</span>'}
         ` : ''}
       </div>
     </div>
+    ${user.id && removable ? `
+      <form id="${deleteFormId}" method="post" action="/admin/users/${user.id}/delete"></form>
+      <dialog id="${deleteModalId}" class="modal" aria-labelledby="${deleteModalId}-title">
+        <h2 id="${deleteModalId}-title">Delete user?</h2>
+        <p>This will permanently delete <strong>${escapeHtml(user.name)}</strong> (<code>${escapeHtml(user.email)}</code>) and the user's invitation and API keys.</p>
+        <div class="actions">
+          <button type="button" class="secondary" data-close-user-delete-modal>Cancel</button>
+          <button type="submit" form="${deleteFormId}" class="danger">Delete user</button>
+        </div>
+      </dialog>
+      <script>
+        (() => {
+          const modal = document.getElementById(${JSON.stringify(deleteModalId)});
+          const openButton = document.querySelector(${JSON.stringify(`[data-open-user-delete-modal="${deleteModalId}"]`)});
+          const closeButton = modal?.querySelector('[data-close-user-delete-modal]');
+          const closeModal = () => {
+            if (typeof modal?.close === 'function') modal.close();
+            else modal?.removeAttribute('open');
+          };
+          openButton?.addEventListener('click', () => {
+            if (typeof modal?.showModal === 'function') modal.showModal();
+            else modal?.setAttribute('open', '');
+          });
+          closeButton?.addEventListener('click', closeModal);
+          modal?.addEventListener('cancel', (event) => {
+            event.preventDefault();
+            closeModal();
+          });
+        })();
+      </script>
+    ` : ''}
   `;
 }
 
@@ -570,11 +602,10 @@ router.get('/admin/users', requireAdmin, (req, res) => {
   const requestedPage = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
   const page = Math.min(requestedPage, totalPages);
   const users = getDb().prepare(`
-    SELECT users.*, groups.name AS group_name, providers.name AS group_provider_name, providers.slug AS group_provider_slug
+    SELECT users.*, groups.name AS group_name
     FROM users
     LEFT JOIN user_groups ON user_groups.user_id = users.id
     LEFT JOIN groups ON groups.id = user_groups.group_id
-    LEFT JOIN providers ON providers.id = groups.provider_id
     ${whereSql}
     ORDER BY users.created_at DESC
     LIMIT @limit OFFSET @offset
@@ -584,7 +615,6 @@ router.get('/admin/users', requireAdmin, (req, res) => {
       <td><a href="/admin/users/${user.id}">${escapeHtml(user.name)}</a></td>
       <td>${escapeHtml(user.email)}</td>
       <td>${escapeHtml(user.group_name || '') || '<span class="muted">none</span>'}</td>
-      <td>${user.group_provider_slug ? `${escapeHtml(user.group_provider_name || user.group_provider_slug)}<br><span class="muted">${escapeHtml(user.group_provider_slug)}</span>` : '<span class="muted">none</span>'}</td>
       <td><span class="${user.enabled ? 'status-enabled' : 'status-disabled'}">${user.enabled ? 'Enabled' : 'Disabled'}</span></td>
       <td>${user.last_used_at ? escapeHtml(user.last_used_at) : '<span class="muted">never</span>'}</td>
       <td class="actions">
@@ -609,7 +639,7 @@ router.get('/admin/users', requireAdmin, (req, res) => {
       </select>
       <p><button>Search</button> <a class="button secondary" href="/admin/users">Clear</a></p>
     </form>
-    <table><thead><tr><th>Name</th><th>Email</th><th>Group</th><th>Group Provider</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="muted">No users found.</td></tr>'}</tbody></table>
+    <table><thead><tr><th>Name</th><th>Email</th><th>Group</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No users found.</td></tr>'}</tbody></table>
     ${pagination}
   `;
   render(req, res, 'users', { title: 'Users', content, flash: flash(req.query.created ? 'User created.' : '') });
@@ -761,8 +791,44 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
         <h2>Invitation key</h2>
         <p><strong>${escapeHtml(user.name)}</strong><br><span class="muted">${escapeHtml(user.email)}</span></p>
         ${activeInvite ? `
-          <p class="key">${escapeHtml(activeInviteUrl)}</p>
+          <div class="command-row">
+            <p id="invitation-url-${user.id}" class="key" style="flex:1;margin:0">${escapeHtml(activeInviteUrl)}</p>
+            <button type="button" class="copy-command secondary" data-copy-invitation-url data-copy-target="invitation-url-${user.id}" title="Copy invitation URL" aria-label="Copy invitation URL">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
           <p class="muted">Invite expires at ${escapeHtml(activeInvite.expiresAt)}. Generating a new invitation invalidates this one.</p>
+          <script>
+            (() => {
+              const button = document.querySelector('[data-copy-invitation-url]');
+              const copyText = (text) => {
+                if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+                const area = document.createElement('textarea');
+                area.value = text;
+                area.setAttribute('readonly', '');
+                area.style.position = 'fixed';
+                area.style.opacity = '0';
+                document.body.appendChild(area);
+                area.select();
+                const copied = document.execCommand('copy');
+                area.remove();
+                return copied ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
+              };
+              button?.addEventListener('click', () => {
+                const target = document.getElementById(button.dataset.copyTarget);
+                const label = button.querySelector('.copy-label');
+                if (!target || !label) return;
+                copyText(target.textContent).then(() => {
+                  label.textContent = 'Copied';
+                  window.setTimeout(() => { label.textContent = 'Copy'; }, 1600);
+                }).catch(() => {
+                  label.textContent = 'Copy failed';
+                  window.setTimeout(() => { label.textContent = 'Copy'; }, 1600);
+                });
+              });
+            })();
+          </script>
         ` : '<p class="muted">No active invitation key.</p>'}
         <div class="actions">
           <form method="post" action="/admin/users/${user.id}/invite"><button>${activeInvite ? 'Regenerate invitation key' : 'Generate invitation key'}</button></form>
@@ -771,11 +837,11 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
       <section class="panel">
         <h2>API keys</h2>
         ${userApiKeys.length ? `<table><thead><tr><th>Name</th><th>Key</th><th>Actions</th></tr></thead><tbody>${apiKeyRows}</tbody></table>` : '<p class="muted">No API keys configured.</p>'}
-        <div class="actions">
-          <form method="post" action="/admin/users/${user.id}/regenerate-key">
-            <input name="key_name" maxlength="80" placeholder="Key name (optional)" aria-label="New API key name">
-            <button>Add API key</button>
-          </form>
+        <form id="user-api-key-add-${user.id}" method="post" action="/admin/users/${user.id}/regenerate-key">
+          <input name="key_name" maxlength="80" placeholder="Key name (optional)" aria-label="New API key name">
+        </form>
+        <div class="form-actions" data-api-key-actions>
+          <button type="submit" form="user-api-key-add-${user.id}">Add API key</button>
           <form method="post" action="/admin/users/${user.id}/revoke-key"><button class="danger">Revoke all keys</button></form>
         </div>
       </section>
@@ -941,7 +1007,7 @@ router.get('/admin/server', requireAdmin, (req, res) => {
         <p>Last cleanup: ${cleanupStatus.lastRunAt ? escapeHtml(cleanupStatus.lastRunAt) : '<span class="muted">never</span>'}</p>
         <form method="post" action="/admin/server/cleanup-usage" onsubmit="return window.confirm('Clean usage logs older than ' + this.retention_days.value + ' days and compact the SQLite database?');">
           <label>Days to keep</label><input id="cleanup-retention-days" name="retention_days" type="number" min="1" value="${escapeHtml(retentionDays)}">
-          <button class="danger">Clean logs older than <span id="cleanup-retention-label">${escapeHtml(retentionDays)}</span> days</button>
+          <p><button class="danger">Clean logs older than <span id="cleanup-retention-label">${escapeHtml(retentionDays)}</span> days</button></p>
         </form>
       </section>
     </div>

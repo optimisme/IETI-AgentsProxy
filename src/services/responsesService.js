@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const config = require('../config');
 const { apiError } = require('../utils/errors');
 
 const CODEX_BASE_INSTRUCTIONS = `You are a coding agent working in the user's workspace. Be precise, safe, and helpful. Follow the user's instructions and every applicable AGENTS.md file. Use the available tools to inspect and modify the workspace, keep the user informed with concise progress updates before tool calls, and continue until the requested outcome is genuinely complete. Respect the configured sandbox and approval policy. Do not claim that commands, tests, deployments, or external actions succeeded unless you verified them. Prefer focused changes that preserve existing behavior, use apply_patch for file edits, and run relevant tests before reporting completion.`;
@@ -289,7 +290,7 @@ function chatCompletionToResponse(body, payload, estimatedInputTokens = 0) {
 }
 
 function codexModelMetadata({ model, contextWindow, capabilities = {}, priority = 1 }) {
-  const safeContextWindow = Math.max(1024, Number(contextWindow) || 65536);
+  const safeContextWindow = Math.max(1024, Number(contextWindow) || config.defaultModelContextLimit);
   const supportsText = capabilities.text !== false;
   const supportsImage = capabilities.image !== false;
   const supportsTools = capabilities.tools !== false;

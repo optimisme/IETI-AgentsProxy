@@ -98,11 +98,12 @@ test.before(async () => {
   mockBaseUrl = `http://127.0.0.1:${mockServer.address().port}`;
 
   process.env.DATABASE_PATH = path.join(os.tmpdir(), `agents-proxy-test-${Date.now()}.sqlite`);
-  process.env.DEEPSEEK_BASE_URL = mockBaseUrl;
-  process.env.DEEPSEEK_API_KEY = 'test-deepseek-key';
+  process.env.DEFAULT_PROVIDER_BASE_URL = mockBaseUrl;
+  process.env.DEFAULT_PROVIDER_API_KEY = 'test-provider-key';
   process.env.ADMIN_USERNAME = 'admin';
   process.env.ADMIN_PASSWORD = 'secret';
   process.env.SESSION_SECRET = 'test-session-secret-with-enough-length';
+  process.env.PUBLIC_BASE_URL = '';
   process.env.MAX_REQUESTS_PER_MINUTE = '1000';
   process.env.DEFAULT_DAILY_TOKEN_LIMIT = '10000000';
   process.env.DEFAULT_MONTHLY_TOKEN_LIMIT = '100000000';
@@ -611,9 +612,13 @@ test('requested max_tokens is bounded before provider call', async () => {
   assert.equal(res.body.error.code, 'max_tokens_too_large');
 });
 
-test('admin can create user and regenerate key', async () => {
+test('admin can create an enabled user with a shareable invitation link and regenerate a key', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const newUserForm = await agent.get('/admin/users/new').expect(200);
+  assert.match(newUserForm.text, /name="enabled"[^>]*checked/);
+  assert.doesNotMatch(newUserForm.text, /invitation email/i);
+
   const email = `created-${Date.now()}@example.test`;
   const createdPost = await agent.post('/admin/users').type('form').send({
     name: 'Created User',
@@ -625,8 +630,13 @@ test('admin can create user and regenerate key', async () => {
   assert.match(created.text, /\/invite\/ieti_inv_/);
   assert.match(created.text, /Created User/);
   assert.match(created.text, new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(created.text, /Invitation key generated/);
+  assert.match(created.text, /data-copy-invitation-url/);
+  assert.match(created.text, /aria-label="Copy invitation URL"/);
+  assert.match(created.text, /navigator\.clipboard/);
 
   const user = db.prepare('SELECT * FROM users WHERE name = ?').get('Created User');
+  assert.equal(user.enabled, 1);
   assert.ok(user.invite_token_hash);
   const regenerated = await agent.post(`/admin/users/${user.id}/regenerate-key`).expect(200);
   assert.match(regenerated.text, /ieti_sk_/);
@@ -868,9 +878,9 @@ test('admin users list links to edit page only', async () => {
   await agent.get('/admin/users')
     .expect(200)
     .expect(new RegExp(`/admin/users/${student.id}`))
-    .expect(/<th>Group Provider<\/th>/)
     .expect(/status-enabled/)
     .expect((res) => {
+      assert.doesNotMatch(res.text, /<th>Group Provider<\/th>/);
       assert.doesNotMatch(res.text, /<th>Usage<\/th>/);
       assert.doesNotMatch(res.text, /\/stats/);
       assert.doesNotMatch(res.text, />Disable<\/button>/);
@@ -897,9 +907,13 @@ test('admin user edit page separates management and stats', async () => {
     .expect(/Recent usage\/errors/)
     .expect(/Last used/)
     .expect(/Group provider/)
-    .expect(/Are you sure to delete this user\?/)
-    .expect(/>Delete<\/button>/)
+    .expect(new RegExp(`data-open-user-delete-modal="user-delete-modal-${student.id}"`))
+    .expect(new RegExp(`<dialog id="user-delete-modal-${student.id}" class="modal"`))
+    .expect(/<h2[^>]*>Delete user\?<\/h2>/)
+    .expect(/>Delete user<\/button>/)
+    .expect(/<div class="form-actions" data-api-key-actions>/)
     .expect((res) => {
+      assert.doesNotMatch(res.text, /window\.confirm|Are you sure to delete this user\?/);
       assert.doesNotMatch(res.text, /Delete if safe/);
       assert.doesNotMatch(res.text, /By provider/);
       assert.doesNotMatch(res.text, /Total cost/);
@@ -971,7 +985,7 @@ test('admin users list paginates search results', async () => {
   const first = await agent.get(`/admin/users?q=${encodeURIComponent(marker)}`).expect(200);
   assert.match(first.text, /Page 1 of 2\. 30 users\./);
   assert.match(first.text, /Next/);
-  assert.match(first.text, /<th>Group Provider<\/th>/);
+  assert.doesNotMatch(first.text, /<th>Group Provider<\/th>/);
   assert.match(first.text, /status-enabled/);
   assert.match(first.text, /status-disabled/);
   assert.doesNotMatch(first.text, /<th>Usage<\/th>/);
@@ -1607,7 +1621,8 @@ test('user provider access controls api models and opencode download', async () 
   assert.match(dashboard.text, /<h2 id="active-models-heading">Active models<\/h2>/);
   assert.match(dashboard.text, /<summary>\s*<code>group-internal<\/code>/);
   assert.match(dashboard.text, /<dt>Base URL<\/dt><dd><code>https:\/\/portal\.example\.test\/v1<\/code><\/dd>/);
-  assert.match(dashboard.text, /&quot;context&quot;: 32000/);
+  assert.match(dashboard.text, /<dt>Context window<\/dt><dd>32000 tokens<\/dd>/);
+  assert.doesNotMatch(dashboard.text, /OpenCode model entry|Authenticate with an active/);
   assert.doesNotMatch(dashboard.text, /<summary>\s*<code>active-model<\/code>/);
 });
 
@@ -1766,8 +1781,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.match(portal.text, /<dt>Context window<\/dt><dd>131072 tokens<\/dd>/);
   assert.match(portal.text, /<dt>Maximum output<\/dt><dd>16384 tokens<\/dd>/);
   assert.match(portal.text, /@ai-sdk\/openai-compatible/);
-  assert.match(portal.text, /\{file:\.secrets\/agents_server_key\}/);
-  assert.match(portal.text, /&quot;tool_call&quot;: true/);
+  assert.doesNotMatch(portal.text, /OpenCode model entry|Authenticate with an active|model-config-json/);
   assert.ok(portal.text.indexOf('Active models') < portal.text.indexOf('Recent usage'));
   assert.doesNotMatch(portal.text, /run_opencode|PROXY_AGENTS_KEY|Qwen|DeepSeek Harness|install_deepseek_harness|dsh-ieti-agents|Harness plugin/i);
   assert.doesNotMatch(portal.text, /Cost EUR/);
@@ -1934,7 +1948,10 @@ test('student sets password through invite and then logs in with email and passw
   await agent.post(`/invite/${invite.token}`).type('form').send({
     password: 'new-student-password',
     confirm_password: 'new-student-password'
-  }).expect(302);
+  }).expect(302).expect('Location', '/portal');
+
+  await agent.get('/portal').expect(200).expect(/Tokens today/);
+  await agent.post('/portal/logout').expect(302);
 
   await agent.post('/login').type('form').send({
     login: student.email,

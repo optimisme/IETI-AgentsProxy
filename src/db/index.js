@@ -306,7 +306,7 @@ function seedSettings(database) {
   `);
 
   const defaults = {
-    public_base_url: process.env.PUBLIC_BASE_URL || '',
+    public_base_url: config.publicBaseUrl,
     default_daily_token_limit: String(config.defaultDailyTokenLimit),
     default_model_context_limit: String(config.defaultModelContextLimit),
     default_model_output_limit: String(config.defaultModelOutputLimit),
@@ -321,6 +321,16 @@ function seedSettings(database) {
 
   for (const [key, value] of Object.entries(defaults)) {
     insert.run(key, value);
+  }
+
+  // An environment value is deployment configuration and remains authoritative
+  // even when the database was created before PUBLIC_BASE_URL was added.
+  if (config.publicBaseUrl) {
+    database.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES ('public_base_url', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+    `).run(config.publicBaseUrl);
   }
 
   seedDefaultProvider(database);
@@ -340,9 +350,9 @@ function seedDefaultProvider(database) {
     config.defaultProviderSlug,
     config.defaultProviderName,
     'openai-compatible',
-    config.deepseekBaseUrl,
-    config.deepseekApiKey,
-    config.deepseekApiKey ? 1 : 0,
+    config.defaultProviderBaseUrl,
+    config.defaultProviderApiKey,
+    config.defaultProviderApiKey ? 1 : 0,
     200,
     null,
     config.requestTimeoutMs
