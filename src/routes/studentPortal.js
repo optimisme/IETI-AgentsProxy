@@ -9,7 +9,8 @@ const {
   listUserApiKeys,
   hasUserApiKeyName,
   createUserApiKey,
-  revokeUserApiKey
+  revokeUserApiKey,
+  MAX_USER_API_KEYS
 } = require('../services/userApiKeyService');
 const { verifyAdminCredentials } = require('../middleware/authAdmin');
 const { getUsageTotals, recentUsage } = require('../services/usageService');
@@ -631,12 +632,14 @@ router.post('/portal/settings/password', requireStudentSession, (req, res) => {
 router.get('/portal/settings', requireStudentSession, (req, res) => {
   const user = req.portalUser;
   const apiKeys = listUserApiKeys(user.id);
-  const pendingApiKey = req.session.pendingStudentApiKey?.key || '';
+  const canAddApiKey = apiKeys.length < MAX_USER_API_KEYS;
+  const pendingApiKey = canAddApiKey ? (req.session.pendingStudentApiKey?.key || '') : '';
   const keyNameError = req.query.key_error === 'duplicate'
     ? 'That key name is already in use. Choose another name.'
     : req.query.key_error === 'invalid'
       ? `Enter a unique key name with 1-${KEY_NAME_MAX_LENGTH} characters.`
       : '';
+  const apiKeyLimitMessage = `Only ${MAX_USER_API_KEYS} API keys per user are allowed.`;
   const existingKeyNames = JSON.stringify(apiKeys.map((apiKey) => apiKey.name)).replaceAll('<', '\\u003c');
   const apiKeyRows = apiKeys.map((apiKey) => `
     <tr>
@@ -653,12 +656,12 @@ router.get('/portal/settings', requireStudentSession, (req, res) => {
       <h1>Settings</h1>
       ${req.query.created ? '<div class="notice">API key added.</div>' : ''}
       ${req.query.revoked ? '<div class="notice">API key deleted.</div>' : ''}
+      ${req.query.key_error === 'limit' ? `<div class="notice" style="background:#fee;color:#c33">${apiKeyLimitMessage} Delete an existing key before adding another.</div>` : ''}
       ${req.query.name_saved ? '<div class="notice">Name updated.</div>' : ''}
       ${req.query.password_error ? '<div class="notice" style="background:#fee;color:#c33">Current password is incorrect or passwords do not match.</div>' : ''}
       ${req.query.password_saved ? '<div class="notice">Password updated.</div>' : ''}
       <div class="panel" style="margin-top:16px">
         <h2>API keys</h2>
-        <p class="muted">Each key has its own name and can be deleted independently.</p>
         ${apiKeys.length ? `
         <table>
           <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Actions</th></tr></thead>
@@ -666,7 +669,9 @@ router.get('/portal/settings', requireStudentSession, (req, res) => {
         </table>
         ` : '<p class="muted">No API keys configured.</p>'}
         <div class="actions" style="margin-top:16px">
-          <form method="post" action="/portal/key/regenerate"><button type="submit">Add API key</button></form>
+          ${canAddApiKey
+            ? '<form method="post" action="/portal/key/regenerate"><button type="submit">Add API key</button></form>'
+            : `<span class="muted">${apiKeyLimitMessage}</span>`}
         </div>
       </div>
       <dialog id="delete-api-key-modal" class="modal">
@@ -776,6 +781,9 @@ router.get('/portal/settings', requireStudentSession, (req, res) => {
 });
 
 router.post('/portal/key/regenerate', requireStudentSession, (req, res) => {
+  if (listUserApiKeys(req.portalUser.id).length >= MAX_USER_API_KEYS) {
+    return res.status(409).send(`Only ${MAX_USER_API_KEYS} API keys per user are allowed. Delete an existing key before adding another.`);
+  }
   const key = generateStudentKey();
   req.session.pendingStudentApiKey = { key };
   res.redirect('/portal/settings?new_key=1');
@@ -790,6 +798,9 @@ router.post('/portal/key/add', requireStudentSession, (req, res) => {
   try {
     createUserApiKey(req.portalUser.id, name, pending.key);
   } catch (error) {
+    if (error.code === 'max_api_keys') {
+      return res.status(409).send(`${error.message} Delete an existing key before adding another.`);
+    }
     if (String(error.code || '').includes('SQLITE_CONSTRAINT')) {
       return res.redirect('/portal/settings?new_key=1&key_error=duplicate');
     }

@@ -8,7 +8,8 @@ const {
   normalizeApiKeyName,
   createUserApiKey,
   revokeUserApiKey,
-  getAvailableLegacyName
+  getAvailableLegacyName,
+  MAX_USER_API_KEYS
 } = require('../services/userApiKeyService');
 const { createInviteForUser, getActiveInviteForUser } = require('../services/studentAuthService');
 const {
@@ -777,6 +778,8 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
   const activeInvite = getActiveInviteForUser(user.id);
   const activeInviteUrl = activeInvite ? `${getRequestBaseUrl(req)}/invite/${encodeURIComponent(activeInvite.token)}` : '';
   const userApiKeys = listUserApiKeys(user.id);
+  const canAddApiKey = userApiKeys.length < MAX_USER_API_KEYS;
+  const apiKeyLimitMessage = `Only ${MAX_USER_API_KEYS} API keys per user are allowed.`;
   const apiKeyRows = userApiKeys.map((apiKey) => `
     <tr>
       <td>${escapeHtml(apiKey.name)}</td>
@@ -837,11 +840,13 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
       <section class="panel">
         <h2>API keys</h2>
         ${userApiKeys.length ? `<table><thead><tr><th>Name</th><th>Key</th><th>Actions</th></tr></thead><tbody>${apiKeyRows}</tbody></table>` : '<p class="muted">No API keys configured.</p>'}
-        <form id="user-api-key-add-${user.id}" method="post" action="/admin/users/${user.id}/regenerate-key">
-          <input name="key_name" maxlength="80" placeholder="Key name (optional)" aria-label="New API key name">
-        </form>
+        ${canAddApiKey ? `
+          <form id="user-api-key-add-${user.id}" method="post" action="/admin/users/${user.id}/regenerate-key">
+            <input name="key_name" maxlength="80" placeholder="Key name (optional)" aria-label="New API key name">
+          </form>
+        ` : ''}
         <div class="form-actions" data-api-key-actions>
-          <button type="submit" form="user-api-key-add-${user.id}">Add API key</button>
+          ${canAddApiKey ? `<button type="submit" form="user-api-key-add-${user.id}">Add API key</button>` : `<span class="muted">${apiKeyLimitMessage}</span>`}
           <form method="post" action="/admin/users/${user.id}/revoke-key"><button class="danger">Revoke all keys</button></form>
         </div>
       </section>
@@ -902,13 +907,23 @@ router.post('/admin/users/:id/invite', requireAdmin, (req, res) => {
 router.post('/admin/users/:id/regenerate-key', requireAdmin, (req, res) => {
   const user = getDb().prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).send('User not found');
+  if (listUserApiKeys(user.id).length >= MAX_USER_API_KEYS) {
+    return res.status(409).send(`Only ${MAX_USER_API_KEYS} API keys per user are allowed. Delete an existing key before adding another.`);
+  }
   const key = generateStudentKey();
   const requestedName = normalizeApiKeyName(req.body.key_name);
   const name = requestedName || getAvailableLegacyName(user.id);
   if (requestedName && getDb().prepare('SELECT 1 FROM user_api_keys WHERE user_id = ? AND name = ? COLLATE NOCASE').get(user.id, requestedName)) {
     return res.redirect(`/admin/users/${user.id}?key_error=duplicate`);
   }
-  createUserApiKey(user.id, name, key);
+  try {
+    createUserApiKey(user.id, name, key);
+  } catch (error) {
+    if (error.code === 'max_api_keys') {
+      return res.status(409).send(`${error.message} Delete an existing key before adding another.`);
+    }
+    throw error;
+  }
   render(req, res, 'user-detail', {
     title: 'New API Key',
     flash: flash('Copy this API key now. It will not be shown again.'),

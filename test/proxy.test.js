@@ -1883,6 +1883,7 @@ test('student can create multiple named api keys and delete one from settings', 
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const settingsBefore = await agent.get('/portal/settings').expect(200);
   assert.match(settingsBefore.text, /API keys/);
+  assert.doesNotMatch(settingsBefore.text, /Each key has its own name and can be deleted independently\./);
   assert.match(settingsBefore.text, />Default</);
   assert.match(settingsBefore.text, /delete-api-key-modal/);
   assert.match(settingsBefore.text, /delete-api-key-confirm-form/);
@@ -1937,6 +1938,49 @@ test('student can create multiple named api keys and delete one from settings', 
 
   const dashboard = await agent.get('/portal').expect(200);
   assert.doesNotMatch(dashboard.text, /api-key-modal/);
+});
+
+test('student is limited to five api keys and sees the limit in settings', async () => {
+  const student = createStudent();
+  const agent = request.agent(app);
+
+  await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+
+  for (let index = 1; index <= 4; index += 1) {
+    await agent.post('/portal/key/regenerate').expect(302).expect('Location', '/portal/settings?new_key=1');
+    await agent.post('/portal/key/add')
+      .type('form')
+      .send({ key_name: `Key ${index}` })
+      .expect(302)
+      .expect('Location', '/portal/settings?created=1');
+  }
+
+  const settings = await agent.get('/portal/settings').expect(200);
+  assert.match(settings.text, /Only 5 API keys per user are allowed\./);
+  assert.doesNotMatch(settings.text, /action="\/portal\/key\/regenerate"/);
+
+  await agent.post('/portal/key/regenerate')
+    .expect(409)
+    .expect(/Only 5 API keys per user are allowed\./);
+});
+
+test('admin is limited to five api keys and sees the limit in the user page', async () => {
+  const student = createStudent();
+  const { createUserApiKey } = require('../src/services/userApiKeyService');
+  for (let index = 1; index <= 4; index += 1) {
+    createUserApiKey(student.id, `Admin key ${index}`);
+  }
+
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+
+  const userPage = await agent.get(`/admin/users/${student.id}`).expect(200);
+  assert.match(userPage.text, /Only 5 API keys per user are allowed\./);
+  assert.doesNotMatch(userPage.text, /Add API key/);
+
+  await agent.post(`/admin/users/${student.id}/regenerate-key`)
+    .expect(409)
+    .expect(/Only 5 API keys per user are allowed\./);
 });
 
 test('student sets password through invite and then logs in with email and password', async () => {

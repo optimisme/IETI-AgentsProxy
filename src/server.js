@@ -6,5 +6,5 @@ getDb();
 
 const app = createApp();
 app.listen(config.port, () => {
-  console.log(`IETI Agents DeepSeek proxy listening on http://localhost:${config.port}`);
+  console.log(`IETI Agents proxy listening on http://localhost:${config.port}`);
 });

@@ -2,6 +2,14 @@ const { getDb } = require('../db');
 const { generateStudentKey, hashApiKey, lookupHashApiKey, keyPrefixSuffix } = require('./keyService');
 
 const KEY_NAME_MAX_LENGTH = 80;
+const MAX_USER_API_KEYS = 5;
+
+function apiKeyLimitError() {
+  const error = new Error(`Only ${MAX_USER_API_KEYS} API keys per user are allowed.`);
+  error.code = 'max_api_keys';
+  error.statusCode = 409;
+  return error;
+}
 
 function normalizeApiKeyName(value) {
   const name = String(value ?? '').trim();
@@ -28,18 +36,25 @@ function createUserApiKey(userId, name, apiKey = generateStudentKey()) {
   const normalizedName = normalizeApiKeyName(name);
   if (!normalizedName) throw new Error('Invalid API key name.');
   const { prefix, suffix } = keyPrefixSuffix(apiKey);
-  const result = getDb().prepare(`
-    INSERT INTO user_api_keys
-      (user_id, name, api_key_hash, api_key_lookup_hash, api_key_prefix, api_key_suffix)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    userId,
-    normalizedName,
-    hashApiKey(apiKey),
-    lookupHashApiKey(apiKey),
-    prefix,
-    suffix
-  );
+  const db = getDb();
+  migrateLegacyUserKey(db, userId);
+  const insert = db.transaction(() => {
+    const count = db.prepare('SELECT COUNT(*) AS count FROM user_api_keys WHERE user_id = ?').get(userId).count;
+    if (count >= MAX_USER_API_KEYS) throw apiKeyLimitError();
+    return db.prepare(`
+      INSERT INTO user_api_keys
+        (user_id, name, api_key_hash, api_key_lookup_hash, api_key_prefix, api_key_suffix)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      userId,
+      normalizedName,
+      hashApiKey(apiKey),
+      lookupHashApiKey(apiKey),
+      prefix,
+      suffix
+    );
+  });
+  const result = insert();
   return { id: result.lastInsertRowid, name: normalizedName, key: apiKey, prefix, suffix };
 }
 
@@ -90,6 +105,7 @@ function getAvailableLegacyName(userId, prefix = 'Admin key') {
 
 module.exports = {
   KEY_NAME_MAX_LENGTH,
+  MAX_USER_API_KEYS,
   normalizeApiKeyName,
   listUserApiKeys,
   hasUserApiKeyName,
