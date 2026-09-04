@@ -104,13 +104,15 @@ function getActiveInviteForUser(userId) {
 }
 
 function setPasswordFromInvite(userId, password) {
+  const passwordChangedAt = new Date().toISOString();
   getDb().prepare(`
     UPDATE users
-    SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, invite_used_at = CURRENT_TIMESTAMP,
+    SET password_hash = ?, password_changed_at = ?, invite_used_at = CURRENT_TIMESTAMP,
         invite_token_hash = NULL, invite_token_nonce = NULL, invite_expires_at = NULL, failed_login_count = 0, locked_until = NULL,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(hashPassword(password), userId);
+  `).run(hashPassword(password), passwordChangedAt, userId);
+  return passwordChangedAt;
 }
 
 function findUserForLogin(email) {

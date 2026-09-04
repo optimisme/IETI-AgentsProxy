@@ -642,6 +642,63 @@ test('admin can create an enabled user with a shareable invitation link and rege
   assert.match(regenerated.text, /ieti_sk_/);
 });
 
+test('admin user creation and editing roll back when a later database step fails', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const groupId = db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id;
+  const createEmail = `atomic-create-${Date.now()}@example.test`;
+
+  db.exec(`
+    CREATE TEMP TRIGGER fail_atomic_user_invite
+    BEFORE UPDATE OF invite_token_hash ON users
+    BEGIN
+      SELECT RAISE(ABORT, 'forced invite failure');
+    END
+  `);
+  try {
+    await agent.post('/admin/users').type('form').send({
+      name: 'Atomic Create User',
+      email: createEmail,
+      enabled: '1',
+      group_id: String(groupId)
+    }).expect(500);
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_atomic_user_invite');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?').get(createEmail).count, 0);
+
+  const student = createStudent();
+  const originalUser = db.prepare('SELECT name, email, enabled FROM users WHERE id = ?').get(student.id);
+  const originalGroupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  const replacementGroup = db.prepare(`
+    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, NULL, NULL, NULL, NULL, NULL)
+  `).run(`Atomic Replacement Group ${Date.now()} ${Math.random()}`);
+
+  db.exec(`
+    CREATE TEMP TRIGGER fail_atomic_user_group
+    BEFORE INSERT ON user_groups
+    BEGIN
+      SELECT RAISE(ABORT, 'forced group assignment failure');
+    END
+  `);
+  try {
+    await agent.post(`/admin/users/${student.id}`).type('form').send({
+      name: 'Partially Updated Name',
+      email: `atomic-edit-${Date.now()}@example.test`,
+      enabled: '1',
+      group_id: String(replacementGroup.lastInsertRowid)
+    }).expect(500);
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_atomic_user_group');
+  }
+
+  const unchangedUser = db.prepare('SELECT name, email, enabled FROM users WHERE id = ?').get(student.id);
+  const unchangedGroupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  assert.deepEqual(unchangedUser, originalUser);
+  assert.equal(unchangedGroupId, originalGroupId);
+});
+
 test('admin form validation rejects invalid writes', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
@@ -2005,6 +2062,66 @@ test('student sets password through invite and then logs in with email and passw
 
   const reused = await request(app).get(`/invite/${invite.token}`).expect(200);
   assert.match(reused.text, /invalid or expired/);
+});
+
+test('student password changes show feedback and invalidate older portal sessions', async () => {
+  const student = createStudent();
+  const currentAgent = request.agent(app);
+  const olderAgent = request.agent(app);
+
+  await currentAgent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  await olderAgent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+
+  await currentAgent.post('/portal/settings/name').type('form').send({
+    name: 'Updated Student Name'
+  }).expect(302).expect('Location', '/portal/settings?name_saved=1');
+  await currentAgent.get('/portal/settings?name_saved=1').expect(200).expect(/Name updated/).expect(/Updated Student Name/);
+
+  await currentAgent.post('/portal/settings/password').type('form').send({
+    current_password: 'incorrect-password',
+    new_password: 'updated-student-password',
+    confirm_password: 'updated-student-password'
+  }).expect(302).expect('Location', '/portal/settings?password_error=1');
+  await currentAgent.get('/portal/settings?password_error=1').expect(200).expect(/Current password is incorrect/);
+
+  await currentAgent.post('/portal/settings/password').type('form').send({
+    current_password: student.password,
+    new_password: 'updated-student-password',
+    confirm_password: 'updated-student-password'
+  }).expect(302).expect('Location', '/portal/settings?password_saved=1');
+  await currentAgent.get('/portal/settings?password_saved=1').expect(200).expect(/Password updated/);
+
+  await olderAgent.get('/portal')
+    .expect(302)
+    .expect('Location', '/?error=session_expired');
+  await olderAgent.get('/?error=session_expired').expect(200).expect(/session was signed out/);
+
+  await request(app).post('/login').type('form').send({
+    login: student.email,
+    password: student.password
+  }).expect(302).expect('Location', '/?error=invalid');
+  await request(app).post('/login').type('form').send({
+    login: student.email,
+    password: 'updated-student-password'
+  }).expect(302).expect('Location', '/portal');
+});
+
+test('password reset invites invalidate existing portal sessions', async () => {
+  const student = createStudent();
+  const olderAgent = request.agent(app);
+  const resetAgent = request.agent(app);
+  const invite = studentAuthService.createInviteForUser(student.id);
+
+  await olderAgent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  await resetAgent.post(`/invite/${invite.token}`).type('form').send({
+    password: 'reset-student-password',
+    confirm_password: 'reset-student-password'
+  }).expect(302).expect('Location', '/portal');
+
+  await resetAgent.get('/portal').expect(200).expect(/Tokens today/);
+  await olderAgent.get('/portal')
+    .expect(302)
+    .expect('Location', '/?error=session_expired');
 });
 
 test('admin can regenerate password invite links for lost passwords', async () => {

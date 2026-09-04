@@ -652,19 +652,25 @@ router.get('/admin/users/new', requireAdmin, (req, res) => {
 
 router.post('/admin/users', requireAdmin, (req, res) => {
   const form = parseUserForm(req.body);
-  const result = getDb().prepare(`
-    INSERT INTO users (name, email, api_key_hash, enabled, role)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
-    form.name,
-    form.email,
-    null,
-    form.enabled,
-    'student'
-  );
-  setUserGroups(result.lastInsertRowid, [form.groupId]);
-  createInviteForUser(result.lastInsertRowid);
-  res.redirect(`/admin/users/${result.lastInsertRowid}?created=1&invite_created=1`);
+  const db = getDb();
+  const createUser = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO users (name, email, api_key_hash, enabled, role)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      form.name,
+      form.email,
+      null,
+      form.enabled,
+      'student'
+    );
+    const userId = result.lastInsertRowid;
+    setUserGroups(userId, [form.groupId]);
+    createInviteForUser(userId);
+    return userId;
+  });
+  const userId = createUser();
+  res.redirect(`/admin/users/${userId}?created=1&invite_created=1`);
 });
 
 router.get('/admin/groups', requireAdmin, (req, res) => {
@@ -883,17 +889,22 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
 
 router.post('/admin/users/:id', requireAdmin, (req, res) => {
   const form = parseUserForm(req.body);
-  getDb().prepare(`
-    UPDATE users
-    SET name = ?, email = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    form.name,
-    form.email,
-    form.enabled,
-    req.params.id
-  );
-  setUserGroups(req.params.id, [form.groupId]);
+  const db = getDb();
+  const updateUser = db.transaction(() => {
+    const result = db.prepare(`
+      UPDATE users
+      SET name = ?, email = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      form.name,
+      form.email,
+      form.enabled,
+      req.params.id
+    );
+    if (!result.changes) throw apiError(404, 'user_not_found', 'User not found.');
+    setUserGroups(req.params.id, [form.groupId]);
+  });
+  updateUser();
   res.redirect(`/admin/users/${req.params.id}`);
 });
 

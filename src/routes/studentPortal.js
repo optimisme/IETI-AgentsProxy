@@ -319,6 +319,11 @@ function usageLimitCards(group, usage) {
   return quotaLimitCards(group, usage);
 }
 
+function setStudentSession(req, userId, passwordChangedAt) {
+  req.session.studentUserId = userId;
+  req.session.studentPasswordChangedAt = passwordChangedAt || null;
+}
+
 function requireStudentSession(req, res, next) {
   const userId = req.session?.studentUserId;
   if (!userId) return res.redirect('/');
@@ -326,6 +331,9 @@ function requireStudentSession(req, res, next) {
   if (!user || !user.enabled) {
     req.session.studentUserId = null;
     return res.redirect('/?error=disabled');
+  }
+  if ((req.session.studentPasswordChangedAt ?? null) !== (user.password_changed_at ?? null)) {
+    return req.session.destroy(() => res.redirect('/?error=session_expired'));
   }
   req.portalUser = user;
   next();
@@ -342,6 +350,8 @@ router.get('/', (req, res) => {
         ? 'Set your password from the invite link before logging in.'
         : req.query.error === 'locked'
         ? 'Too many failed attempts. Try again later or ask the admin for a new invite link.'
+          : req.query.error === 'session_expired'
+            ? 'Your password changed, so this session was signed out. Log in with your new password.'
           : req.query.ready
             ? 'Password set. You can now log in.'
       : '';
@@ -389,7 +399,7 @@ function handleLogin(req, res) {
 
   req.session.regenerate((error) => {
     if (error) return res.status(500).send('Could not create session.');
-    req.session.studentUserId = user.id;
+    setStudentSession(req, user.id, user.password_changed_at);
     res.redirect('/portal');
   });
 }
@@ -458,10 +468,10 @@ router.post('/invite/:token', (req, res) => {
     });
   }
 
-  setPasswordFromInvite(user.id, password);
+  const passwordChangedAt = setPasswordFromInvite(user.id, password);
   req.session.regenerate((error) => {
     if (error) return res.status(500).send('Password saved, but the session could not be created. Log in with your new password.');
-    req.session.studentUserId = user.id;
+    setStudentSession(req, user.id, passwordChangedAt);
     res.redirect('/portal');
   });
 });
@@ -612,9 +622,9 @@ router.get('/portal', requireStudentSession, (req, res) => {
 
 router.post('/portal/settings/name', requireStudentSession, (req, res) => {
   const name = String(req.body.name || '').trim();
-  if (!name) return res.redirect('/portal');
+  if (!name) return res.redirect('/portal/settings');
   getDb().prepare('UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(name, req.portalUser.id);
-  res.redirect('/portal?name_saved=1');
+  res.redirect('/portal/settings?name_saved=1');
 });
 
 router.post('/portal/settings/password', requireStudentSession, (req, res) => {
@@ -623,10 +633,14 @@ router.post('/portal/settings/password', requireStudentSession, (req, res) => {
   const newPassword = String(req.body.new_password || '');
   const confirmPassword = String(req.body.confirm_password || '');
   if (!user.password_hash || !verifyPassword(currentPassword, user.password_hash) || newPassword.length < 10 || newPassword !== confirmPassword) {
-    return res.redirect('/portal?password_error=1');
+    return res.redirect('/portal/settings?password_error=1');
   }
-  setPasswordFromInvite(user.id, newPassword);
-  res.redirect('/portal?password_saved=1');
+  const passwordChangedAt = setPasswordFromInvite(user.id, newPassword);
+  req.session.regenerate((error) => {
+    if (error) return res.status(500).send('Password saved, but the session could not be renewed. Log in with your new password.');
+    setStudentSession(req, user.id, passwordChangedAt);
+    res.redirect('/portal/settings?password_saved=1');
+  });
 });
 
 router.get('/portal/settings', requireStudentSession, (req, res) => {
@@ -658,7 +672,7 @@ router.get('/portal/settings', requireStudentSession, (req, res) => {
       ${req.query.revoked ? '<div class="notice">API key deleted.</div>' : ''}
       ${req.query.key_error === 'limit' ? `<div class="notice" style="background:#fee;color:#c33">${apiKeyLimitMessage} Delete an existing key before adding another.</div>` : ''}
       ${req.query.name_saved ? '<div class="notice">Name updated.</div>' : ''}
-      ${req.query.password_error ? '<div class="notice" style="background:#fee;color:#c33">Current password is incorrect or passwords do not match.</div>' : ''}
+      ${req.query.password_error ? '<div class="notice" style="background:#fee;color:#c33">Current password is incorrect, the new password is shorter than 10 characters, or the passwords do not match.</div>' : ''}
       ${req.query.password_saved ? '<div class="notice">Password updated.</div>' : ''}
       <div class="panel" style="margin-top:16px">
         <h2>API keys</h2>
