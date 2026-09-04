@@ -63,6 +63,7 @@ const {
 } = require('../utils/validation');
 
 const router = express.Router();
+const USER_ROLES = ['student', 'teacher'];
 
 function render(req, res, view, { title, content = '', flash = '' } = {}) {
   const pendingUsers = req.session?.adminAuthenticated
@@ -162,12 +163,21 @@ function validProviderIds(value) {
   return ids;
 }
 
-function parseUserForm(body) {
+function parseUserRole(value, fallback = 'student') {
+  const role = String(value || fallback).trim().toLowerCase();
+  if (!USER_ROLES.includes(role)) {
+    throw apiError(400, 'invalid_form', `Role must be one of: ${USER_ROLES.join(', ')}.`);
+  }
+  return role;
+}
+
+function parseUserForm(body, { defaultRole = 'student' } = {}) {
   return {
     name: requiredText(body.name, 'Name', { max: 160 }),
     email: validateEmail(body.email),
     groupId: requireGroupId(body.group_id),
-    enabled: body.enabled ? 1 : 0
+    enabled: body.enabled ? 1 : 0,
+    role: parseUserRole(body.role, defaultRole)
   };
 }
 
@@ -367,12 +377,16 @@ function userForm(user = {}, action = '/admin/users') {
   const removable = user.id ? countUsage(user.id) === 0 : true;
   const enabled = user.enabled === undefined ? true : Boolean(user.enabled);
   const registrationStatus = user.registration_status || 'approved';
+  const selectedRole = USER_ROLES.includes(user.role) ? user.role : 'student';
   return `
     <div class="panel">
       ${user.id ? `<p><strong>Registration status:</strong> ${escapeHtml(registrationStatus)}</p>` : ''}
       <form id="${formId}" method="post" action="${action}">
         <label>Name</label><input name="name" value="${escapeHtml(user.name)}" required>
         <label>Email</label><input name="email" type="email" value="${escapeHtml(user.email)}" required>
+        <label>Role</label><select name="role" required>
+          ${USER_ROLES.map((role) => `<option value="${role}" ${role === selectedRole ? 'selected' : ''}>${escapeHtml(role)}</option>`).join('')}
+        </select>
         <label>Group</label><select name="group_id" required><option value="">Choose one group</option>${groupOptions(selectedGroupId)}</select>
         <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${enabled ? 'checked' : ''}> Enabled</label>
       </form>
@@ -639,6 +653,7 @@ router.get('/admin/users', requireAdmin, (req, res) => {
     <tr>
       <td><a href="/admin/users/${user.id}">${escapeHtml(user.name)}</a></td>
       <td>${escapeHtml(user.email)}</td>
+      <td>${escapeHtml(user.role)}</td>
       <td>${escapeHtml(user.group_name || '') || '<span class="muted">none</span>'}</td>
       <td><span class="${user.enabled && user.registration_status === 'approved' ? 'status-enabled' : 'status-disabled'}">${escapeHtml(user.registration_status)}${user.enabled ? '' : ' · disabled'}</span></td>
       <td>${user.last_used_at ? escapeHtml(user.last_used_at) : '<span class="muted">never</span>'}</td>
@@ -668,7 +683,7 @@ router.get('/admin/users', requireAdmin, (req, res) => {
       </select>
       <p><button>Search</button> <a class="button secondary" href="/admin/users">Clear</a></p>
     </form>
-    <table><thead><tr><th>Name</th><th>Email</th><th>Group</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No users found.</td></tr>'}</tbody></table>
+    <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Group</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="muted">No users found.</td></tr>'}</tbody></table>
     ${pagination}
   `;
   render(req, res, 'users', { title: 'Users', content, flash: flash(req.query.created ? 'User created.' : '') });
@@ -740,7 +755,7 @@ router.post('/admin/users', requireAdmin, (req, res) => {
       form.email,
       null,
       form.enabled,
-      'student'
+      form.role
     );
     const userId = result.lastInsertRowid;
     setUserGroups(userId, [form.groupId]);
@@ -973,21 +988,22 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
 });
 
 router.post('/admin/users/:id', requireAdmin, (req, res) => {
-  const form = parseUserForm(req.body);
   const db = getDb();
   const updateUser = db.transaction(() => {
     const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!existing) throw apiError(404, 'user_not_found', 'User not found.');
+    const form = parseUserForm(req.body, { defaultRole: existing.role });
     const nextStatus = existing.registration_status === 'pending' ? 'approved' : existing.registration_status;
     const invalidateSessions = existing.enabled && !form.enabled ? 1 : 0;
     const result = db.prepare(`
       UPDATE users
-      SET name = ?, email = ?, enabled = ?, registration_status = ?,
+      SET name = ?, email = ?, role = ?, enabled = ?, registration_status = ?,
           auth_version = auth_version + ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       form.name,
       form.email,
+      form.role,
       form.enabled,
       nextStatus,
       invalidateSessions,
@@ -1001,7 +1017,7 @@ router.post('/admin/users/:id', requireAdmin, (req, res) => {
         userId: existing.id,
         email: form.email,
         actor: config.adminUsername,
-        details: { groupId: form.groupId }
+        details: { groupId: form.groupId, role: form.role }
       });
     }
   });

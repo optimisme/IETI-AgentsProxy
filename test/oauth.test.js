@@ -62,11 +62,11 @@ function createFakeOAuthService() {
   };
 }
 
-function createApprovedStudent(email, { withInvite = false } = {}) {
+function createApprovedStudent(email, { withInvite = false, role = 'student' } = {}) {
   const result = db.prepare(`
     INSERT INTO users (name, email, enabled, role, registration_status, password_hash)
-    VALUES ('Existing Student', ?, 1, 'student', 'approved', ?)
-  `).run(email, hashPassword('existing-password-123'));
+    VALUES ('Existing Student', ?, 1, ?, 'approved', ?)
+  `).run(email, role, hashPassword('existing-password-123'));
   const groupId = db.prepare('SELECT id FROM groups ORDER BY id LIMIT 1').get().id;
   db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(result.lastInsertRowid, groupId);
   if (withInvite) createInviteForUser(result.lastInsertRowid);
@@ -172,6 +172,22 @@ test('OAuth links an existing verified email without duplication and invalidates
   await agent.get('/portal').expect(200).expect(/OpenCode configuration/);
 });
 
+test('OAuth links and logs in an approved teacher account', async () => {
+  const fakeOAuthService = createFakeOAuthService();
+  const app = createApp({ googleOAuthService: fakeOAuthService });
+  const agent = request.agent(app);
+  const profile = googleProfile();
+  const teacher = createApprovedStudent(profile.email, { role: 'teacher' });
+
+  const response = await oauthLogin(agent, fakeOAuthService, profile);
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.location, '/portal');
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(teacher.id);
+  assert.equal(user.role, 'teacher');
+  assert.equal(db.prepare('SELECT user_id FROM user_identities WHERE provider = ? AND subject = ?').get('google', profile.subject).user_id, teacher.id);
+  await agent.get('/portal').expect(200).expect(/OpenCode configuration/);
+});
+
 test('OAuth auto-registration creates a restricted pending user that becomes active after group assignment', async () => {
   const fakeOAuthService = createFakeOAuthService();
   const app = createApp({ googleOAuthService: fakeOAuthService });
@@ -205,10 +221,13 @@ test('OAuth auto-registration creates a restricted pending user that becomes act
   await admin.post(`/admin/users/${user.id}`).type('form').send({
     name: user.name,
     email: user.email,
+    role: 'teacher',
     group_id: String(groupId),
     enabled: '1'
   }).expect(302);
-  assert.equal(db.prepare('SELECT registration_status FROM users WHERE id = ?').get(user.id).registration_status, 'approved');
+  const approved = db.prepare('SELECT registration_status, role FROM users WHERE id = ?').get(user.id);
+  assert.equal(approved.registration_status, 'approved');
+  assert.equal(approved.role, 'teacher');
   await agent.get('/portal').expect(200).expect(/OpenCode configuration/);
 });
 

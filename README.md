@@ -191,7 +191,7 @@ Valors principals:
 - `PROXY_AGENTS_BASE_URL`: URL base de l'API, normalment acabada en `/v1`, que els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` accepten com a override quan s'executen. No s'ha de confondre amb `PUBLIC_BASE_URL`, que identifica l'aplicacio web i construeix els enllaços d'invitacio.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`: credencials d'administracio.
 - `SESSION_SECRET`: secret de sessio Express. Ha de ser llarg i aleatori.
-- `GOOGLE_OAUTH_ENABLED`: activa l'inici de sessio Google OpenID Connect per als estudiants.
+- `GOOGLE_OAUTH_ENABLED`: activa l'inici de sessio Google OpenID Connect per als usuaris.
 - `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`: credencials d'un client OAuth de tipus **Web application**.
 - `GOOGLE_OAUTH_ALLOWED_DOMAINS`: dominis Google Workspace admesos, separats per comes. El valor unic `*` admet qualsevol compte Google amb correu verificat.
 - `GOOGLE_OAUTH_AUTO_REGISTER`: crea com a pendent un estudiant OAuth desconegut; no rep grup, models ni claus fins que l'administrador l'aprova.
@@ -218,6 +218,8 @@ https://your-public-domain.example/auth/google/callback
 La URI es deriva de `PUBLIC_BASE_URL`, que ha de ser HTTPS en produccio. El servidor demana nomes els scopes `openid email profile`, valida `state`, `nonce`, PKCE, signatura, audiencia, correu verificat i el claim `hd` dels dominis configurats. No desa access tokens ni refresh tokens de Google.
 
 Si el correu verificat ja existeix, la identitat Google s'enllaca al mateix usuari sense crear duplicats i qualsevol invitacio pendent queda invalidada. Si no existeix i `GOOGLE_OAUTH_AUTO_REGISTER=true`, es crea un usuari pendent sense grup ni clau. El portal mostra que el compte espera aprovacio fins que l'administrador selecciona **Assign group and approve**.
+
+El rol d'usuari (`student` o `teacher`) es tria des de l'administracio en crear o editar un compte, inclosa l'aprovacio d'un registre OAuth pendent. El rol no limita l'inici de sessio Google: qualsevol compte existent, habilitat i aprovat pot enllacar la seva identitat. Els registres OAuth desconeguts es creen inicialment com a `student` pendent fins que l'administrador n'assigna el rol i el grup.
 
 Si Google recrea un compte institucional amb el mateix correu i un `sub` diferent, la peticio apareix a **OAuth reviews**. L'administrador pot conservar tot el compte i substituir-ne la identitat, reiniciar-lo com un usuari pendent nou, o rebutjar la peticio. El reinici elimina claus, configuracio, converses i missatges; els registres d'us queden anonimitzats.
 

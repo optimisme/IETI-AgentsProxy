@@ -617,12 +617,15 @@ test('admin can create an enabled user with a shareable invitation link and rege
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const newUserForm = await agent.get('/admin/users/new').expect(200);
   assert.match(newUserForm.text, /name="enabled"[^>]*checked/);
+  assert.match(newUserForm.text, /name="role"/);
+  assert.match(newUserForm.text, /option value="teacher"/);
   assert.doesNotMatch(newUserForm.text, /invitation email/i);
 
   const email = `created-${Date.now()}@example.test`;
   const createdPost = await agent.post('/admin/users').type('form').send({
     name: 'Created User',
     email,
+    role: 'teacher',
     enabled: '1',
     group_id: String(db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id)
   }).expect(302);
@@ -637,7 +640,17 @@ test('admin can create an enabled user with a shareable invitation link and rege
 
   const user = db.prepare('SELECT * FROM users WHERE name = ?').get('Created User');
   assert.equal(user.enabled, 1);
+  assert.equal(user.role, 'teacher');
   assert.ok(user.invite_token_hash);
+  const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(user.id).group_id;
+  await agent.post(`/admin/users/${user.id}`).type('form').send({
+    name: user.name,
+    email: user.email,
+    role: 'student',
+    enabled: '1',
+    group_id: String(groupId)
+  }).expect(302);
+  assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').get(user.id).role, 'student');
   const regenerated = await agent.post(`/admin/users/${user.id}/regenerate-key`).expect(200);
   assert.match(regenerated.text, /ieti_sk_/);
 });
@@ -713,6 +726,17 @@ test('admin form validation rejects invalid writes', async () => {
   }).expect(400);
   assert.equal(badUser.body.error.code, 'invalid_form');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?').get(badEmail).count, 0);
+
+  const badRoleEmail = `bad-role-${Date.now()}@example.test`;
+  const badRole = await agent.post('/admin/users').type('form').send({
+    name: 'Invalid Role',
+    email: badRoleEmail,
+    role: 'admin',
+    enabled: '1',
+    group_id: String(groupId)
+  }).expect(400);
+  assert.equal(badRole.body.error.code, 'invalid_form');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?').get(badRoleEmail).count, 0);
 
   const badProvider = await agent.post('/admin/providers').type('form').send({
     slug: 'bad-provider',

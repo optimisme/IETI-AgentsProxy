@@ -67,7 +67,7 @@ function resolveGoogleSignIn(profile) {
         SET last_email = ?, hosted_domain = ?, last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
         WHERE provider = ? AND subject = ?
       `).run(profile.email, profile.hostedDomain, profile.provider, profile.subject);
-      if (!linked.enabled || linked.registration_status === 'rejected' || linked.role !== 'student') {
+      if (!linked.enabled || linked.registration_status === 'rejected') {
         return { kind: 'denied' };
       }
       return { kind: 'login', user: linked };
@@ -75,7 +75,7 @@ function resolveGoogleSignIn(profile) {
 
     const user = db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(profile.email);
     if (user) {
-      if (!user.enabled || user.registration_status === 'rejected' || user.role !== 'student') return { kind: 'denied' };
+      if (!user.enabled || user.registration_status === 'rejected') return { kind: 'denied' };
       const currentIdentity = db.prepare(`
         SELECT * FROM user_identities WHERE user_id = ? AND provider = ?
       `).get(user.id, profile.provider);
