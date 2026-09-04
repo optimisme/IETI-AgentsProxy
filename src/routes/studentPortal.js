@@ -298,12 +298,13 @@ function render(req, res, { title = 'User Portal', content = '', message = '' })
       : '';
   const isAdmin = !!req.session?.adminAuthenticated;
   const isStudent = !!req.session?.studentUserId;
+  const isApprovedStudent = isStudent && req.portalUser?.registration_status === 'approved';
   const isLoggedIn = isAdmin || isStudent;
   const nav = `
     <header>
       <strong>IETI Agents</strong>
       ${isLoggedIn ? '<a href="/">Dashboard</a>' : ''}
-      ${isStudent ? '<a href="/portal/settings">Settings</a>' : ''}
+      ${isApprovedStudent ? '<a href="/portal/settings">Settings</a>' : ''}
       ${isAdmin ? '<a href="/admin">Admin</a>' : ''}
       ${logout}
     </header>
@@ -320,8 +321,10 @@ function usageLimitCards(group, usage) {
 }
 
 function setStudentSession(req, userId, passwordChangedAt) {
+  const user = getDb().prepare('SELECT auth_version FROM users WHERE id = ?').get(userId);
   req.session.studentUserId = userId;
   req.session.studentPasswordChangedAt = passwordChangedAt || null;
+  req.session.studentAuthVersion = Number(user?.auth_version || 0);
 }
 
 function requireStudentSession(req, res, next) {
@@ -332,11 +335,27 @@ function requireStudentSession(req, res, next) {
     req.session.studentUserId = null;
     return res.redirect('/?error=disabled');
   }
+  if (user.registration_status === 'rejected') {
+    return req.session.destroy(() => res.redirect('/?error=disabled'));
+  }
   if ((req.session.studentPasswordChangedAt ?? null) !== (user.password_changed_at ?? null)) {
+    return req.session.destroy(() => res.redirect('/?error=session_expired'));
+  }
+  const authVersion = Number(user.auth_version || 0);
+  if (req.session.studentAuthVersion === undefined) {
+    req.session.studentAuthVersion = authVersion;
+  } else if (Number(req.session.studentAuthVersion) !== authVersion) {
     return req.session.destroy(() => res.redirect('/?error=session_expired'));
   }
   req.portalUser = user;
   next();
+}
+
+function requireApprovedStudentSession(req, res, next) {
+  requireStudentSession(req, res, () => {
+    if (req.portalUser.registration_status !== 'approved' || !getUserGroup(req.portalUser.id)) return res.redirect('/portal');
+    next();
+  });
 }
 
 router.get('/', (req, res) => {
@@ -351,7 +370,13 @@ router.get('/', (req, res) => {
         : req.query.error === 'locked'
         ? 'Too many failed attempts. Try again later or ask the admin for a new invite link.'
           : req.query.error === 'session_expired'
-            ? 'Your password changed, so this session was signed out. Log in with your new password.'
+            ? 'Your account security settings changed, so this session was signed out. Log in again.'
+          : req.query.error === 'oauth_denied'
+            ? 'Google sign-in was cancelled or this account is not allowed.'
+          : req.query.error === 'oauth_expired'
+            ? 'The Google sign-in request expired. Please try again.'
+          : req.query.error === 'oauth_invalid'
+            ? 'Google sign-in could not be verified. Please try again.'
           : req.query.ready
             ? 'Password set. You can now log in.'
       : '';
@@ -370,6 +395,12 @@ router.get('/', (req, res) => {
         </div>
         <p><button type="submit">Log in</button></p>
       </form>
+      ${config.googleOAuthEnabled ? `
+        <div class="panel" style="max-width:520px;margin-top:16px;text-align:center">
+          <p class="muted">Or use your institutional Google account</p>
+          <a class="button" href="/auth/google">Continue with Google</a>
+        </div>
+      ` : ''}
     `
   });
 });
@@ -388,7 +419,7 @@ function handleLogin(req, res) {
 
   const email = login;
   const user = findUserForLogin(email);
-  if (!user || !user.enabled) return res.redirect('/?error=invalid');
+  if (!user || !user.enabled || user.registration_status === 'rejected') return res.redirect('/?error=invalid');
   if (!user.password_hash) return res.redirect('/?error=setup');
   if (isLocked(user)) return res.redirect('/?error=locked');
   if (!verifyPassword(password, user.password_hash)) {
@@ -478,6 +509,23 @@ router.post('/invite/:token', (req, res) => {
 
 router.get('/portal', requireStudentSession, (req, res) => {
   const user = req.portalUser;
+  if (user.registration_status === 'pending' || !getUserGroup(user.id)) {
+    res.set('Cache-Control', 'no-store');
+    return render(req, res, {
+      title: 'Account awaiting approval',
+      content: `
+        <div class="panel" style="max-width:680px;margin:0 auto">
+          <h1>Account awaiting approval</h1>
+          <p class="muted">${escapeHtml(user.email)}</p>
+          <p>Your Google account was verified successfully. An administrator must assign your account to a course group before you can use IETI Agents. You do not need to register or sign in again. Return later and refresh this page, or contact your course administrator if your account remains pending.</p>
+          <div class="actions">
+            <a class="button" href="/portal">Check approval status</a>
+            <form method="post" action="/portal/logout"><button class="secondary" type="submit">Log out</button></form>
+          </div>
+        </div>
+      `
+    });
+  }
   const usage = getUsageTotals(user.id);
   const models = getActiveModelsForUser(user);
   const shellCommand = getClientScriptCommand(req, 'set_agents_opencode.sh');
@@ -620,14 +668,14 @@ router.get('/portal', requireStudentSession, (req, res) => {
   });
 });
 
-router.post('/portal/settings/name', requireStudentSession, (req, res) => {
+router.post('/portal/settings/name', requireApprovedStudentSession, (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) return res.redirect('/portal/settings');
   getDb().prepare('UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(name, req.portalUser.id);
   res.redirect('/portal/settings?name_saved=1');
 });
 
-router.post('/portal/settings/password', requireStudentSession, (req, res) => {
+router.post('/portal/settings/password', requireApprovedStudentSession, (req, res) => {
   const user = req.portalUser;
   const currentPassword = String(req.body.current_password || '');
   const newPassword = String(req.body.new_password || '');
@@ -643,7 +691,7 @@ router.post('/portal/settings/password', requireStudentSession, (req, res) => {
   });
 });
 
-router.get('/portal/settings', requireStudentSession, (req, res) => {
+router.get('/portal/settings', requireApprovedStudentSession, (req, res) => {
   const user = req.portalUser;
   const apiKeys = listUserApiKeys(user.id);
   const canAddApiKey = apiKeys.length < MAX_USER_API_KEYS;
@@ -794,7 +842,7 @@ router.get('/portal/settings', requireStudentSession, (req, res) => {
   });
 });
 
-router.post('/portal/key/regenerate', requireStudentSession, (req, res) => {
+router.post('/portal/key/regenerate', requireApprovedStudentSession, (req, res) => {
   if (listUserApiKeys(req.portalUser.id).length >= MAX_USER_API_KEYS) {
     return res.status(409).send(`Only ${MAX_USER_API_KEYS} API keys per user are allowed. Delete an existing key before adding another.`);
   }
@@ -803,7 +851,7 @@ router.post('/portal/key/regenerate', requireStudentSession, (req, res) => {
   res.redirect('/portal/settings?new_key=1');
 });
 
-router.post('/portal/key/add', requireStudentSession, (req, res) => {
+router.post('/portal/key/add', requireApprovedStudentSession, (req, res) => {
   const pending = req.session.pendingStudentApiKey;
   if (!pending?.key) return res.redirect('/portal/settings');
   const name = normalizeApiKeyName(req.body.key_name);
@@ -824,18 +872,18 @@ router.post('/portal/key/add', requireStudentSession, (req, res) => {
   res.redirect('/portal/settings?created=1');
 });
 
-router.post('/portal/key/dismiss-modal', requireStudentSession, (req, res) => {
+router.post('/portal/key/dismiss-modal', requireApprovedStudentSession, (req, res) => {
   req.session.pendingStudentApiKey = null;
   res.redirect('/portal/settings');
 });
 
-router.post('/portal/key/:keyId/revoke', requireStudentSession, (req, res) => {
+router.post('/portal/key/:keyId/revoke', requireApprovedStudentSession, (req, res) => {
   const keyId = Number.parseInt(req.params.keyId, 10);
   if (Number.isInteger(keyId)) revokeUserApiKey(req.portalUser.id, keyId);
   res.redirect('/portal/settings?revoked=1');
 });
 
-router.get('/portal/opencode.json', requireStudentSession, (req, res) => {
+router.get('/portal/opencode.json', requireApprovedStudentSession, (req, res) => {
   const user = req.portalUser;
   const models = getActiveModelsForUser(user);
   const apiKey = '{file:.secrets/agents_server_key}';

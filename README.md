@@ -41,6 +41,12 @@ Edita `settings.env` i canvia com a minim:
 DEFAULT_PROVIDER_API_KEY=your_deepseek_key_here
 ADMIN_PASSWORD=replace_with_a_secure_admin_password
 SESSION_SECRET=replace_with_a_long_random_session_secret
+
+GOOGLE_OAUTH_ENABLED=false
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+GOOGLE_OAUTH_ALLOWED_DOMAINS=xtec.cat,iesesteveterradas.cat
+GOOGLE_OAUTH_AUTO_REGISTER=true
 ```
 
 Inicialitza la base de dades (es fa automàticament al primer inici):
@@ -85,7 +91,7 @@ La suite de tests fa servir un proveidor DeepSeek simulat localment. No necessit
 npm test
 ```
 
-Els tests cobreixen salut del servidor, autenticacio, quotes, administracio, rutes OpenAI-compatible, routing de proveidors, concurrencia i streaming.
+Els tests cobreixen salut del servidor, autenticacio per contrasenya, Google OAuth, aprovacio de registres, recuperacio d'identitats, quotes, administracio, rutes OpenAI-compatible, routing de proveidors, concurrencia i streaming.
 
 ## Mode produccio
 
@@ -114,6 +120,12 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace_with_a_strong_password
 ADMIN_PASSWORD_HASH=
 SESSION_SECRET=replace_with_a_long_random_session_secret
+
+GOOGLE_OAUTH_ENABLED=false
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+GOOGLE_OAUTH_ALLOWED_DOMAINS=xtec.cat,iesesteveterradas.cat
+GOOGLE_OAUTH_AUTO_REGISTER=true
 
 MAX_REQUESTS_PER_MINUTE=1000
 MAX_TOKENS_PER_REQUEST=8192
@@ -179,6 +191,10 @@ Valors principals:
 - `PROXY_AGENTS_BASE_URL`: URL base de l'API, normalment acabada en `/v1`, que els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` accepten com a override quan s'executen. No s'ha de confondre amb `PUBLIC_BASE_URL`, que identifica l'aplicacio web i construeix els enllaços d'invitacio.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`: credencials d'administracio.
 - `SESSION_SECRET`: secret de sessio Express. Ha de ser llarg i aleatori.
+- `GOOGLE_OAUTH_ENABLED`: activa l'inici de sessio Google OpenID Connect per als estudiants.
+- `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`: credencials d'un client OAuth de tipus **Web application**.
+- `GOOGLE_OAUTH_ALLOWED_DOMAINS`: dominis Google Workspace admesos, separats per comes. El valor unic `*` admet qualsevol compte Google amb correu verificat.
+- `GOOGLE_OAUTH_AUTO_REGISTER`: crea com a pendent un estudiant OAuth desconegut; no rep grup, models ni claus fins que l'administrador l'aprova.
 - `MAX_REQUESTS_PER_MINUTE`: rate limit per usuari.
 - `MAX_TOKENS_PER_REQUEST`: maxim de `max_tokens` de sortida que pot demanar una peticio. Els tokens reals es registren a partir del `usage` del proveidor quan existeix.
 - `DEFAULT_DAILY_TOKEN_LIMIT`: limit global per defecte del servidor.
@@ -190,6 +206,20 @@ Valors principals:
 Quan l'administrador crea un usuari, **Enabled** esta seleccionat per defecte i el servidor genera un enllaç d'invitacio individual d'un sol ús. L'enllaç es mostra a la fitxa de l'usuari perquè l'administrador el copiï i el comparteixi manualment. **Regenerate invitation key** invalida l'enllaç anterior i en genera un de nou.
 
 Quan l'usuari obre l'enllaç i desa la primera contrasenya, la invitacio queda consumida, la sessio es regenera i l'usuari entra directament al portal.
+
+## Inici de sessio amb Google
+
+El portal admet Google OpenID Connect sense canviar l'autenticacio de l'API `/v1`, que continua fent servir claus `ieti_sk_...`. Crea un client OAuth a Google Cloud de tipus **Web application** i registra exactament aquesta URI de redireccio:
+
+```text
+https://your-public-domain.example/auth/google/callback
+```
+
+La URI es deriva de `PUBLIC_BASE_URL`, que ha de ser HTTPS en produccio. El servidor demana nomes els scopes `openid email profile`, valida `state`, `nonce`, PKCE, signatura, audiencia, correu verificat i el claim `hd` dels dominis configurats. No desa access tokens ni refresh tokens de Google.
+
+Si el correu verificat ja existeix, la identitat Google s'enllaca al mateix usuari sense crear duplicats i qualsevol invitacio pendent queda invalidada. Si no existeix i `GOOGLE_OAUTH_AUTO_REGISTER=true`, es crea un usuari pendent sense grup ni clau. El portal mostra que el compte espera aprovacio fins que l'administrador selecciona **Assign group and approve**.
+
+Si Google recrea un compte institucional amb el mateix correu i un `sub` diferent, la peticio apareix a **OAuth reviews**. L'administrador pot conservar tot el compte i substituir-ne la identitat, reiniciar-lo com un usuari pendent nou, o rebutjar la peticio. El reinici elimina claus, configuracio, converses i missatges; els registres d'us queden anonimitzats.
 
 ## Us amb OpenCode
 

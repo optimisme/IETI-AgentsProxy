@@ -8,6 +8,7 @@ const healthRoutes = require('./routes/health');
 const openaiRoutes = require('./routes/openai');
 const adminRoutes = require('./routes/admin');
 const studentPortalRoutes = require('./routes/studentPortal');
+const { createGoogleAuthRouter } = require('./routes/googleAuth');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const { apiError } = require('./utils/errors');
 const { getSetting } = require('./services/settingsService');
@@ -27,7 +28,7 @@ if (!BetterSqlite3Store.prototype.__ietiIntervalPatched) {
   BetterSqlite3Store.prototype.__ietiIntervalPatched = true;
 }
 
-function createApp() {
+function createApp({ googleOAuthService, googleIdentityResolver } = {}) {
   const app = express();
   const sessionStore = new BetterSqlite3Store({ client: getDb(), expired: { clear: true, intervalMs: 900000 } });
 
@@ -46,13 +47,13 @@ function createApp() {
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false,
+      secure: config.sessionCookieSecure,
       maxAge: 8 * 60 * 60 * 1000
     }
   }));
 
   app.use((req, res, next) => {
-    if (req.path.startsWith('/admin') || req.path === '/health' || req.path === '/' || req.path === '/login' || req.path.startsWith('/portal') || req.path.startsWith('/downloads')) return next();
+    if (req.path.startsWith('/admin') || req.path === '/health' || req.path === '/' || req.path === '/login' || req.path.startsWith('/portal') || req.path.startsWith('/downloads') || req.path.startsWith('/auth/google')) return next();
     if (getSetting('maintenance_mode', 'false') === 'true') {
       return next(apiError(503, 'maintenance_mode', 'Server is in maintenance mode.'));
     }
@@ -60,6 +61,7 @@ function createApp() {
   });
 
   app.use(healthRoutes);
+  app.use(createGoogleAuthRouter({ oauthService: googleOAuthService, identityResolver: googleIdentityResolver }));
   app.use(studentPortalRoutes);
   app.use(adminRoutes);
   app.use(openaiRoutes);

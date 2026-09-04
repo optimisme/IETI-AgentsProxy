@@ -33,6 +33,8 @@ function initSchema(database) {
       api_key_hash TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
       role TEXT NOT NULL DEFAULT 'student',
+      registration_status TEXT NOT NULL DEFAULT 'approved' CHECK (registration_status IN ('pending', 'approved', 'rejected')),
+      auth_version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_used_at TEXT
@@ -49,6 +51,48 @@ function initSchema(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_used_at TEXT,
       UNIQUE(user_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_identities (
+      provider TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      email_at_link TEXT NOT NULL,
+      last_email TEXT NOT NULL,
+      hosted_domain TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_login_at TEXT,
+      PRIMARY KEY (provider, subject),
+      UNIQUE (user_id, provider)
+    );
+
+    CREATE TABLE IF NOT EXISTS oauth_identity_conflicts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      replacement_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      provider TEXT NOT NULL,
+      proposed_subject TEXT NOT NULL,
+      verified_email TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      hosted_domain TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved', 'rejected')),
+      resolution TEXT CHECK (resolution IS NULL OR resolution IN ('preserve', 'reset', 'reject')),
+      requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolved_by TEXT,
+      UNIQUE (provider, proposed_subject)
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      email TEXT,
+      actor TEXT NOT NULL,
+      details TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS conversations (
@@ -159,6 +203,9 @@ function initSchema(database) {
     CREATE INDEX IF NOT EXISTS idx_usage_logs_status_created ON usage_logs(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_user_groups_group ON user_groups(group_id);
     CREATE INDEX IF NOT EXISTS idx_group_providers_provider ON group_providers(provider_id);
+    CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id);
+    CREATE INDEX IF NOT EXISTS idx_oauth_conflicts_status ON oauth_identity_conflicts(status, requested_at);
+    CREATE INDEX IF NOT EXISTS idx_auth_audit_user_created ON auth_audit_logs(user_id, created_at);
   `);
 }
 
@@ -179,6 +226,8 @@ function migrateSchema(database) {
   addColumn('api_key_prefix', 'TEXT');
   addColumn('api_key_suffix', 'TEXT');
   addColumn('api_key_lookup_hash', 'TEXT');
+  addColumn('registration_status', "TEXT NOT NULL DEFAULT 'approved' CHECK (registration_status IN ('pending', 'approved', 'rejected'))");
+  addColumn('auth_version', 'INTEGER NOT NULL DEFAULT 0');
   for (const name of ['daily_token_limit', 'monthly_token_limit', 'monthly_cost_limit_eur', 'allowed_models']) {
     if (columns.includes(name)) database.exec(`ALTER TABLE users DROP COLUMN ${name}`);
   }
@@ -231,6 +280,17 @@ function migrateSchema(database) {
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_user_groups_one_group ON user_groups(user_id)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_users_api_key_lookup_hash ON users(api_key_lookup_hash)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_user_api_keys_user_id ON user_api_keys(user_id)');
+  const duplicateEmail = database.prepare(`
+    SELECT lower(email) AS email, COUNT(*) AS count
+    FROM users
+    GROUP BY lower(email)
+    HAVING COUNT(*) > 1
+    LIMIT 1
+  `).get();
+  if (duplicateEmail) {
+    throw new Error(`Cannot enable case-insensitive user email uniqueness: duplicate email ${duplicateEmail.email}. Resolve duplicate users before restarting.`);
+  }
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users(lower(email))');
 
   database.exec(`
     INSERT OR IGNORE INTO user_api_keys
@@ -398,7 +458,8 @@ function seedDefaultGroup(database) {
       INSERT OR IGNORE INTO user_groups (user_id, group_id)
       SELECT users.id, ?
       FROM users
-      WHERE NOT EXISTS (
+      WHERE users.registration_status = 'approved'
+        AND NOT EXISTS (
         SELECT 1 FROM user_groups WHERE user_groups.user_id = users.id
       )
     `).run(groupId);

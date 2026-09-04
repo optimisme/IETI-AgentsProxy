@@ -26,11 +26,6 @@ function authStudent(req, res, next) {
       user = null;
     }
 
-    if (user) {
-      db.prepare('UPDATE user_api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(user.authenticated_api_key_id);
-      db.prepare('UPDATE users SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
-    }
-
     if (!user) {
       const { prefix, suffix } = keyPrefixSuffix(apiKey);
       const legacyUsers = db.prepare(`
@@ -60,6 +55,15 @@ function authStudent(req, res, next) {
 
     if (!user) throw apiError(401, 'invalid_api_key', 'Invalid or revoked API key.');
     if (!user.enabled) throw apiError(403, 'user_disabled', 'This user is disabled.');
+    if (user.registration_status !== 'approved') {
+      throw apiError(403, user.registration_status === 'pending' ? 'account_pending' : 'account_rejected',
+        user.registration_status === 'pending' ? 'This account is awaiting administrator approval.' : 'This account is not approved.');
+    }
+
+    if (user.authenticated_api_key_id) {
+      db.prepare('UPDATE user_api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(user.authenticated_api_key_id);
+    }
+    db.prepare('UPDATE users SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
 
     req.student = user;
     next();

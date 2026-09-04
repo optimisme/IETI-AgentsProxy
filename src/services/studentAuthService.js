@@ -109,6 +109,7 @@ function setPasswordFromInvite(userId, password) {
     UPDATE users
     SET password_hash = ?, password_changed_at = ?, invite_used_at = CURRENT_TIMESTAMP,
         invite_token_hash = NULL, invite_token_nonce = NULL, invite_expires_at = NULL, failed_login_count = 0, locked_until = NULL,
+        auth_version = auth_version + 1,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(hashPassword(password), passwordChangedAt, userId);

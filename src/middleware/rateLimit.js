@@ -2,6 +2,7 @@ const { apiError } = require('../utils/errors');
 const { getSetting } = require('../services/settingsService');
 
 const buckets = new Map();
+const oauthBuckets = new Map();
 
 function studentRateLimit(req, res, next) {
   try {
@@ -34,4 +35,23 @@ function studentRateLimit(req, res, next) {
   }
 }
 
-module.exports = { studentRateLimit };
+function oauthRateLimit(req, res, next) {
+  try {
+    const now = Date.now();
+    const key = `oauth:${req.ip}`;
+    const max = 20;
+    const bucket = oauthBuckets.get(key) || { count: 0, resetAt: now + 10 * 60_000 };
+    if (now > bucket.resetAt) {
+      bucket.count = 0;
+      bucket.resetAt = now + 10 * 60_000;
+    }
+    bucket.count += 1;
+    oauthBuckets.set(key, bucket);
+    if (bucket.count > max) throw apiError(429, 'oauth_rate_limit_exceeded', 'Too many sign-in attempts. Try again later.');
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = { oauthRateLimit, studentRateLimit };
