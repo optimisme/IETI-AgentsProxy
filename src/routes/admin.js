@@ -80,7 +80,7 @@ function render(req, res, view, { title, content = '', flash = '' } = {}) {
       <a href="/admin/users?status=pending">Pending${pendingUsers ? ` (${pendingUsers})` : ''}</a>
       <a href="/admin/oauth-conflicts">OAuth reviews${pendingConflicts ? ` (${pendingConflicts})` : ''}</a>
       <a href="/admin/groups">Groups</a>
-      <a href="/admin/settings">Providers</a>
+      <a href="/admin/providers">Providers</a>
       <a href="/admin/server">Server</a>
       <form method="post" action="/admin/logout" style="margin-left:auto"><button>Log out</button></form>
     </header>
@@ -482,6 +482,174 @@ function activeProviderModel(providerId) {
     ORDER BY enabled DESC, updated_at DESC, id DESC
     LIMIT 1
   `).get(providerId) || {} : {};
+}
+
+const MODEL_ALIGNMENT_FIELDS = [
+  ['contextLimit', 'Context limit'],
+  ['outputLimit', 'Output limit'],
+  ['text', 'Text input'],
+  ['image', 'Image input'],
+  ['tools', 'Tool calling'],
+  ['reasoning', 'Reasoning'],
+  ['reasoningEfforts', 'Reasoning efforts'],
+  ['defaultReasoningEffort', 'Default reasoning effort'],
+  ['chatTemplateKwargs', 'Chat template overrides'],
+  ['parallelTools', 'Parallel tool calls']
+];
+const MODEL_ALIGNMENT_COLUMNS = [
+  'context_limit',
+  'output_limit',
+  'supports_text_input',
+  'supports_image_input',
+  'supports_tools',
+  'supports_reasoning',
+  'reasoning_efforts',
+  'default_reasoning_effort',
+  'supports_chat_template_kwargs',
+  'supports_parallel_tools'
+];
+
+function providerModelContract(model = {}) {
+  return {
+    contextLimit: Number(model.context_limit || getSetting('default_model_context_limit')),
+    outputLimit: Number(model.output_limit || getSetting('default_model_output_limit')),
+    text: Number(model.supports_text_input) === 1,
+    image: Number(model.supports_image_input) === 1,
+    tools: Number(model.supports_tools) === 1,
+    reasoning: Number(model.supports_reasoning) === 1,
+    reasoningEfforts: parseReasoningEfforts(model.reasoning_efforts),
+    defaultReasoningEffort: normalizeReasoningEffort(model.default_reasoning_effort),
+    chatTemplateKwargs: Number(model.supports_chat_template_kwargs) === 1,
+    parallelTools: Number(model.supports_parallel_tools) === 1
+  };
+}
+
+function alignmentValue(value, field) {
+  if (field === 'contextLimit' || field === 'outputLimit') return Number(value || 0).toLocaleString('en-US');
+  if (field === 'reasoningEfforts') {
+    if (value === null) return 'provider managed';
+    return value.length ? value.join(', ') : 'none selectable';
+  }
+  if (field === 'defaultReasoningEffort') return value || 'provider default';
+  return value ? 'supported' : 'not supported';
+}
+
+function modelAlignmentDifferences(referenceModel, candidateModel) {
+  const reference = providerModelContract(referenceModel);
+  const candidate = providerModelContract(candidateModel);
+  return MODEL_ALIGNMENT_FIELDS.flatMap(([field, label]) => {
+    const referenceValue = field === 'reasoningEfforts' ? JSON.stringify(reference[field]) : reference[field];
+    const candidateValue = field === 'reasoningEfforts' ? JSON.stringify(candidate[field]) : candidate[field];
+    if (referenceValue === candidateValue) return [];
+    return [{
+      label,
+      reference: alignmentValue(reference[field], field),
+      candidate: alignmentValue(candidate[field], field)
+    }];
+  });
+}
+
+function modelCapabilitySummary(model) {
+  const contract = providerModelContract(model);
+  const capabilities = [
+    contract.text ? 'Text' : null,
+    contract.image ? 'Images' : null,
+    contract.tools ? 'Tools' : null,
+    contract.parallelTools ? 'Parallel tools' : null,
+    contract.reasoning
+      ? `Reasoning: ${alignmentValue(contract.reasoningEfforts, 'reasoningEfforts')}`
+      : null,
+    contract.chatTemplateKwargs ? 'Chat template overrides' : null
+  ].filter(Boolean);
+  return capabilities.length
+    ? capabilities.map((capability) => `<span class="feature-chip">${escapeHtml(capability)}</span>`).join('')
+    : '<span class="muted">No capabilities declared</span>';
+}
+
+function providerAlignmentStatus(provider, referenceProvider) {
+  if (!provider.model.public_model) {
+    return '<span class="alignment-status alignment-warning" title="This provider has no exposed model mapping"><span aria-hidden="true">⚠</span> No active mapping</span>';
+  }
+  if (Number(provider.id) === Number(referenceProvider.id)) {
+    return '<span class="alignment-status alignment-reference">★ Main/reference</span>';
+  }
+  const differences = modelAlignmentDifferences(referenceProvider.model, provider.model);
+  if (!differences.length) {
+    return '<span class="alignment-status alignment-ok"><span aria-hidden="true">✓</span> Aligned</span>';
+  }
+  return `
+    <details class="alignment-differences">
+      <summary class="alignment-status alignment-warning" title="Configuration differs from the main/reference provider">
+        <span aria-hidden="true">⚠</span> Not aligned (${differences.length})
+      </summary>
+      <div>
+        <strong>Differences from ${escapeHtml(referenceProvider.name)}</strong>
+        <ul>${differences.map((difference) => `
+          <li><strong>${escapeHtml(difference.label)}:</strong> ${escapeHtml(difference.candidate)}; reference: ${escapeHtml(difference.reference)}</li>
+        `).join('')}</ul>
+        <p class="muted">Copies limits and declared features. The upstream model and provider connection settings stay unchanged.</p>
+        <form method="post" action="/admin/providers/${provider.id}/align">
+          <button type="submit">Align with main provider</button>
+        </form>
+      </div>
+    </details>
+  `;
+}
+
+function orderedProviderPool(providerViews) {
+  return [...providerViews].sort((left, right) => {
+    if (left.enabled !== right.enabled) return right.enabled - left.enabled;
+    return Number(left.id) - Number(right.id);
+  });
+}
+
+function providerPool(providerViews, publicModel) {
+  const configured = Boolean(publicModel);
+  const orderedProviders = orderedProviderPool(providerViews);
+  const referenceProvider = orderedProviders[0];
+  const mismatchCount = configured
+    ? orderedProviders.slice(1).filter((provider) => modelAlignmentDifferences(referenceProvider.model, provider.model).length).length
+    : orderedProviders.length;
+  const enabledCount = orderedProviders.filter((provider) => provider.enabled).length;
+  const poolStatus = !configured
+    ? `<span class="pool-status pool-warning"><span aria-hidden="true">⚠</span> ${orderedProviders.length} unconfigured</span>`
+    : mismatchCount
+      ? `<span class="pool-status pool-warning"><span aria-hidden="true">⚠</span> ${mismatchCount} not aligned</span>`
+      : `<span class="pool-status pool-ok"><span aria-hidden="true">✓</span> All aligned</span>`;
+  const rows = orderedProviders.map((provider) => {
+    const contract = configured ? providerModelContract(provider.model) : null;
+    return `
+      <tr>
+        <td>
+          <a href="/admin/providers/${provider.id}"><strong>${escapeHtml(provider.name)}</strong></a><br>
+          <span class="muted">${escapeHtml(provider.slug)}</span>
+        </td>
+        <td>${provider.model.upstream_model ? `<code>${escapeHtml(provider.model.upstream_model)}</code>` : '<span class="muted">none</span>'}</td>
+        <td>${contract ? `${escapeHtml(alignmentValue(contract.contextLimit, 'contextLimit'))} / ${escapeHtml(alignmentValue(contract.outputLimit, 'outputLimit'))}` : '<span class="muted">—</span>'}</td>
+        <td><div class="feature-chips">${configured ? modelCapabilitySummary(provider.model) : '<span class="muted">—</span>'}</div></td>
+        <td>
+          <span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span><br>
+          <span class="muted">API key ${provider.api_key ? 'configured' : 'missing'} · ${provider.groupCount} group${provider.groupCount === 1 ? '' : 's'}</span>
+        </td>
+        <td>${providerAlignmentStatus(provider, referenceProvider)}</td>
+        <td><a class="button secondary" href="/admin/providers/${provider.id}">Edit</a></td>
+      </tr>
+    `;
+  }).join('');
+  return `
+    <details class="provider-pool" open>
+      <summary>
+        <span class="provider-pool-title">${configured ? `<code>${escapeHtml(publicModel)}</code>` : 'Unconfigured providers'} <span>${orderedProviders.length} provider${orderedProviders.length === 1 ? '' : 's'} · ${enabledCount} enabled</span></span>
+        ${poolStatus}
+      </summary>
+      <div class="provider-pool-table">
+        <table>
+          <thead><tr><th>Provider</th><th>Upstream model</th><th>Context / output</th><th>Features</th><th>Status</th><th>Alignment</th><th>Actions</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </details>
+  `;
 }
 
 function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
@@ -1103,9 +1271,8 @@ router.post('/admin/users/:id/delete', requireAdmin, (req, res) => {
   res.redirect('/admin/users?deleted=1');
 });
 
-router.get('/admin/settings', requireAdmin, (req, res) => {
-  const providers = listProviders();
-  const providerRows = providers.map((provider) => {
+router.get('/admin/providers', requireAdmin, (req, res) => {
+  const providers = listProviders().map((provider) => {
     const model = activeProviderModel(provider.id);
     const groupCount = getDb().prepare(`
       SELECT COUNT(DISTINCT groups.id) AS count
@@ -1113,34 +1280,34 @@ router.get('/admin/settings', requireAdmin, (req, res) => {
       LEFT JOIN group_providers ON group_providers.group_id = groups.id
       WHERE groups.provider_id = ? OR group_providers.provider_id = ?
     `).get(provider.id, provider.id).count;
-    return `
-      <tr>
-        <td><a href="/admin/providers/${provider.id}">${escapeHtml(provider.name)}</a><br><span class="muted">${escapeHtml(provider.slug)}</span></td>
-        <td>${escapeHtml(provider.base_url)}</td>
-        <td>${escapeHtml(provider.api_key ? 'configured' : 'not configured')}</td>
-        <td><span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span></td>
-        <td>${model.public_model ? escapeHtml(model.public_model) : '<span class="muted">none</span>'}</td>
-        <td>${model.upstream_model ? escapeHtml(model.upstream_model) : '<span class="muted">none</span>'}</td>
-        <td>${groupCount}</td>
-        <td class="actions">
-          <a class="button secondary" href="/admin/providers/${provider.id}">Edit</a>
-        </td>
-      </tr>
-    `;
-  }).join('');
+    return { ...provider, model, groupCount };
+  });
+  const pools = Map.groupBy(providers, (provider) => provider.model.public_model || '');
+  const orderedPools = [...pools.entries()].sort(([left], [right]) => {
+    if (!left) return 1;
+    if (!right) return -1;
+    return left.localeCompare(right);
+  });
   const content = `
-    <div class="panel">
-      <p><a class="button" href="/admin/providers/new">Add provider</a></p>
-      <table>
-        <thead><tr><th>Name</th><th>Base URL</th><th>API key</th><th>Status</th><th>OpenCode alias</th><th>Active upstream model</th><th>Groups</th><th>Actions</th></tr></thead>
-        <tbody>${providerRows || '<tr><td colspan="8" class="muted">No providers.</td></tr>'}</tbody>
-      </table>
+    <div class="provider-list-heading">
+      <div>
+        <p class="muted">Providers are grouped by exposed model alias. Within each group, the first enabled provider created is the main/reference configuration.</p>
+        <p class="muted">Alignment compares effective limits and declared features. It does not prove that different upstream model implementations behave identically.</p>
+      </div>
+      <a class="button" href="/admin/providers/new">Add provider</a>
+    </div>
+    <div class="provider-pools">
+      ${orderedPools.length ? orderedPools.map(([publicModel, poolProviders]) => providerPool(poolProviders, publicModel)).join('') : '<div class="panel"><p class="muted">No providers.</p></div>'}
     </div>
   `;
   render(req, res, 'settings', {
     title: 'Providers',
     content,
-    flash: flash(req.query.deleted ? 'Provider deleted.' : (req.query.saved ? 'Provider saved.' : req.query.test || ''))
+    flash: flash(req.query.deleted
+      ? 'Provider deleted.'
+      : req.query.aligned
+        ? 'Provider configuration aligned with the main provider.'
+        : (req.query.saved ? 'Provider saved.' : req.query.test || ''))
   });
 });
 
@@ -1479,6 +1646,34 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
 });
 
+router.post('/admin/providers/:id/align', requireAdmin, (req, res) => {
+  const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
+  if (!provider) return res.status(404).send('Provider not found');
+  const model = activeProviderModel(provider.id);
+  if (!model.id || !model.public_model) {
+    throw apiError(409, 'provider_mapping_unconfigured', 'This provider has no active exposed model mapping to align.');
+  }
+  const poolProviders = listProviders()
+    .map((poolProvider) => ({ ...poolProvider, model: activeProviderModel(poolProvider.id) }))
+    .filter((poolProvider) => poolProvider.model.public_model === model.public_model);
+  const referenceProvider = orderedProviderPool(poolProviders)[0];
+  if (!referenceProvider?.model?.id) {
+    throw apiError(409, 'provider_pool_missing', 'The main provider configuration could not be found.');
+  }
+  if (Number(referenceProvider.id) !== Number(provider.id)) {
+    getDb().prepare(`
+      UPDATE provider_models
+      SET ${MODEL_ALIGNMENT_COLUMNS.map((column) => `${column} = ?`).join(', ')},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      ...MODEL_ALIGNMENT_COLUMNS.map((column) => referenceProvider.model[column]),
+      model.id
+    );
+  }
+  res.redirect('/admin/providers?aligned=1');
+});
+
 router.post('/admin/providers/:id/clear-key', requireAdmin, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
@@ -1490,7 +1685,7 @@ router.post('/admin/providers/:id/delete', requireAdmin, (req, res) => {
   const provider = getDb().prepare('SELECT id FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
   getDb().prepare('DELETE FROM providers WHERE id = ?').run(provider.id);
-  res.redirect('/admin/settings?deleted=1');
+  res.redirect('/admin/providers?deleted=1');
 });
 
 router.post('/admin/providers/:id/test', requireAdmin, async (req, res) => {

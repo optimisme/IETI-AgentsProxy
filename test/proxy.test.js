@@ -1209,11 +1209,13 @@ test('admin can see and delete provider api key', async () => {
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get('deepseek');
 
-  const list = await agent.get('/admin/settings').expect(200).expect(/<th>API key<\/th>/).expect(/configured/);
-  assert.match(list.text, /OpenCode alias/);
+  await agent.get('/admin/settings').expect(404);
+  const list = await agent.get('/admin/providers').expect(200).expect(/API key configured/);
+  assert.match(list.text, /Providers are grouped by exposed model alias/);
   assert.match(list.text, /active-model/);
-  assert.match(list.text, /Active upstream model/);
-  assert.match(list.text, /<th>Groups<\/th>/);
+  assert.match(list.text, /Upstream model/);
+  assert.match(list.text, /Main\/reference/);
+  assert.match(list.text, /group/);
   assert.doesNotMatch(list.text, /<th>Models<\/th>/);
   assert.doesNotMatch(list.text, /In progress/);
   const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200).expect(/API key: configured/).expect(/Delete API key/);
@@ -1227,6 +1229,86 @@ test('admin can see and delete provider api key', async () => {
   assert.equal(updated.api_key, '');
   await agent.get(`/admin/providers/${provider.id}`).expect(200).expect(/API key: not configured/);
   db.prepare('UPDATE providers SET api_key = ? WHERE id = ?').run(provider.api_key, provider.id);
+});
+
+test('provider list groups exposed aliases and highlights mapping configuration differences', async (t) => {
+  const alias = `alignment-pool-${Date.now()}`;
+  const providerIds = [];
+  const insertProvider = db.prepare(`
+    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
+    VALUES (?, ?, 'openai-compatible', ?, 'local', 1)
+  `);
+  const insertModel = db.prepare(`
+    INSERT INTO provider_models
+      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+       supports_text_input, supports_image_input, supports_tools, supports_reasoning,
+       reasoning_efforts, default_reasoning_effort, supports_chat_template_kwargs, supports_parallel_tools)
+    VALUES (?, ?, ?, ?, 1, ?, 8192, 1, ?, ?, 1, ?, 'low', 1, 1)
+  `);
+  const addProvider = (slug, name, contextLimit, image, tools, reasoningEfforts) => {
+    const provider = insertProvider.run(slug, name, mockBaseUrl);
+    const providerId = Number(provider.lastInsertRowid);
+    providerIds.push(providerId);
+    insertModel.run(
+      providerId,
+      alias,
+      `${slug}-upstream`,
+      name,
+      contextLimit,
+      image,
+      tools,
+      JSON.stringify(reasoningEfforts)
+    );
+    return providerId;
+  };
+  addProvider(`${alias}-main`, 'Alignment Main', 64000, 0, 1, ['low', 'high']);
+  addProvider(`${alias}-aligned`, 'Alignment Aligned', 64000, 0, 1, ['low', 'high']);
+  const mismatchProviderId = addProvider(`${alias}-mismatch`, 'Alignment Mismatch', 32000, 1, 0, ['low']);
+  t.after(() => {
+    const placeholders = providerIds.map(() => '?').join(',');
+    db.prepare(`DELETE FROM providers WHERE id IN (${placeholders})`).run(...providerIds);
+  });
+
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const list = await agent.get('/admin/providers').expect(200);
+  assert.match(list.text, new RegExp(alias));
+  assert.match(list.text, /3 providers · 3 enabled/);
+  assert.match(list.text, /★ Main\/reference/);
+  assert.match(list.text, /✓<\/span> Aligned/);
+  assert.match(list.text, /⚠<\/span> 1 not aligned/);
+  assert.match(list.text, /Not aligned \(4\)/);
+  assert.match(list.text, /Context limit:/);
+  assert.match(list.text, /Image input:/);
+  assert.match(list.text, /Tool calling:/);
+  assert.match(list.text, /Reasoning efforts:/);
+  assert.match(list.text, new RegExp(`action="/admin/providers/${mismatchProviderId}/align"`));
+  assert.match(list.text, />Align with main provider<\/button>/);
+
+  const upstreamBefore = db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(mismatchProviderId).upstream_model;
+  await agent.post(`/admin/providers/${mismatchProviderId}/align`)
+    .expect(302)
+    .expect('Location', '/admin/providers?aligned=1');
+  const referenceModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(providerIds[0]);
+  const alignedModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(mismatchProviderId);
+  for (const column of [
+    'context_limit',
+    'output_limit',
+    'supports_text_input',
+    'supports_image_input',
+    'supports_tools',
+    'supports_reasoning',
+    'reasoning_efforts',
+    'default_reasoning_effort',
+    'supports_chat_template_kwargs',
+    'supports_parallel_tools'
+  ]) {
+    assert.equal(alignedModel[column], referenceModel[column], `${column} should be copied from the main provider`);
+  }
+  assert.equal(alignedModel.upstream_model, upstreamBefore);
+  const alignedList = await agent.get('/admin/providers?aligned=1').expect(200);
+  assert.match(alignedList.text, /Provider configuration aligned with the main provider/);
+  assert.match(alignedList.text, /✓<\/span> All aligned/);
 });
 
 test('admin can update only provider api key', async () => {
@@ -1279,13 +1361,13 @@ test('admin deletes a provider through an explicit modal without deleting usage 
 
   await agent.post(`/admin/providers/${provider.lastInsertRowid}/delete`)
     .expect(302)
-    .expect('Location', '/admin/settings?deleted=1');
+    .expect('Location', '/admin/providers?deleted=1');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM providers WHERE id = ?').get(provider.lastInsertRowid).count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
   assert.equal(db.prepare('SELECT provider_id FROM groups WHERE id = ?').get(group.lastInsertRowid).provider_id, null);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM usage_logs WHERE provider_slug = ?').get('delete-provider-test').count, 1);
-  await agent.get('/admin/settings?deleted=1').expect(200).expect(/Provider deleted/);
+  await agent.get('/admin/providers?deleted=1').expect(200).expect(/Provider deleted/);
 });
 
 test('admin can edit provider slug and sees edit title', async () => {
