@@ -704,7 +704,6 @@ router.get('/admin/oauth-conflicts', requireAdmin, (req, res) => {
     title: 'OAuth identity reviews',
     flash: flash(req.query.resolved ? 'OAuth identity review resolved.' : req.query.error ? 'The review could not be resolved or has expired.' : ''),
     content: `
-      <h1>OAuth identity reviews</h1>
       <p class="muted">These requests occur when a verified email is already linked to a different Google identity.</p>
       <table>
         <thead><tr><th>User</th><th>Hosted domain</th><th>Current identity</th><th>Proposed identity</th><th>Status</th><th>Actions</th></tr></thead>

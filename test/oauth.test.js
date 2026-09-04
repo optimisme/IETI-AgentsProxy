@@ -267,6 +267,7 @@ test('OAuth state is single-use and a subject conflict shows the administrator-r
   const reviews = await admin.get('/admin/oauth-conflicts').expect(200);
   assert.match(reviews.text, /Replace identity and preserve account/);
   assert.match(reviews.text, /Reset as a new user/);
+  assert.equal((reviews.text.match(/<h1>OAuth identity reviews<\/h1>/g) || []).length, 1);
 });
 
 test('reset identity conflict deletes account data, anonymizes usage, and creates a fresh pending user', () => {
