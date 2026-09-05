@@ -8,7 +8,10 @@ $DownloadUrl = '__IETI_BUILD_LITE_ZIP_URL__'
 $DownloadTemporary = "$ArchiveFile.tmp.$([Guid]::NewGuid().ToString('N'))"
 $ExtractDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "ieti-buildlite-$([Guid]::NewGuid().ToString('N'))"
 
+$ConfigTemporary = $null
+
 try {
+  Get-Command node -ErrorAction Stop | Out-Null
   if ($DownloadUrl -eq '__IETI_BUILD_LITE_ZIP_URL__') {
     $DownloadUrl = 'https://agents.ieti.site/downloads/buildlite_harness.zip'
   }
@@ -24,32 +27,79 @@ try {
     throw 'The BuildLite archive does not contain the expected buildlite_harness/ directory.'
   }
 
-  # Copy the archive contents, excluding its wrapper directory, into the project root.
-  # This keeps .agents/ and AGENTS.md at the root instead of nesting them below
-  # buildlite_harness/.
-  foreach ($Item in Get-ChildItem -LiteralPath $SourceDirectory -Force) {
-    Copy-Item -LiteralPath $Item.FullName -Destination $WorkingDirectory -Force -Recurse
-  }
-
   $AgentsDirectory = Join-Path $WorkingDirectory '.agents'
   $AgentsFile = Join-Path $WorkingDirectory 'AGENTS.md'
-  if (-not (Test-Path -LiteralPath $AgentsDirectory -PathType Container) -or
-      -not (Test-Path -LiteralPath $AgentsFile -PathType Leaf)) {
-    throw 'The BuildLite archive did not provide .agents/ and AGENTS.md at the project root.'
+  $SourceAgentsFile = Join-Path $SourceDirectory 'AGENTS.md'
+  if (-not (Test-Path -LiteralPath (Join-Path $SourceDirectory '.agents') -PathType Container) -or
+      -not (Test-Path -LiteralPath $SourceAgentsFile -PathType Leaf)) {
+    throw 'The BuildLite archive did not provide .agents/ and AGENTS.md.'
   }
 
+  # Reject a conflicting OpenCode directory before changing project files.
   $OpenCodeDirectory = Join-Path $WorkingDirectory '.opencode'
-  if (Test-Path -LiteralPath $OpenCodeDirectory) {
-    $OpenCodeItem = Get-Item -LiteralPath $OpenCodeDirectory -Force
+  $OpenCodeItem = Get-Item -LiteralPath $OpenCodeDirectory -Force -ErrorAction SilentlyContinue
+  if ($null -ne $OpenCodeItem) {
     if (-not ($OpenCodeItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
       throw '.opencode already exists and is not a directory junction to .agents. Move it before retrying.'
     }
-    $ResolvedOpenCode = (Resolve-Path -LiteralPath $OpenCodeDirectory).Path
-    $ResolvedAgents = (Resolve-Path -LiteralPath $AgentsDirectory).Path
-    if ($ResolvedOpenCode -ne $ResolvedAgents) {
+    $checkLinkScript = @'
+const fs = require('node:fs');
+const [a, b] = process.argv.slice(1);
+process.exit(fs.realpathSync(a) === fs.realpathSync(b) ? 0 : 1);
+'@
+    & node -e $checkLinkScript $OpenCodeDirectory $AgentsDirectory
+    if ($LASTEXITCODE -ne 0) {
       throw '.opencode already exists but does not point to .agents.'
     }
-  } else {
+  }
+
+  # Keep project instructions and replace only the managed harness block on reinstall.
+  $mergeInstructionsScript = @'
+const fs = require('node:fs');
+const [existingPath, sourcePath] = process.argv.slice(1);
+// Strip macOS archive metadata only from the temporary harness before copying.
+const path = require('node:path');
+const macosNames = new Set(['__MACOSX', '.DS_Store', '.AppleDouble', '.LSOverride']);
+function removeMacosMetadata(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (macosNames.has(entry.name) || entry.name.startsWith('._')) {
+      fs.rmSync(target, { recursive: true, force: true });
+    } else if (entry.isDirectory()) {
+      removeMacosMetadata(target);
+    }
+  }
+}
+removeMacosMetadata(path.dirname(sourcePath));
+const start = '<!-- buildlite:start -->';
+const end = '<!-- buildlite:end -->';
+const incoming = fs.readFileSync(sourcePath, 'utf8').trimEnd();
+const block = `${start}\n${incoming}\n${end}`;
+let existing = fs.existsSync(existingPath) ? fs.readFileSync(existingPath, 'utf8') : '';
+// Replace only the exact unmodified legacy harness; retain customized project rules.
+const legacyHash = '22a0fbcd315576a52e3fb0a447766e9328982e51aac8da3e8a4bfe7954bd59c3';
+if (require('node:crypto').createHash('sha256').update(existing).digest('hex') === legacyHash) existing = '';
+const from = existing.indexOf(start);
+const to = existing.indexOf(end);
+let merged;
+if (from === -1 && to === -1) {
+  merged = existing + (existing ? '\n\n' : '') + block + '\n';
+} else {
+  if (from === -1 || to < from || existing.indexOf(start, from + start.length) !== -1 ||
+      existing.indexOf(end, to + end.length) !== -1) {
+    throw new Error('AGENTS.md has malformed BuildLite markers; repair them before reinstalling.');
+  }
+  merged = existing.slice(0, from) + block + existing.slice(to + end.length);
+}
+// Stage the merge before copying anything into the project.
+fs.writeFileSync(sourcePath, merged);
+'@
+  & node -e $mergeInstructionsScript $AgentsFile $SourceAgentsFile
+  if ($LASTEXITCODE -ne 0) { throw 'Could not preserve project instructions in AGENTS.md.' }
+  foreach ($Item in Get-ChildItem -LiteralPath $SourceDirectory -Force) {
+    Copy-Item -LiteralPath $Item.FullName -Destination $WorkingDirectory -Force -Recurse
+  }
+  if ($null -eq $OpenCodeItem) {
     $MklinkCommand = 'mklink /J "{0}" "{1}"' -f $OpenCodeDirectory, $AgentsDirectory
     & cmd.exe /d /c $MklinkCommand | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the .opencode directory junction.' }
@@ -85,7 +135,7 @@ fs.writeFileSync(outputPath, `${JSON.stringify(config, null, 2)}\n`);
       & node -e $defaultAgentScript $ConfigFile $ConfigTemporary
       if ($LASTEXITCODE -ne 0) { throw 'Could not update opencode.json.' }
       Move-Item -LiteralPath $ConfigTemporary -Destination $ConfigFile -Force
-      $TemporaryFiles.Remove($ConfigTemporary) | Out-Null
+      $ConfigTemporary = $null
       Write-Host "Updated $ConfigFile with default_agent=build_lite."
     }
   }
@@ -97,6 +147,9 @@ fs.writeFileSync(outputPath, `${JSON.stringify(config, null, 2)}\n`);
   [Console]::Error.WriteLine("Error: $($_.Exception.Message)")
   exit 1
 } finally {
+  if ($ConfigTemporary -and (Test-Path -LiteralPath $ConfigTemporary)) {
+    Remove-Item -LiteralPath $ConfigTemporary -Force -ErrorAction SilentlyContinue
+  }
   if (Test-Path -LiteralPath $DownloadTemporary) {
     Remove-Item -LiteralPath $DownloadTemporary -Force -ErrorAction SilentlyContinue
   }

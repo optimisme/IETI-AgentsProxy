@@ -314,6 +314,24 @@ El portal també ofereix una comanda separada per instal·lar el BuildLite harne
 
 Els scripts són `set_harness_buildlite.sh` i `set_harness_buildlite.ps1`. El portal mostra la comanda corresponent per a cada sistema operatiu.
 
+Amb `build_lite` seleccionat, el subagent `task_router` classifica cada petició amb el context mínim necessari. Retorna quatre línies amb el mode, l'objectiu, el destí i les restriccions; no utilitza eines. El coordinador segueix un dels dos camins:
+
+- `IMPLEMENT`: canvis demanats al codi, la configuració o els tests. Manté el flux de planificació, edició, revisió i validació documentada.
+- `GENERAL`: explicacions, recerca, diagnòstic sense canvis, revisió, planificació i redacció. Respon directament o consulta especialistes quan cal; els canvis de text demanats passen a l'editor sense activar tot el flux de programació.
+
+Per exemple, «explica aquest error» o «com el corregiries?» segueixen `GENERAL`; «corregeix aquest error» o «implementa la proposta anterior» segueixen `IMPLEMENT`. Una pregunta d'estat no activa noves edicions ni elimina la feina pendent. Si la classificació no és clara, el coordinador segueix `GENERAL` i demana aclariments només quan són necessaris. La resposta general no inclou un resum artificial de fitxers modificats o tests.
+
+El harness prioritza context petit a cada pas i més comprovacions, encara que calguin més crides:
+
+- `state_keeper` desa les tasques amb edicions a `.agents/state/<task-id>.md`: objectiu, restriccions, criteris d'acceptació, decisions, feina pendent, resultats i comptadors de recuperació. Només pot llegir i editar aquests fitxers d'estat. Els resums de represa inclouen com a màxim quatre elements rellevants; la resta es conserva al fitxer. Les consultes sense edicions no creen estat tret que l'usuari ho demani.
+- Cada criteri té un identificador estable i un màxim de tres rondes de recuperació després de l'intent inicial: obtenir evidència precisa, reduir o replantejar el canvi, i revisar independentment les hipòtesis. Dividir una tasca o reprendre-la no reinicia el pressupost. Dues delegacions consecutives sense progrés també aturen el treball; repetir un resum o canviar un nom no compta com a progrés.
+- La revisió local és provisional. Abans de completar la implementació es revisen tots els criteris i les connexions entre els fitxers modificats, en lots petits. Els resultats de tests es registren separadament de la inspecció del codi. Una correcció invalida les comprovacions afectades.
+- Els resums conserven referències exactes: fitxer i símbol/línies, URL i secció, o imatge i regió. Si falta context o una referència és obsoleta, l'especialista torna a consultar la font.
+
+Per limitar bucles, `build_lite` té un màxim de 60 passos per invocació i només pot delegar als especialistes enumerats, que també tenen límits finits i no poden delegar. Els comptadors de recuperació i de manca de progrés són regles dels prompts, no un comptador executable independent. En arribar a un límit, el coordinador desa el punt de represa i informa del bloqueig o de la feina pendent; no es reinicia automàticament per esquivar-lo. L'arxiu distribuït no conté estat de tasques.
+
+L'instal·lador conserva les instruccions existents a `AGENTS.md` i hi afegeix un bloc delimitat per `<!-- buildlite:start -->` i `<!-- buildlite:end -->`. Les reinstal·lacions actualitzen només aquest bloc. Si `.opencode` entra en conflicte amb una carpeta o un enllaç existent, s'atura abans de modificar les instruccions o els agents del projecte.
+
 Cada usuari pot tenir diverses claus API actives. Des de `Settings`, **Add API key** obre el popup de creacio, on l'usuari copia la clau i defineix un nom unic per al seu compte. El boto **Add key** nomes s'activa quan el nom no esta buit i no existeix encara, sense distingir majuscules i minuscules. Les claus es mostren emmascarades a la llista i es poden eliminar individualment; tant l'alta com la baixa tornen a `Settings` i el popup de la clau nova no apareix al dashboard.
 
 ## Us amb Codex
