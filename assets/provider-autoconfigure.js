@@ -14,6 +14,7 @@
     modal.dataset.initialized = 'true';
     const find = (name) => modal.querySelector(`[data-autoconfigure-${name}]`);
     const title = find('title'), status = find('status'), progress = find('progress'), elapsed = find('elapsed');
+    const progressBar = progress.querySelector('progress');
     const picker = find('picker'), modelSelect = find('model'), review = find('review');
     const results = find('results'), settingsTable = find('settings'), help = find('help');
     const diagnostics = find('diagnostics'), detail = find('detail');
@@ -152,7 +153,9 @@
       trigger.textContent = 'Testing provider…';
       title.textContent = 'Testing provider';
       status.className = '';
-      status.textContent = 'Reading the provider model catalog…';
+      status.textContent = `Stage 1/${progressBar.max} — Reading the provider model catalog…`;
+      progressBar.value = 0;
+      progressBar.setAttribute('aria-valuetext', status.textContent);
       help.textContent = 'Nothing has been saved. Cancel stops testing. These small synthetic requests may incur provider charges.';
       progress.hidden = false;
       picker.hidden = review.hidden = diagnostics.hidden = retry.hidden = true;
@@ -175,7 +178,13 @@
       const event = (body) => {
         if (controller !== active) return;
         if (body.type === 'progress') {
-          status.textContent = body.activeTest ? `${body.activeTest}…` : 'Preparing the results…';
+          progressBar.max = body.totalStages;
+          progressBar.value = body.completedStages;
+          status.textContent = body.activeTest
+            ? `Stage ${body.stage}/${body.totalStages} — ${body.activeTest}…`
+            : 'Preparing the results…';
+          progressBar.setAttribute('aria-valuetext', body.activeTest ? status.textContent
+            : `${body.completedStages}/${body.totalStages} stages completed`);
           renderResults(body.results, body.activeTest);
         } else if (body.type === 'result' || body.ok !== undefined || body.error) {
           received = true;

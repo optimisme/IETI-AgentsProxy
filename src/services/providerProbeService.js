@@ -1,6 +1,9 @@
 const { deflateSync } = require('node:zlib');
 const { prepareAssistantHistory } = require('../utils/reasoningHistory');
 
+// Catalog discovery runs in the route; retries belong to their original stage.
+const AUTOCONFIGURE_TOTAL_STAGES = 6;
+
 // A small synthetic red/blue image. No student content is sent during discovery.
 function probeImage() {
   function chunk(type, data) {
@@ -43,6 +46,11 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
   const url = `${clean}${clean.endsWith('/v1') ? '' : '/v1'}/chat/completions`;
   const deadline = Date.now() + budgetMs;
   const settings = {}, results = [];
+  let stage = 2;
+  const reportProgress = (activeTest, completedStages = stage - 1) => onProgress?.({
+    activeTest, stage, totalStages: AUTOCONFIGURE_TOTAL_STAGES, completedStages,
+    results: results.map((item) => ({ ...item }))
+  });
   let testControls = {};
   const redact = (text) => {
     let value = String(text || '').replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]');
@@ -51,7 +59,7 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
   };
   async function call(name, messages, extra = {}) {
     signal?.throwIfAborted();
-    onProgress?.({ activeTest: name, results: results.map((item) => ({ ...item })) });
+    reportProgress(name);
     const start = Date.now();
     const result = { name, status: 'inconclusive', httpStatus: null, message: '', durationMs: 0 };
     results.push(result);
@@ -140,11 +148,12 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
     results.push({ name: 'Remaining tests', status: 'inconclusive', httpStatus: null,
       message: 'Skipped because the basic request failed. Check the Base URL, credentials, model availability and the error above.' });
     signal?.throwIfAborted();
-    onProgress?.({ activeTest: null, results: results.map((item) => ({ ...item })) });
+    reportProgress(null, stage);
     return { settings, results };
   }
 
   const history = [...greeting, { role: 'assistant', content: 'OK' }, { role: 'user', content: 'Reply with exactly OK again.' }];
+  stage = 3;
   const historyResult = await call('Assistant history without reasoning', history);
   if (success(historyResult)) {
     supported(historyResult, 'Ordinary assistant history is accepted; no missing-field workaround is required.');
@@ -161,6 +170,7 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
   const tools = [{ type: 'function', function: { name: 'lookup_probe', description: 'Look up a synthetic test code.',
     parameters: { type: 'object', properties: { code: { type: 'string', enum: ['A', 'B'] } }, required: ['code'], additionalProperties: false } } }];
   const toolMessages = [{ role: 'user', content: 'Call lookup_probe twice, once with code A and once with code B. Do not guess the results. After receiving the results, reply with their values.' }];
+  stage = 4;
   let toolResult = await call('Tool calling', toolMessages, { tools, tool_choice: 'auto', parallel_tool_calls: true });
   if ([400, 422].includes(toolResult.httpStatus) && /parallel_tool_calls/i.test(toolResult.message) && /not support|unsupported|not allowed|extra inputs/i.test(toolResult.message)) {
     settings.supports_parallel_tools = 0;
@@ -193,6 +203,7 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
     toolResult.status = 'unsupported';
   } else if (toolResult.assistant) toolResult.message = 'No valid tool call was produced. Acceptance of the tools parameter alone does not verify tool support.';
 
+  stage = 5;
   const image = await call('Image input', [{ role: 'user', content: [
     { type: 'text', text: 'Name the color of the left half and then the right half of this image. Reply with only the two color names, in that order.' },
     { type: 'image_url', image_url: { url: probeImage() } }
@@ -203,6 +214,7 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
   } else if (explicitlyUnsupported(image, 'image')) {
     settings.supports_image_input = 0; image.status = 'unsupported';
   } else if (image.assistant) image.message = 'The model did not correctly describe the test image. Image support is inconclusive.';
+  stage = 6;
   const streaming = await call('Streaming assistant history', prepareAssistantHistory(history, settings.reasoning_history_field), { stream: true, max_tokens: 128 });
   if (success(streaming)) supported(streaming, 'The server returned valid SSE and completed a streamed assistant-history request, as used by OpenCode.');
   else streaming.hint = 'OpenCode uses streaming. Review this result before relying on the model, even if non-streaming tests passed.';
@@ -211,8 +223,8 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
   results.push({ name: 'Limits and reasoning controls', status: 'inconclusive', httpStatus: null,
     message: 'Tests do not infer maximum context/output limits or selectable reasoning efforts. Use published values or verify these settings manually. One successful sample does not guarantee every future request.' });
   signal?.throwIfAborted();
-  onProgress?.({ activeTest: null, results: results.map((item) => ({ ...item })) });
+  reportProgress(null, stage);
   return { settings, results };
 }
 
-module.exports = { probeProviderModel };
+module.exports = { probeProviderModel, AUTOCONFIGURE_TOTAL_STAGES };

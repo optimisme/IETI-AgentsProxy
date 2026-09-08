@@ -31,7 +31,7 @@ const {
 } = require('../services/usageService');
 const { getAllSettings, getSetting, maskSecret, setSetting } = require('../services/settingsService');
 const { discoverProviderMetadata, listProviders, testProvider, reserveProviderForTest } = require('../services/providerService');
-const { probeProviderModel } = require('../services/providerProbeService');
+const { probeProviderModel, AUTOCONFIGURE_TOTAL_STAGES } = require('../services/providerProbeService');
 const { SETTING_FIELDS } = require('../utils/providerMetadata');
 const {
   getAllGroups,
@@ -739,7 +739,8 @@ function providerForm(provider = {}, action = '/admin/providers') {
         <h2 id="${autoconfigureModalId}-title" data-autoconfigure-title>Autoconfigure provider</h2>
         <p data-autoconfigure-status role="status" aria-live="polite">Connecting to the provider...</p>
         <div data-autoconfigure-progress>
-          <progress aria-label="Provider capability tests in progress"></progress>
+          <progress max="${AUTOCONFIGURE_TOTAL_STAGES}" value="0" aria-label="Completed autoconfigure stages"></progress>
+          <p class="muted">Catalog · Text · Assistant history · Tools · Images · Streaming. Retries stay within the same stage.</p>
           <p class="muted"><span data-autoconfigure-elapsed>0 seconds elapsed</span> · Tests can take up to four minutes.</p>
         </div>
         <p data-autoconfigure-help class="muted">Nothing has been saved. You can cancel testing at any time.</p>
@@ -1702,7 +1703,8 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     if (streaming) {
       res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
       res.flushHeaders();
-      emit({ type: 'progress', activeTest: 'Reading the provider model catalog', results: [] });
+      emit({ type: 'progress', activeTest: 'Reading the provider model catalog', stage: 1,
+        totalStages: AUTOCONFIGURE_TOTAL_STAGES, completedStages: 0, results: [] });
     }
     const discovery = await discoverProviderMetadata({
       signal: controller.signal,

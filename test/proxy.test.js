@@ -1530,7 +1530,7 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
   assert.doesNotMatch(providerActions[1], />Cancel</);
   assert.doesNotMatch(edit.text, /Autoconfigure discovers model IDs/);
   assert.match(edit.text, /closedby="none"/);
-  assert.match(edit.text, /<progress aria-label="Provider capability tests in progress"/);
+  assert.match(edit.text, /<progress max="6" value="0" aria-label="Completed autoconfigure stages"/);
   assert.match(edit.text, /Apply and save/);
   assert.match(edit.text, /src="\/admin\/assets\/provider-autoconfigure.js"/);
   await agent.get('/admin/assets/provider-autoconfigure.js').expect(200).expect(/stream_progress: true/);

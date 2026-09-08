@@ -24,13 +24,18 @@ function fixture(body) {
 
 test('probes verify history repair and tool round trips, distinguish explicit image rejection, and retain useful errors', async () => {
   const bodies = [];
-  const result = await probeProviderModel({ baseUrl: 'http://provider/v1', apiKey: 'test-key', model: 'active-model', fetchImpl: async (url, options) => {
+  const progress = [];
+  const result = await probeProviderModel({ baseUrl: 'http://provider/v1', apiKey: 'test-key', model: 'active-model',
+    onProgress: (event) => progress.push(event), fetchImpl: async (url, options) => {
     assert.equal(url, 'http://provider/v1/chat/completions');
     assert.equal(options.headers.Authorization, 'Bearer test-key');
     const body = JSON.parse(options.body); bodies.push(body); return fixture(body);
   } });
   assert.deepEqual(result.settings, { supports_reasoning: 1, supports_text_input: 1, reasoning_history_field: 'reasoning_content', supports_tools: 1, supports_parallel_tools: 1, supports_image_input: 0 });
   assert.equal(bodies.length, 7);
+  assert.deepEqual(progress.map((event) => event.stage), [2, 3, 3, 4, 4, 5, 6, 6]);
+  assert.deepEqual(progress.map((event) => event.completedStages), [1, 2, 2, 3, 3, 4, 5, 6]);
+  assert.ok(progress.every((event) => event.totalStages === 6));
   assert.match(result.results.find((item) => item.name === 'Assistant history without reasoning').message, /missing a thinking field/);
   assert.equal(result.results.find((item) => item.name === 'Assistant history without reasoning').httpStatus, 400);
   assert.equal(result.results.find((item) => item.name === 'Tool result round trip').status, 'supported');
@@ -201,6 +206,9 @@ test('autoconfigure uses official data first, tests only the selected model and 
       }).expect(200).expect('Content-Type', /application\/x-ndjson/);
     const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(events[0].activeTest, 'Reading the provider model catalog');
+    assert.equal(events[0].stage, 1);
+    assert.equal(events[0].completedStages, 0);
+    assert.ok(events.filter((event) => event.type === 'progress').every((event) => event.totalStages === 6));
     assert.ok(events.some((event) => event.activeTest === 'Tool result round trip'));
     assert.equal(events.at(-1).type, 'result');
     assert.equal(events.at(-1).selectedModel, 'active-model');
