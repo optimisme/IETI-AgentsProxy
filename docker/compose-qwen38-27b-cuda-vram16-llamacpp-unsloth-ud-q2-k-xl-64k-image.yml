@@ -1,0 +1,81 @@
+# Stop:    docker compose -f compose-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image.yml down
+# Start:   docker compose -f compose-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image.yml up -d
+# Logs:    docker logs -f --tail 100 qwen38_27b_cuda_vram16_llamacpp_unsloth_ud_q2_k_xl_64k_image
+# Note:    Qwen3.8 27B UD-Q2_K_XL GGUF, llama.cpp, native MTP, 64k context.
+
+services:
+  qwen-llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    pull_policy: always
+    container_name: qwen38_27b_cuda_vram16_llamacpp_unsloth_ud_q2_k_xl_64k_image
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - LLAMA_CACHE=/root/.cache/llama.cpp
+
+    volumes:
+      - ./tokens.env:/run/secrets/tokens.env:ro
+      - xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-hf-cache:/root/.cache/huggingface
+      - xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-gguf-cache:/root/.cache/llama.cpp
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45m
+
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/sh
+      - -lc
+
+    command:
+      - |
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+        exec /app/llama-server \
+          -hf unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL \
+          --alias active-model \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --log-timestamps \
+          --log-prefix \
+          -c 65536 \
+          -np 1 \
+          -fa on \
+          -ctk q8_0 \
+          -ctv q8_0 \
+          --reasoning on \
+          --reasoning-effort low \
+          --spec-type draft-mtp \
+          --spec-draft-n-max 2
+
+volumes:
+  xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-hf-cache:
+    name: xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-hf-cache
+    external: true
+
+  xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-gguf-cache:
+    name: xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-gguf-cache
+    external: true

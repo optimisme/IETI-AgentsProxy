@@ -53,6 +53,15 @@ test.before(async () => {
       req.on('end', () => {
         const payload = JSON.parse(body || '{}');
         lastChatPayload = payload;
+        if (payload.messages?.[0]?.content === 'Chunked reasoning') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          const bytes = Buffer.from('id: 1\r\ndata: {"choices":[{"delta":{"reasoning":"Raó"}}]}\r\n\r\ndata: {"choices":[{"delta":{"content":"OK"}}]}\r\n\r\ndata: [DONE]\r\n\r\n');
+          const cut = bytes.indexOf(Buffer.from('ó')) + 1;
+          res.write(bytes.subarray(0, cut));
+          setTimeout(() => res.end(bytes.subarray(cut)), 10);
+          return;
+        }
+
         if (payload.stream) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
           if (payload.messages?.[0]?.content === 'Stream beyond the request timeout.') {
@@ -2247,4 +2256,44 @@ test('admin can regenerate password invite links for lost passwords', async () =
   assert.notEqual(firstToken, secondToken);
   await request(app).get(`/invite/${firstToken}`).expect(200).expect(/invalid or expired/);
   await request(app).get(`/invite/${secondToken}`).expect(200).expect(/Set Password/);
+});
+
+
+test('chat streaming normalizes split UTF-8 reasoning and forwards configured assistant history', async () => {
+  const provider = db.prepare("INSERT INTO providers (slug, name, base_url, api_key) VALUES ('history-stream', 'History stream', ?, 'local')").run(mockBaseUrl);
+  db.prepare("INSERT INTO provider_models (provider_id, public_model, upstream_model, name, reasoning_history_field) VALUES (?, 'history-stream', 'active-model', 'History', 'reasoning_content')").run(provider.lastInsertRowid);
+  const student = createStudent({ models: ['history-stream'] });
+  const response = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`).send({
+    model: 'history-stream', stream: true, messages: [
+      { role: 'user', content: 'Chunked reasoning' },
+      { role: 'assistant', content: 'Earlier', reasoning: 'Actual previous reasoning' },
+      { role: 'user', content: 'Continue' }
+    ]
+  }).expect(200);
+  assert.equal(lastChatPayload.messages[1].reasoning_content, 'Actual previous reasoning');
+  assert.match(response.text, /"reasoning_content":"Raó"/);
+  assert.match(response.text, /id: 1\r\n/);
+  assert.match(response.text, /data: \[DONE\]/);
+  assert.match(response.text, /"content":"OK"/);
+});
+
+test('a shared group alias advertises common capabilities instead of impossible combinations', async () => {
+  const providerIds = [];
+  for (const [slug, image, tools, efforts] of [
+    ['common-image', 1, 0, '["low","high"]'], ['common-tools', 0, 1, '["low"]']
+  ]) {
+    const provider = db.prepare('INSERT INTO providers (slug, name, base_url, api_key) VALUES (?, ?, ?, ?)').run(slug, slug, mockBaseUrl, 'local');
+    providerIds.push(provider.lastInsertRowid);
+    db.prepare(`INSERT INTO provider_models (provider_id, public_model, upstream_model, name, supports_image_input,
+      supports_tools, supports_parallel_tools, reasoning_efforts) VALUES (?, 'shared-common', 'active-model', ?, ?, ?, 0, ?)`)
+      .run(provider.lastInsertRowid, slug, image, tools, efforts);
+  }
+  const student = createStudent({ models: ['common-image'] });
+  const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  require('../src/services/accessService').setGroupProviders(groupId, providerIds);
+  const response = await request(app).get('/v1/model-capabilities').set('Authorization', `Bearer ${student.key}`).expect(200);
+  const model = response.body.data.find((item) => item.id === 'shared-common');
+  assert.equal(model.capabilities.image, false);
+  assert.equal(model.capabilities.tools, false);
+  assert.deepEqual(model.reasoning_efforts, ['low']);
 });

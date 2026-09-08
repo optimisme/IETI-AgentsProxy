@@ -108,6 +108,7 @@ test('set_agents_opencode updates only the IETI provider models and preserves th
   assert.equal(config.provider['ieti-agents'].models['active-model'].limit.output, 8192);
   assert.equal(config.provider['ieti-agents'].models['active-model'].tool_call, true);
   assert.equal(config.provider['ieti-agents'].models['active-model'].reasoning, true);
+  assert.deepEqual(config.provider['ieti-agents'].models['active-model'].interleaved, { field: 'reasoning_content' });
   assert.equal(config.provider['ieti-agents'].models['active-model'].options.reasoningEffort, 'low');
   assert.deepEqual(config.provider['ieti-agents'].models['active-model'].variants, {
     none: { disabled: true },
@@ -276,6 +277,34 @@ test('set_agents_opencode does not read settings.env as executable input', async
     env: { ...process.env, PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1` }
   });
   assert.equal(fs.existsSync(marker), false);
+});
+
+test('Bash and PowerShell generators agree and remove stale reasoning settings when capabilities change', async (t) => {
+  const { directory, script, configPath } = createLauncherDirectory(t, 'ieti-reasoning-sync-');
+  const models = [{ id: 'thinking-model', reasoning: true, reasoningEfforts: ['low', 'high'] }];
+  const address = await startCapabilitiesServer(t, 'ieti_sk_default', models);
+  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const psScript = fs.readFileSync(path.join(__dirname, '..', 'assets', 'set_agents_opencode.ps1'), 'utf8');
+  const mergeScript = psScript.match(/\$mergeScript = @'\r?\n([\s\S]*?)\r?\n'@/)[1];
+  const catalogPath = path.join(directory, 'capabilities.json');
+  const psConfigPath = path.join(directory, 'powershell-config.json');
+  const psOutputPath = path.join(directory, 'powershell-output.json');
+  for (const reasoning of [true, false]) {
+    models[0].reasoning = reasoning;
+    fs.writeFileSync(catalogPath, JSON.stringify(capabilities(models)));
+    await execFileAsync('bash', [script, '--sync-only'], {
+      env: { ...process.env, PROXY_AGENTS_BASE_URL: baseUrl }
+    });
+    await execFileAsync(process.execPath, ['-e', mergeScript, psConfigPath, catalogPath, psOutputPath, baseUrl]);
+    const bashConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const psConfig = JSON.parse(fs.readFileSync(psOutputPath, 'utf8'));
+    assert.deepEqual(psConfig, bashConfig);
+    const model = psConfig.provider['ieti-agents'].models['thinking-model'];
+    assert.equal(model.reasoning, reasoning);
+    assert.deepEqual(model.interleaved, reasoning ? { field: 'reasoning_content' } : undefined);
+    if (!reasoning) assert.deepEqual(model.variants, {});
+    fs.copyFileSync(psOutputPath, psConfigPath);
+  }
 });
 
 test('PowerShell configuration script uses the key file and never opens OpenCode', () => {

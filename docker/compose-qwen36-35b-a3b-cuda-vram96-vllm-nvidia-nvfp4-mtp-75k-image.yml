@@ -1,0 +1,100 @@
+# Stop:    docker compose -f compose-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image.yml down
+# Restart: docker compose -f compose-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image.yml up -d
+# Logs:    docker logs -f --tail 80 qwen36_35b_a3b_cuda_vram96_vllm_nvidia_nvfp4_mtp_75k_image
+#
+# Note:    Qwen3.6 35B A3B NVIDIA ModelOpt NVFP4 checkpoint with native MTP.
+#          Keeps 75k context and image input.
+
+services:
+  qwen-vllm:
+    image: vllm/vllm-openai:v0.28.0
+    pull_policy: missing
+    container_name: qwen36_35b_a3b_cuda_vram96_vllm_nvidia_nvfp4_mtp_75k_image
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - VLLM_CACHE_ROOT=/root/.cache/vllm
+      - PYTORCH_ALLOC_CONF=expandable_segments:True
+      - HF_HUB_DISABLE_XET=1
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - FLASHINFER_DISABLE_VERSION_CHECK=1
+      - CUTE_DSL_ARCH=sm_121a
+      - TORCH_MATMUL_PRECISION=high
+
+    volumes:
+      - ./tokens.env:/run/secrets/tokens.env:ro
+      - xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-hf-cache:/root/.cache/huggingface
+      - xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-vllm-cache:/root/.cache/vllm
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 45m
+
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/bash
+      - -lc
+
+    command:
+      - |
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        exec vllm serve nvidia/Qwen3.6-35B-A3B-NVFP4 \
+          --revision 1355db6a052410cfd62085d94b58866fd0f2c3c5 \
+          --served-model-name active-model \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --tensor-parallel-size 1 \
+          --trust-remote-code \
+          --dtype auto \
+          --quantization modelopt \
+          --kv-cache-dtype fp8 \
+          --attention-backend flashinfer \
+          --moe-backend marlin \
+          --gpu-memory-utilization 0.75 \
+          --max-model-len 75000 \
+          --max-num-seqs 25 \
+          --max-num-batched-tokens 8192 \
+          --enable-chunked-prefill \
+          --async-scheduling \
+          --enable-prefix-caching \
+          --limit-mm-per-prompt '{"image":4,"video":0}' \
+          --speculative-config '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}' \
+          --load-format fastsafetensors \
+          --reasoning-parser qwen3 \
+          --tool-call-parser qwen3_xml \
+          --enable-auto-tool-choice
+
+volumes:
+  xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-hf-cache:
+    name: xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-hf-cache
+    external: true
+
+  xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-vllm-cache:
+    name: xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-vllm-cache
+    external: true

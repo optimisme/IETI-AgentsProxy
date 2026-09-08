@@ -29,7 +29,9 @@ const {
   countUsage
 } = require('../services/usageService');
 const { getAllSettings, getSetting, maskSecret, setSetting } = require('../services/settingsService');
-const { discoverProviderMetadata, listProviders, testProvider } = require('../services/providerService');
+const { discoverProviderMetadata, listProviders, testProvider, reserveProviderForTest } = require('../services/providerService');
+const { probeProviderModel } = require('../services/providerProbeService');
+const { CAPABILITY_FIELDS, SETTING_FIELDS } = require('../utils/providerMetadata');
 const {
   getAllGroups,
   getUserGroup,
@@ -222,6 +224,10 @@ function parseModelMappingForm(body) {
     return ['1', 'true', 'yes', 'on'].includes(String(selected).toLowerCase()) ? 1 : 0;
   };
   const supportsReasoning = capabilityValue('supports_reasoning');
+  const reasoningHistoryField = optionalText(body.reasoning_history_field);
+  if (reasoningHistoryField && !['reasoning', 'reasoning_content'].includes(reasoningHistoryField)) {
+    throw apiError(400, 'invalid_form', 'Reasoning history field must be reasoning or reasoning_content.');
+  }
   const hasReasoningEffortFields = Object.prototype.hasOwnProperty.call(body, 'reasoning_efforts_present');
   const requestedEfforts = Array.isArray(body.reasoning_efforts)
     ? body.reasoning_efforts
@@ -245,6 +251,7 @@ function parseModelMappingForm(body) {
     supportsImageInput: capabilityValue('supports_image_input'),
     supportsTools: capabilityValue('supports_tools'),
     supportsReasoning,
+    reasoningHistoryField: reasoningHistoryField || null,
     reasoningEfforts: serializeReasoningEfforts(reasoningEfforts),
     defaultReasoningEffort: supportsReasoning ? requestedDefaultEffort : null,
     supportsChatTemplateKwargs: supportsReasoning ? capabilityValue('supports_chat_template_kwargs', 0) : 0,
@@ -276,7 +283,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       UPDATE provider_models
       SET public_model = ?, upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
           supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?,
-          reasoning_efforts = ?, default_reasoning_effort = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?,
+          reasoning_efforts = ?, default_reasoning_effort = ?, reasoning_history_field = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -291,6 +298,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       form.supportsReasoning,
       form.reasoningEfforts,
       form.defaultReasoningEffort,
+      form.reasoningHistoryField,
       form.supportsChatTemplateKwargs,
       form.supportsParallelTools,
       existing.id
@@ -300,8 +308,8 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       INSERT INTO provider_models
         (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
          supports_text_input, supports_image_input, supports_tools, supports_reasoning,
-         reasoning_efforts, default_reasoning_effort, supports_chat_template_kwargs, supports_parallel_tools)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         reasoning_efforts, default_reasoning_effort, reasoning_history_field, supports_chat_template_kwargs, supports_parallel_tools)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       providerId,
       form.publicModel,
@@ -315,6 +323,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       form.supportsReasoning,
       form.reasoningEfforts,
       form.defaultReasoningEffort,
+      form.reasoningHistoryField,
       form.supportsChatTemplateKwargs,
       form.supportsParallelTools
     );
@@ -675,6 +684,12 @@ function modelMappingFields(provider = {}, model = activeProviderModel(provider.
       <div class="actions">
         ${REASONING_EFFORTS.map((effort) => `<label><input name="reasoning_efforts" type="checkbox" value="${effort}" style="width:auto" ${reasoningEfforts.includes(effort) ? 'checked' : ''}> ${effort}</label>`).join('')}
       </div>
+      <label>Reasoning history field</label>
+      <select name="reasoning_history_field">
+        <option value="">Forward history unchanged</option>
+        ${['reasoning', 'reasoning_content'].map((field) => `<option value="${field}" ${model.reasoning_history_field === field ? 'selected' : ''}>${field}</option>`).join('')}
+      </select>
+      <p class="muted">For upstreams requiring reasoning in assistant history. Existing reasoning is preserved; missing history uses an empty string.</p>
       <label>Default reasoning effort</label>
       <select name="default_reasoning_effort">
         <option value="">Provider default</option>
@@ -721,6 +736,7 @@ function providerForm(provider = {}, action = '/admin/providers') {
       </dialog>
       <dialog id="${autoconfigureModalId}" class="modal" aria-labelledby="${autoconfigureModalId}-title" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json">
         <h2 id="${autoconfigureModalId}-title">Autoconfigure provider</h2>
+        <p class="muted">Tests send a few small synthetic inference requests and may incur provider charges. They do not execute tools or use student conversations.</p>
         <p data-autoconfigure-status class="muted" aria-live="polite">Querying the upstream model catalog...</p>
         <label>Upstream model</label>
         <select data-autoconfigure-model disabled></select>
@@ -1505,9 +1521,10 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
           });
         });
 
-        document.querySelectorAll('[data-autoconfigure-url]').forEach((button) => {
+        document.querySelectorAll('button[data-autoconfigure-url]').forEach((button) => {
           button.addEventListener('click', async () => {
             const originalText = button.textContent;
+            const providerForm = button.closest('[data-provider-settings-form]');
             const modelInput = document.querySelector('input[name="upstream_model"]');
             const modal = document.getElementById(button.dataset.autoconfigureModal);
             const status = modal?.querySelector('[data-autoconfigure-status]');
@@ -1517,8 +1534,12 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
             if (!modal || !status || !detail || !modelSelect || !applyButton) return;
             button.disabled = true;
             button.textContent = 'Discovering...';
+            modelSelect.onchange = () => {
+              button.dataset.preferredModel = modelSelect.value;
+              button.click();
+            };
             status.className = 'muted';
-            status.textContent = 'Querying the upstream model catalog...';
+            status.textContent = 'Reading published settings and testing the selected model. This can take a few minutes...';
             detail.textContent = '';
             modelSelect.replaceChildren();
             modelSelect.disabled = true;
@@ -1532,11 +1553,15 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-                body: JSON.stringify({ preferred_model: modelInput?.value || '', apply: false })
+                body: JSON.stringify({
+                  preferred_model: button.dataset.preferredModel || modelInput?.value || '',
+                  base_url: providerForm?.querySelector('[name="base_url"]')?.value,
+                  apply: false
+                })
               });
               const body = await response.json();
               status.className = body.ok ? 'notice' : 'error';
-              status.textContent = body.message || (response.ok ? 'Configuration discovered.' : 'Autoconfiguration failed.');
+              status.textContent = body.message || body.error?.message || (response.ok ? 'Configuration discovered.' : 'Autoconfiguration failed.');
               detail.textContent = body.detail || '';
               if (body.ok && Array.isArray(body.models) && body.models.length) {
                 for (const model of body.models) {
@@ -1545,10 +1570,19 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
                   option.textContent = [model.id, model.maxModelLen ? 'context ' + model.maxModelLen : ''].filter(Boolean).join(' — ');
                   option.selected = model.id === body.selectedModel;
                   option.dataset.contextLimit = model.maxModelLen || '';
+                  option.dataset.settings = JSON.stringify(model.settings || {});
                   modelSelect.append(option);
                 }
                 modelSelect.disabled = false;
-                applyButton.disabled = false;
+                if (!body.selectedModel) {
+                  const placeholder = document.createElement('option');
+                  placeholder.textContent = 'Choose a model to test';
+                  placeholder.value = '';
+                  placeholder.disabled = true;
+                  placeholder.selected = true;
+                  modelSelect.prepend(placeholder);
+                }
+                applyButton.disabled = !body.selectedModel;
               }
             } catch (error) {
               status.className = 'error';
@@ -1556,6 +1590,7 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
             } finally {
               button.disabled = false;
               button.textContent = originalText;
+              delete button.dataset.preferredModel;
             }
           });
         });
@@ -1581,6 +1616,25 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
             if (!selectedOption) return;
             if (modelInput) modelInput.value = selectedOption.value;
             if (contextInput && selectedOption.dataset.contextLimit) contextInput.value = selectedOption.dataset.contextLimit;
+            const settings = JSON.parse(selectedOption.dataset.settings || '{}');
+            for (const field of ['context_limit', 'output_limit']) {
+              const input = providerForm.querySelector('input[name="' + field + '"]');
+              if (input && settings[field] !== undefined) input.value = settings[field];
+            }
+            for (const field of ${JSON.stringify(CAPABILITY_FIELDS)}) {
+              const input = providerForm.querySelector('input[type="checkbox"][name="' + field + '"]');
+              if (input && settings[field] !== undefined) input.checked = Boolean(settings[field]);
+            }
+            if (settings.reasoning_efforts !== undefined) {
+              const efforts = JSON.parse(settings.reasoning_efforts);
+              providerForm.querySelectorAll('input[name="reasoning_efforts"]').forEach((input) => {
+                input.checked = efforts.includes(input.value);
+              });
+            }
+            for (const field of ['default_reasoning_effort', 'reasoning_history_field']) {
+              const input = providerForm.querySelector('select[name="' + field + '"]');
+              if (input && settings[field] !== undefined) input.value = settings[field] || '';
+            }
             status.className = 'notice';
             status.textContent = 'Configuration applied to the form. Save the provider to persist it.';
             modelSelect.disabled = true;
@@ -1738,12 +1792,16 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
     if (!provider) return res.status(404).json({ ok: false, message: 'Provider not found.' });
 
-    const discovery = await discoverProviderMetadata({ slug: provider.slug });
+    const discovery = await discoverProviderMetadata({
+      slug: provider.slug,
+      baseUrl: req.body?.base_url === undefined ? provider.base_url : validateUrl(req.body.base_url, 'Base URL'),
+    });
     if (!discovery.ok) {
       return res.status(502).json({
         ok: false,
         message: 'Autoconfiguration failed.',
-        detail: discovery.errorMessage,
+        detail: `Model catalog${discovery.status ? ` (HTTP ${discovery.status})` : ''}: ${discovery.errorMessage}`,
+        upstreamStatus: discovery.status,
         models: []
       });
     }
@@ -1752,6 +1810,27 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     const preferredModel = optionalText(req.body?.preferred_model, { max: 255 }) || current.upstream_model || '';
     const selected = discovery.models.find((model) => model.id === preferredModel) ||
       (discovery.models.length === 1 ? discovery.models[0] : null);
+    if (selected) {
+      const release = reserveProviderForTest(provider.slug);
+      try {
+        const probe = await probeProviderModel({
+          baseUrl: req.body?.base_url === undefined ? provider.base_url : validateUrl(req.body.base_url, 'Base URL'),
+          apiKey: provider.api_key, model: selected.id,
+          timeoutMs: Math.min(Math.max(Number(provider.timeout_ms || config.requestTimeoutMs), 1000), 60000)
+        });
+        selected.probes = probe.results;
+        for (const [field, value] of Object.entries(probe.settings)) {
+          if (selected.settings[field] !== undefined && selected.settings[field] !== value) {
+            discovery.warnings.push(`${field}: the test result conflicts with the published value. The published value is kept; review this discrepancy before saving.`);
+          }
+        }
+        const published = selected.settings;
+        selected.settings = { ...probe.settings, ...published };
+        if (selected.settings.supports_tools === 0 && published.supports_parallel_tools === undefined) {
+          selected.settings.supports_parallel_tools = 0;
+        }
+      } finally { release(); }
+    }
     const shouldApply = req.body?.apply === true || String(req.body?.apply || '').toLowerCase() === 'true';
     const detectedContextLimit = selected?.maxModelLen || null;
     const detected = [
@@ -1763,7 +1842,10 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       selected
         ? (detectedContextLimit ? `Context limit: ${detectedContextLimit}` : 'Context limit: not published; existing value will be kept.')
         : '',
-      'Output limit and capabilities: manual values will be kept.',
+      selected?.settings.output_limit ? `Output limit: ${selected.settings.output_limit}` : 'Output limit: not published; existing value will be kept.',
+      'Official published values take priority. Only verified behavior or explicit capability rejections supplement them. Inconclusive values keep existing settings.',
+      ...(selected?.probes || []).map((probe) => `${probe.name}: ${probe.status}${probe.httpStatus ? ` (HTTP ${probe.httpStatus})` : ''}\n  ${probe.message}${probe.hint ? `\n  Next step: ${probe.hint}` : ''}`),
+      selected ? `Values to apply: ${JSON.stringify(selected.settings)}` : '',
       ...discovery.warnings
     ].filter(Boolean);
 
@@ -1792,27 +1874,35 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     }
 
     const db = getDb();
-    if (current.id) {
-      db.prepare(`
-        UPDATE provider_models
-        SET upstream_model = ?, context_limit = COALESCE(?, context_limit), updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(selected.id, detectedContextLimit, current.id);
-    } else {
-      db.prepare(`
-        INSERT INTO provider_models
-          (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-           supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
-        VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 0, 0, 0)
-      `).run(
-        provider.id,
-        config.publicModelName,
-        selected.id,
-        provider.name,
-        detectedContextLimit || Number(getSetting('default_model_context_limit')),
-        Number(getSetting('default_model_output_limit'))
-      );
-    }
+    db.transaction(() => {
+      if (current.id) {
+        db.prepare(`
+          UPDATE provider_models SET upstream_model = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).run(selected.id, current.id);
+      } else {
+        db.prepare(`
+          INSERT INTO provider_models
+            (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+             supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+          VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 0, 0, 0)
+        `).run(
+          provider.id,
+          config.publicModelName,
+          selected.id,
+          provider.name,
+          Number(getSetting('default_model_context_limit')),
+          Number(getSetting('default_model_output_limit'))
+        );
+      }
+      const mapping = activeProviderModel(provider.id);
+      const fields = SETTING_FIELDS
+        .filter((field) => selected.settings[field] !== undefined);
+      if (fields.length) {
+        db.prepare(`UPDATE provider_models SET ${fields.map((field) => `${field} = ?`).join(', ')},
+          updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .run(...fields.map((field) => selected.settings[field]), mapping.id);
+      }
+    })();
 
     const updated = activeProviderModel(provider.id);
     return res.json({
@@ -1825,7 +1915,8 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       selectedModel: selected.id,
       applied: {
         upstreamModel: updated.upstream_model,
-        contextLimit: updated.context_limit
+        contextLimit: updated.context_limit,
+        outputLimit: updated.output_limit
       }
     });
   } catch (error) {

@@ -164,6 +164,7 @@ function initSchema(database) {
       supports_reasoning INTEGER NOT NULL DEFAULT 1,
       reasoning_efforts TEXT,
       default_reasoning_effort TEXT,
+      reasoning_history_field TEXT,
       supports_chat_template_kwargs INTEGER NOT NULL DEFAULT 0,
       supports_parallel_tools INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -248,6 +249,7 @@ function migrateSchema(database) {
   addProviderModelColumn('supports_image_input', 'INTEGER NOT NULL DEFAULT 1');
   addProviderModelColumn('supports_tools', 'INTEGER NOT NULL DEFAULT 1');
   addProviderModelColumn('supports_reasoning', 'INTEGER NOT NULL DEFAULT 1');
+  addProviderModelColumn('reasoning_history_field', 'TEXT');
   addProviderModelColumn('reasoning_efforts', 'TEXT');
   addProviderModelColumn('default_reasoning_effort', 'TEXT');
   addProviderModelColumn('supports_chat_template_kwargs', 'INTEGER NOT NULL DEFAULT 0');

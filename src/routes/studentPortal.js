@@ -1,4 +1,5 @@
 const express = require('express');
+const { commonCapabilities } = require('../utils/modelCapabilities');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getDb } = require('../db');
@@ -147,6 +148,7 @@ function getModelEntries(models) {
         limit,
         tool_call: capabilities.tools ?? true,
         reasoning: capabilities.reasoning ?? true,
+        ...(capabilities.reasoning ? { interleaved: { field: 'reasoning_content' } } : {}),
         modalities: {
           input: [
             ...(capabilities.text === false ? [] : ['text']),
@@ -177,16 +179,7 @@ function getActiveModelsForUser(user) {
       providerSlug: entry.id,
       providerSlugs: [],
       limit: null,
-      capabilities: {
-        text: false,
-        image: false,
-        tools: false,
-        reasoning: false,
-        reasoningEfforts: [],
-        defaultReasoningEffort: null,
-        chatTemplateKwargs: false,
-        parallelTools: false
-      },
+      capabilities: null,
       group
     };
     current.providerSlugs.push(entry.id);
@@ -198,18 +191,7 @@ function getActiveModelsForUser(user) {
       context: current.limit ? Math.min(current.limit.context, entryLimit.context) : entryLimit.context,
       output: current.limit ? Math.min(current.limit.output, entryLimit.output) : entryLimit.output
     };
-    current.capabilities.text ||= entry.capabilities?.text ?? true;
-    current.capabilities.image ||= entry.capabilities?.image ?? true;
-    current.capabilities.tools ||= entry.capabilities?.tools ?? true;
-    current.capabilities.reasoning ||= entry.capabilities?.reasoning ?? true;
-    current.capabilities.reasoningEfforts = REASONING_EFFORTS.filter((effort) =>
-      current.capabilities.reasoningEfforts.includes(effort) || entry.capabilities?.reasoningEfforts?.includes(effort));
-    if (!current.capabilities.defaultReasoningEffort &&
-        current.capabilities.reasoningEfforts.includes(entry.capabilities?.defaultReasoningEffort)) {
-      current.capabilities.defaultReasoningEffort = entry.capabilities.defaultReasoningEffort;
-    }
-    current.capabilities.chatTemplateKwargs ||= entry.capabilities?.chatTemplateKwargs ?? false;
-    current.capabilities.parallelTools ||= entry.capabilities?.parallelTools ?? true;
+    current.capabilities = commonCapabilities(current.capabilities, entry.capabilities);
     byAlias.set(entry.publicModel, current);
   }
   return [...byAlias.values()];
@@ -936,7 +918,9 @@ router.get('/downloads/set_harness_buildlite.ps1', (req, res) => {
 
 router.get('/downloads/buildlite_harness.zip', (_req, res, next) => {
   res.set('Cache-Control', 'no-store');
-  res.download(BUILD_LITE_ARCHIVE_FILE, 'buildlite_harness.zip', next);
+  res.download(BUILD_LITE_ARCHIVE_FILE, 'buildlite_harness.zip', (error) => {
+    if (error) next(error);
+  });
 });
 
 module.exports = router;

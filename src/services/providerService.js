@@ -1,6 +1,8 @@
 const config = require('../config');
+const { prepareAssistantHistory } = require('../utils/reasoningHistory');
 const { getDb } = require('../db');
 const { apiError } = require('../utils/errors');
+const { officialModelSettings } = require('../utils/providerMetadata');
 const {
   CHAT_TEMPLATE_KWARG_NAMES,
   CHAT_TEMPLATE_KWARG_SET,
@@ -101,7 +103,7 @@ function validateReasoningControls(payload = {}) {
   };
 }
 
-function buildPayload(payload, upstreamModel) {
+function buildPayload(payload, upstreamModel, provider = {}) {
   const reasoning = validateReasoningControls(payload);
   const next = {};
   for (const field of COMPATIBLE_FIELDS) {
@@ -114,6 +116,7 @@ function buildPayload(payload, upstreamModel) {
       next[field] = payload[field];
     }
   }
+  next.messages = prepareAssistantHistory(next.messages, provider.reasoning_history_field);
   next.model = upstreamModel;
   return next;
 }
@@ -159,6 +162,7 @@ function getEnabledModelEntries() {
       provider_models.supports_reasoning,
       provider_models.reasoning_efforts,
       provider_models.default_reasoning_effort,
+      provider_models.reasoning_history_field,
       provider_models.supports_chat_template_kwargs,
       provider_models.supports_parallel_tools,
       providers.priority
@@ -224,6 +228,7 @@ function reserveProvider(provider) {
 function reserveProviderForTest(slug) {
   const provider = getProviderBySlug(slug);
   if (!provider) throw new Error(`Provider ${slug} not found.`);
+  if (!hasCapacity(provider)) throw apiError(503, 'provider_capacity_exceeded', 'Provider is at capacity. Wait for active requests to finish before testing.');
   return reserveProvider(provider);
 }
 
@@ -257,6 +262,7 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
       provider_models.supports_reasoning,
       provider_models.reasoning_efforts,
       provider_models.default_reasoning_effort,
+      provider_models.reasoning_history_field,
       provider_models.supports_chat_template_kwargs,
       provider_models.supports_parallel_tools
     FROM provider_models
@@ -363,7 +369,7 @@ async function callChatCompletions(payload, { signal, providerSlug = null, provi
         Authorization: `Bearer ${provider.api_key}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(buildPayload(payload, provider.upstream_model)),
+      body: JSON.stringify(buildPayload(payload, provider.upstream_model, provider)),
       signal
     });
 
@@ -472,6 +478,7 @@ async function discoverProviderMetadata({ slug, apiKey, baseUrl }) {
   const requestJson = async (url) => {
     const response = await fetch(url, {
       headers: targetApiKey ? { Authorization: `Bearer ${targetApiKey}` } : {},
+      redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs)
     });
     const text = await response.text();
@@ -519,12 +526,13 @@ async function discoverProviderMetadata({ slug, apiKey, baseUrl }) {
   }
 
   const models = modelResponse.body.data.map((model) => {
-    const maxModelLen = Number(model?.max_model_len);
+    const settings = officialModelSettings(model);
     return {
       id: String(model?.id || '').trim(),
       ownedBy: String(model?.owned_by || '').trim() || null,
       root: String(model?.root || '').trim() || null,
-      maxModelLen: Number.isFinite(maxModelLen) && maxModelLen > 0 ? maxModelLen : null
+      maxModelLen: settings.context_limit ?? null,
+      settings
     };
   }).filter((model) => model.id);
 

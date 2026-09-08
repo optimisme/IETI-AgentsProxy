@@ -1,0 +1,85 @@
+# Stop:    docker compose -f compose-qwen38-flash-next-cuda-vram16-llamacpp-unsloth-iq3_xxs-64k-image.yml down
+# Start:   docker compose -f compose-qwen38-flash-next-cuda-vram16-llamacpp-unsloth-iq3_xxs-64k-image.yml up -d
+# Logs:    docker logs -f --tail 80 qwen38_flash_next_cuda_vram16_llamacpp_unsloth_iq3_xxs_64k_image
+#
+# Note:    Qwen3.8-Flash-Next Unsloth UD-IQ3_XXS GGUF.
+#          Target: NVIDIA GPU with 16 GB VRAM + 96 GB system RAM.
+#          Uses a current official llama.cpp CUDA server image.
+#          llama.cpp support for Qwen3.8-Flash-Next was merged upstream on 2026-08-27.
+#          Most MoE expert weights stay in system RAM.
+#          64k context and one parallel slot are used initially for memory headroom.
+#          N-gram speculative decoding is enabled, useful especially for code generation.
+
+services:
+  qwen-llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    pull_policy: always
+    container_name: qwen38_flash_next_cuda_vram16_llamacpp_unsloth_iq3_xxs_64k_image
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - CUDA_VISIBLE_DEVICES=0
+
+    volumes:
+      - ./tokens.env:/run/secrets/tokens.env:ro
+      - xtec-qwen38-flash-next-cuda-vram16-unsloth-iq3_xxs-64k-hf-cache:/root/.cache/huggingface
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 45m
+
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/bash
+      - -lc
+
+    command:
+      - |
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        exec /app/llama-server \
+          --hf-repo unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS \
+          --alias active-model \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --ctx-size 65536 \
+          --parallel 1 \
+          --n-gpu-layers all \
+          --n-cpu-moe 44 \
+          --flash-attn on \
+          --batch-size 2048 \
+          --ubatch-size 512 \
+          --cache-type-k q8_0 \
+          --cache-type-v q8_0 \
+          --jinja \
+          --reasoning-format deepseek \
+          --spec-type ngram-map-k \
+          --spec-draft-n-max 64
+
+volumes:
+  xtec-qwen38-flash-next-cuda-vram16-unsloth-iq3_xxs-64k-hf-cache:
+    name: xtec-qwen38-flash-next-cuda-vram16-unsloth-iq3_xxs-64k-hf-cache

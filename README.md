@@ -145,7 +145,15 @@ STREAM_INACTIVITY_TIMEOUT_MS=600000
 
 `REQUEST_TIMEOUT_MS` limits the upstream connection and non-streaming request. Once a streaming response starts, `STREAM_INACTIVITY_TIMEOUT_MS` is reset whenever an upstream chunk arrives, so an active agent run is not aborted merely because its total duration exceeds the request timeout.
 
-From the provider edit page, **Autoconfigure** queries the standard OpenAI-compatible `/v1/models` catalog. It imports the selected upstream model ID and, when published by servers such as vLLM, `max_model_len`. Provider-specific capabilities, output limits, and runtime flags remain explicit administrator settings because the OpenAI-compatible model catalog does not standardize them.
+From the provider edit page, **Autoconfigure** reads the standard OpenAI-compatible `/v1/models` catalog, then tests only the selected model. Published settings (including vLLM's `max_model_len`) always take priority. Tests use small synthetic requests for text, assistant history, tool calls and their results, image input, and streamed assistant history. They may incur provider charges; they never execute real tools or use student conversations. Inference testing is limited to three minutes total, with up to 60 seconds per request. Slow or truncated responses are inconclusive.
+
+The preview reports each test's outcome, HTTP status and upstream error, with credentials redacted. Explicit capability rejections can disable a capability; authentication errors, timeouts, rate limits, outages and ignored parameters cannot. Unknown values preserve existing settings, which still need manual review. Tests cannot infer maximum output tokens or every reasoning control. Apply updates the form; Save provider persists it. Changing the selected model runs fresh tests for that model.
+
+For providers rejecting assistant history without a thinking field, Autoconfigure verifies a retry using `reasoning_content` before proposing the **Reasoning history field** setting. The proxy preserves real reasoning and fills missing history with an empty string only for providers with this setting enabled. This does not reconstruct reasoning missing from old conversations. Streaming and JSON chat responses expose vLLM's `reasoning` as `reasoning_content` as well, so OpenCode can retain it for later turns.
+
+Both `set_agents_opencode.sh` and `set_agents_opencode.ps1` generate `interleaved: { "field": "reasoning_content" }` when published reasoning is enabled. Save the provider settings and rerun the script to refresh `opencode.json`; unrelated providers, settings and existing custom options are preserved. Start a new conversation if earlier reasoning was already lost. A group alias shared by several providers publishes their common capabilities and lowest limits; use separate public aliases to expose different feature sets.
+
+Docker deployments no longer use Python metadata sidecars, metadata ports or generated manifests. `modelctl.sh` starts only inference services, and `info` shows catalog configuration. No Metadata URL or development-only vLLM endpoint is required.
 
 Inicialitza la base de dades:
 

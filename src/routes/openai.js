@@ -1,4 +1,5 @@
 const express = require('express');
+const { normalizeChatReasoning, normalizeReasoningEvent } = require('../utils/reasoningHistory');
 const config = require('../config');
 const { authStudent } = require('../middleware/authStudent');
 const { studentRateLimit } = require('../middleware/rateLimit');
@@ -9,7 +10,7 @@ const { getUserGroup } = require('../services/accessService');
 const { estimateChatTokens, estimateTokensFromText } = require('../utils/tokens');
 const { validateRequestPayload } = require('../utils/payloadValidation');
 const { apiError } = require('../utils/errors');
-const { REASONING_EFFORTS } = require('../utils/reasoning');
+const { commonCapabilities } = require('../utils/modelCapabilities');
 const {
   chatCompletionToResponse,
   chatUsageToResponses,
@@ -29,29 +30,11 @@ function getPublishedModels(providerSlugs) {
     const current = grouped.get(entry.publicModel);
     const contextWindow = Number(entry.limit?.context || config.defaultModelContextLimit);
     const outputLimit = Number(entry.limit?.output || config.defaultModelOutputLimit);
-    const reasoningEffortSet = new Set([
-      ...(current?.capabilities?.reasoningEfforts || []),
-      ...(entry.capabilities?.reasoningEfforts || [])
-    ]);
-    const reasoningEfforts = REASONING_EFFORTS.filter((effort) => reasoningEffortSet.has(effort));
-    const proposedDefaultEffort = current?.capabilities?.defaultReasoningEffort || entry.capabilities?.defaultReasoningEffort || null;
     grouped.set(entry.publicModel, {
       id: entry.publicModel,
       contextWindow: current ? Math.min(current.contextWindow, contextWindow) : contextWindow,
       outputLimit: current ? Math.min(current.outputLimit, outputLimit) : outputLimit,
-      capabilities: {
-        text: Boolean(current?.capabilities?.text || entry.capabilities?.text),
-        image: Boolean(current?.capabilities?.image || entry.capabilities?.image),
-        tools: Boolean(current?.capabilities?.tools || entry.capabilities?.tools),
-        reasoning: Boolean(current?.capabilities?.reasoning || entry.capabilities?.reasoning),
-        reasoningEfforts,
-        reasoningEffortsKnown: Boolean(current
-          ? current.capabilities?.reasoningEffortsKnown && entry.capabilities?.reasoningEffortsKnown
-          : entry.capabilities?.reasoningEffortsKnown),
-        defaultReasoningEffort: reasoningEfforts.includes(proposedDefaultEffort) ? proposedDefaultEffort : null,
-        chatTemplateKwargs: Boolean(current?.capabilities?.chatTemplateKwargs || entry.capabilities?.chatTemplateKwargs),
-        parallelTools: Boolean(current?.capabilities?.parallelTools || entry.capabilities?.parallelTools)
-      },
+      capabilities: commonCapabilities(current?.capabilities, entry.capabilities),
       priority: current?.priority || grouped.size + 1
     });
   }
@@ -160,7 +143,7 @@ router.post('/v1/chat/completions', authStudent, studentRateLimit, async (req, r
       return;
     }
 
-    const body = await upstream.json();
+    const body = normalizeChatReasoning(await upstream.json());
     const usage = normalizeUsage(body.usage, estimatedInputTokens, body);
     recordUsage({
       userId: user.id,
@@ -593,12 +576,13 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
       if (done) break;
       inactivityTimer.reset();
       const chunk = decoder.decode(value, { stream: true });
-      res.write(chunk);
       buffer += chunk;
 
-      const events = buffer.split('\n\n');
+      const events = buffer.split(/(\r?\n\r?\n)/);
       buffer = events.pop() || '';
-      for (const event of events) {
+      for (let index = 0; index < events.length; index += 2) {
+        const event = events[index];
+        res.write(normalizeReasoningEvent(event) + events[index + 1]);
         const dataLines = event.split('\n')
           .filter((line) => line.startsWith('data:'))
           .map((line) => line.slice(5).trim());
@@ -615,6 +599,9 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
         }
       }
     }
+
+    buffer += decoder.decode();
+    if (buffer) res.write(normalizeReasoningEvent(buffer));
 
     const outputEstimate = estimateTokensFromText(outputText);
     const usage = normalizeUsage(usageFromStream, estimatedInputTokens, null, outputEstimate);

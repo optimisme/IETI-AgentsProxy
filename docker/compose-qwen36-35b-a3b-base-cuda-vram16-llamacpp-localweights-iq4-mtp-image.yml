@@ -1,0 +1,80 @@
+# Stop:    docker compose -f compose-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image.yml down
+# Restart: docker compose -f compose-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image.yml up -d
+# Logs:    docker logs -f --tail 80 qwen36_35b_a3b_base_cuda_vram16_llamacpp_localweights_iq4_mtp_image
+# Note:    llama.cpp / GGUF service, not vLLM. RTX 4060 Ti 16 GB with partial GPU offload.
+#          Image input uses the Unsloth Qwen3.6 mmproj with CPU mmproj execution to save VRAM.
+services:
+  qwen-llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    pull_policy: always
+    container_name: qwen36_35b_a3b_base_cuda_vram16_llamacpp_localweights_iq4_mtp_image
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - LLAMA_CACHE=/root/.cache/llama.cpp
+    volumes:
+      - ./tokens.env:/run/secrets/tokens.env:ro
+      - xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-hf-cache:/root/.cache/huggingface
+      - xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-gguf-cache:/root/.cache/llama.cpp
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30m
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -lc
+    command:
+      - |
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+        echo "Starting llama.cpp server for localweights/Qwen3.6-35B-A3B-MTP-IQ4_XS-GGUF:IQ4_XS on 0.0.0.0:8000"
+        echo "Model cache: $${LLAMA_CACHE}"
+        exec /app/llama-server \
+          -hf localweights/Qwen3.6-35B-A3B-MTP-IQ4_XS-GGUF:IQ4_XS \
+          --mmproj-url https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-BF16.gguf \
+          --no-mmproj-offload \
+          --alias active-model \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --log-timestamps \
+          --log-prefix \
+          --verbose \
+          -c 65536 \
+          -ngl 24 \
+          -np 1 \
+          --temp 0.6 \
+          --top-p 0.95 \
+          --top-k 20 \
+          -cb \
+          -fa on \
+          -ctk q8_0 \
+          -ctv q8_0 \
+          --reasoning on \
+          --reasoning-format deepseek \
+          --chat-template-kwargs '{"enable_thinking":true}'
+
+volumes:
+  xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-hf-cache:
+    name: xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-hf-cache
+    external: true
+  xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-gguf-cache:
+    name: xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-gguf-cache
+    external: true

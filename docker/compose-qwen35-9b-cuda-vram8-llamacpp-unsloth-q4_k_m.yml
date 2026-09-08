@@ -1,0 +1,86 @@
+# Stop:    docker compose -f compose-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m.yml down
+# Start:   docker compose -f compose-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m.yml up -d
+# Logs:    docker logs -f --tail 80 qwen35_9b_cuda_vram8_llamacpp_unsloth_q4_k_m
+# Note:    Qwen3 8B Q5_K_M GGUF llama.cpp profile.
+services:
+  qwen-llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    pull_policy: always
+    container_name: qwen35_9b_cuda_vram8_llamacpp_unsloth_q4_k_m
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - LLAMA_CACHE=/root/.cache/llama.cpp
+
+    volumes:
+      - ./tokens.env:/run/secrets/tokens.env:ro
+      - xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-hf-cache:/root/.cache/huggingface
+      - xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-gguf-cache:/root/.cache/llama.cpp
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30m
+
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/sh
+      - -lc
+
+    command:
+      - |
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        exec /app/llama-server \
+          --hf-repo unsloth/Qwen3.5-9B-GGUF \
+          --hf-file Qwen3.5-9B-Q4_K_M.gguf \
+          --alias active-model \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --log-timestamps \
+          --log-prefix \
+          --verbose \
+          -c 8192 \
+          -ngl 99 \
+          -np 1 \
+          --temp 0.6 \
+          --top-p 0.95 \
+          --top-k 20 \
+          -cb \
+          -fa on \
+          -ctk q8_0 \
+          -ctv q8_0 \
+          --reasoning on \
+          --reasoning-format deepseek \
+          --chat-template-kwargs '{"enable_thinking":true}'
+
+volumes:
+  xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-hf-cache:
+    name: xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-hf-cache
+    external: true
+  xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-gguf-cache:
+    name: xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-gguf-cache
+    external: true

@@ -203,6 +203,7 @@ for (const published of catalog.data) {
     limit: { context, output },
     tool_call: capabilities.tools,
     reasoning: capabilities.reasoning,
+    ...(capabilities.reasoning ? { interleaved: { field: 'reasoning_content' } } : {}),
     modalities: { input: inputModalities, output: ['text'] },
     variants,
     ...(defaultReasoningEffort ? { options: { reasoningEffort: defaultReasoningEffort } } : {})

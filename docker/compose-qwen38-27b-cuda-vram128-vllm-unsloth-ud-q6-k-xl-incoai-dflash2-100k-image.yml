@@ -1,0 +1,150 @@
+# Stop:    docker compose -f compose-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-incoai-dflash2-100k-image.yml down
+# Start:   docker compose -f compose-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-incoai-dflash2-100k-image.yml up -d
+# Logs:    docker logs -f --tail 80 qwen38_27b_cuda_vram128_vllm_unsloth_ud_q6_k_xl_incoai_dflash2_100k_image
+# Note:    Experimental vLLM GGUF target using Unsloth Qwen3.8-27B Dynamic v3
+#          UD-Q6_K_XL + IncoAI DFlash2. GGUF support is currently experimental
+#          and DFlash2 compatibility with GGUF is not yet a validated combination.
+
+services:
+  qwen-vllm:
+    image: vllm/vllm-openai:nightly
+    pull_policy: missing
+    container_name: qwen38_27b_cuda_vram128_vllm_unsloth_ud_q6_k_xl_incoai_dflash2_100k_image
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - VLLM_CACHE_ROOT=/root/.cache/vllm
+      - PIP_CACHE_DIR=/root/.cache/pip
+      - LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib:/usr/local/cuda/lib64
+      - CMAKE_ARGS=-DCUDA_nvrtc_LIBRARY=/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib/libnvrtc.so.13
+      - TORCH_CUDA_ARCH_LIST=12.1
+      - PYTORCH_ALLOC_CONF=expandable_segments:True
+      - HF_HUB_DISABLE_XET=1
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+      - VLLM_USE_V2_MODEL_RUNNER=1
+      - TORCH_MATMUL_PRECISION=high
+
+    volumes:
+      - ./tokens.env:/run/secrets/tokens.env:ro
+      - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-hf-cache:/root/.cache/huggingface
+      - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-vllm-cache:/root/.cache/vllm
+      - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-pip-cache:/root/.cache/pip
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 60m
+
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/bash
+      - -lc
+
+    command:
+      - |
+        set -e
+
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        # Install GGUF support before applying the DFlash2 vLLM revision.
+        python3 -m pip install \
+          --no-deps \
+          --upgrade \
+          vllm-gguf-plugin \
+          "gguf>=0.17.0"
+
+        # Apply the PR's runtime modules unconditionally.  Nightly can ship
+        # a newer partial DFlash2 implementation whose architecture rewrite
+        # is incompatible with the Qwen3.8 draft checkpoint.
+        pr_base="https://raw.githubusercontent.com/vllm-project/vllm/19c9351904df4c63042671bc67a866ca48dc7d6f"
+        vllm_root="$$(python3 -c 'import os,vllm; print(os.path.dirname(vllm.__file__))')"
+
+        for rel in \
+          vllm/config/vllm.py \
+          vllm/config/speculative.py \
+          vllm/model_executor/models/qwen3_dflash.py \
+          vllm/model_executor/models/qwen3_dflash2.py \
+          vllm/model_executor/models/registry.py \
+          vllm/v1/worker/gpu/spec_decode/__init__.py \
+          vllm/v1/worker/gpu/spec_decode/dflash2/__init__.py \
+          vllm/v1/worker/gpu/spec_decode/dflash2/speculator.py; do
+          dest="$${vllm_root}/$${rel#vllm/}"
+          mkdir -p "$$(dirname "$$dest")"
+          curl -fsSL "$$pr_base/$$rel" -o "$$dest"
+        done
+
+        # Some vLLM nightlies normalize DFlash2DraftModel to this legacy
+        # architecture name before validation.  Keep it mapped to the PR's
+        # DFlash2 implementation so the draft is accepted.
+        python3 - <<PY
+        from pathlib import Path
+        p = Path("$${vllm_root}") / "model_executor/models/registry.py"
+        s = p.read_text()
+        marker = '    "DFlash2DraftModel": ("qwen3_dflash2", "DFlash2Qwen3ForCausalLM"),'
+        alias = marker + '\\n    "DFlashQwen3ForCausalLM": ("qwen3_dflash2", "DFlash2Qwen3ForCausalLM"),'
+        if '"DFlashQwen3ForCausalLM":' not in s and marker in s:
+            p.write_text(s.replace(marker, alias))
+        PY
+
+        exec vllm serve \
+          unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
+          --tokenizer Qwen/Qwen3.8-27B \
+          --hf-config-path Qwen/Qwen3.8-27B \
+          --served-model-name active-model \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --tensor-parallel-size 1 \
+          --trust-remote-code \
+          --dtype auto \
+          --kv-cache-dtype auto \
+          --gpu-memory-utilization 0.85 \
+          --max-model-len 100000 \
+          --max-num-seqs 32 \
+          --max-num-batched-tokens 8192 \
+          --enable-chunked-prefill \
+          --enable-prefix-caching \
+          --limit-mm-per-prompt '{"image":5,"video":0}' \
+          --generation-config auto \
+          --override-generation-config '{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0}' \
+          --speculative-config '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}' \
+          --reasoning-parser qwen3 \
+          --tool-call-parser qwen3_coder \
+          --enable-auto-tool-choice
+
+volumes:
+  xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-hf-cache:
+    name: xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-hf-cache
+    external: true
+
+  xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-vllm-cache:
+    name: xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-vllm-cache
+    external: true
+
+  xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-pip-cache:
+    name: xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-pip-cache
+    external: true
