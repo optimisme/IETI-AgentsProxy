@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('node:path');
 const config = require('../config');
 const { getDb } = require('../db');
 const { requireAdmin } = require('../middleware/authAdmin');
@@ -31,7 +32,7 @@ const {
 const { getAllSettings, getSetting, maskSecret, setSetting } = require('../services/settingsService');
 const { discoverProviderMetadata, listProviders, testProvider, reserveProviderForTest } = require('../services/providerService');
 const { probeProviderModel } = require('../services/providerProbeService');
-const { CAPABILITY_FIELDS, SETTING_FIELDS } = require('../utils/providerMetadata');
+const { SETTING_FIELDS } = require('../utils/providerMetadata');
 const {
   getAllGroups,
   getUserGroup,
@@ -734,18 +735,32 @@ function providerForm(provider = {}, action = '/admin/providers') {
           <button type="submit" form="${deleteFormId}" class="danger">Delete provider</button>
         </div>
       </dialog>
-      <dialog id="${autoconfigureModalId}" class="modal" aria-labelledby="${autoconfigureModalId}-title" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json">
-        <h2 id="${autoconfigureModalId}-title">Autoconfigure provider</h2>
-        <p class="muted">Tests send a few small synthetic inference requests and may incur provider charges. They do not execute tools or use student conversations.</p>
-        <p data-autoconfigure-status class="muted" aria-live="polite">Querying the upstream model catalog...</p>
-        <label>Upstream model</label>
-        <select data-autoconfigure-model disabled></select>
-        <p data-autoconfigure-detail class="muted" style="white-space:pre-wrap"></p>
+      <dialog id="${autoconfigureModalId}" class="modal autoconfigure-modal" closedby="none" aria-labelledby="${autoconfigureModalId}-title" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json">
+        <h2 id="${autoconfigureModalId}-title" data-autoconfigure-title>Autoconfigure provider</h2>
+        <p data-autoconfigure-status role="status" aria-live="polite">Connecting to the provider...</p>
+        <div data-autoconfigure-progress>
+          <progress aria-label="Provider capability tests in progress"></progress>
+          <p class="muted"><span data-autoconfigure-elapsed>0 seconds elapsed</span> · Tests can take up to four minutes.</p>
+        </div>
+        <p data-autoconfigure-help class="muted">Nothing has been saved. You can cancel testing at any time.</p>
+        <div data-autoconfigure-picker hidden>
+          <label for="${autoconfigureModalId}-model">Upstream model</label>
+          <select id="${autoconfigureModalId}-model" data-autoconfigure-model disabled></select>
+        </div>
+        <section data-autoconfigure-review hidden>
+          <h3>Settings to save</h3>
+          <div class="autoconfigure-table"><table><thead><tr><th>Setting</th><th>Current</th><th>Detected</th></tr></thead><tbody data-autoconfigure-settings></tbody></table></div>
+          <p class="muted">Official values take priority. Settings that could not be verified keep their current values.</p>
+        </section>
+        <ul data-autoconfigure-results class="autoconfigure-results" aria-label="Test results"></ul>
+        <details data-autoconfigure-diagnostics hidden><summary>Technical details</summary><p data-autoconfigure-detail class="muted" style="white-space:pre-wrap;overflow-wrap:anywhere"></p></details>
         <div class="actions">
-          <button type="button" class="secondary" data-close-modal>Cancel</button>
-          <button type="button" data-apply-autoconfigure disabled>Apply</button>
+          <button type="button" class="secondary" data-cancel-autoconfigure>Cancel</button>
+          <button type="button" class="secondary" data-retry-autoconfigure hidden>Try again</button>
+          <button type="button" data-apply-autoconfigure hidden disabled>Apply and save</button>
         </div>
       </dialog>
+      <script src="/admin/assets/provider-autoconfigure.js" defer></script>
       <dialog id="${providerTestModalId}" class="modal" aria-labelledby="${providerTestModalId}-title">
         <h2 id="${providerTestModalId}-title" data-test-title>Provider test result</h2>
         <p data-test-status class="muted" aria-live="polite">Running test request...</p>
@@ -774,6 +789,11 @@ router.post('/admin/login', (req, res) => {
 
 router.post('/admin/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/?admin=1'));
+});
+
+router.get('/admin/assets/provider-autoconfigure.js', requireAdmin, (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, '../../assets/provider-autoconfigure.js'));
 });
 
 router.get('/admin', requireAdmin, (req, res) => {
@@ -1521,129 +1541,6 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
           });
         });
 
-        document.querySelectorAll('button[data-autoconfigure-url]').forEach((button) => {
-          button.addEventListener('click', async () => {
-            const originalText = button.textContent;
-            const providerForm = button.closest('[data-provider-settings-form]');
-            const modelInput = document.querySelector('input[name="upstream_model"]');
-            const modal = document.getElementById(button.dataset.autoconfigureModal);
-            const status = modal?.querySelector('[data-autoconfigure-status]');
-            const detail = modal?.querySelector('[data-autoconfigure-detail]');
-            const modelSelect = modal?.querySelector('[data-autoconfigure-model]');
-            const applyButton = modal?.querySelector('[data-apply-autoconfigure]');
-            if (!modal || !status || !detail || !modelSelect || !applyButton) return;
-            button.disabled = true;
-            button.textContent = 'Discovering...';
-            modelSelect.onchange = () => {
-              button.dataset.preferredModel = modelSelect.value;
-              button.click();
-            };
-            status.className = 'muted';
-            status.textContent = 'Reading published settings and testing the selected model. This can take a few minutes...';
-            detail.textContent = '';
-            modelSelect.replaceChildren();
-            modelSelect.disabled = true;
-            applyButton.disabled = true;
-            applyButton.textContent = 'Apply';
-            delete applyButton.dataset.mode;
-            if (typeof modal.showModal === 'function') modal.showModal();
-            else modal.setAttribute('open', '');
-            try {
-              const response = await fetch(button.dataset.autoconfigureUrl, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  preferred_model: button.dataset.preferredModel || modelInput?.value || '',
-                  base_url: providerForm?.querySelector('[name="base_url"]')?.value,
-                  apply: false
-                })
-              });
-              const body = await response.json();
-              status.className = body.ok ? 'notice' : 'error';
-              status.textContent = body.message || body.error?.message || (response.ok ? 'Configuration discovered.' : 'Autoconfiguration failed.');
-              detail.textContent = body.detail || '';
-              if (body.ok && Array.isArray(body.models) && body.models.length) {
-                for (const model of body.models) {
-                  const option = document.createElement('option');
-                  option.value = model.id;
-                  option.textContent = [model.id, model.maxModelLen ? 'context ' + model.maxModelLen : ''].filter(Boolean).join(' — ');
-                  option.selected = model.id === body.selectedModel;
-                  option.dataset.contextLimit = model.maxModelLen || '';
-                  option.dataset.settings = JSON.stringify(model.settings || {});
-                  modelSelect.append(option);
-                }
-                modelSelect.disabled = false;
-                if (!body.selectedModel) {
-                  const placeholder = document.createElement('option');
-                  placeholder.textContent = 'Choose a model to test';
-                  placeholder.value = '';
-                  placeholder.disabled = true;
-                  placeholder.selected = true;
-                  modelSelect.prepend(placeholder);
-                }
-                applyButton.disabled = !body.selectedModel;
-              }
-            } catch (error) {
-              status.className = 'error';
-              status.textContent = error.message || 'Autoconfiguration failed.';
-            } finally {
-              button.disabled = false;
-              button.textContent = originalText;
-              delete button.dataset.preferredModel;
-            }
-          });
-        });
-
-        document.querySelectorAll('[data-apply-autoconfigure]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const modal = button.closest('dialog');
-            const status = modal?.querySelector('[data-autoconfigure-status]');
-            const detail = modal?.querySelector('[data-autoconfigure-detail]');
-            const modelSelect = modal?.querySelector('[data-autoconfigure-model]');
-            const modelInput = document.querySelector('input[name="upstream_model"]');
-            const contextInput = document.querySelector('input[name="context_limit"]');
-            const providerForm = document.querySelector('[data-provider-settings-form]');
-            if (!modal || !status || !detail || !modelSelect || !providerForm) return;
-            if (button.dataset.mode === 'save') {
-              if (typeof modal.close === 'function') modal.close();
-              else modal.removeAttribute('open');
-              if (typeof providerForm.requestSubmit === 'function') providerForm.requestSubmit();
-              else providerForm.submit();
-              return;
-            }
-            const selectedOption = modelSelect.selectedOptions[0];
-            if (!selectedOption) return;
-            if (modelInput) modelInput.value = selectedOption.value;
-            if (contextInput && selectedOption.dataset.contextLimit) contextInput.value = selectedOption.dataset.contextLimit;
-            const settings = JSON.parse(selectedOption.dataset.settings || '{}');
-            for (const field of ['context_limit', 'output_limit']) {
-              const input = providerForm.querySelector('input[name="' + field + '"]');
-              if (input && settings[field] !== undefined) input.value = settings[field];
-            }
-            for (const field of ${JSON.stringify(CAPABILITY_FIELDS)}) {
-              const input = providerForm.querySelector('input[type="checkbox"][name="' + field + '"]');
-              if (input && settings[field] !== undefined) input.checked = Boolean(settings[field]);
-            }
-            if (settings.reasoning_efforts !== undefined) {
-              const efforts = JSON.parse(settings.reasoning_efforts);
-              providerForm.querySelectorAll('input[name="reasoning_efforts"]').forEach((input) => {
-                input.checked = efforts.includes(input.value);
-              });
-            }
-            for (const field of ['default_reasoning_effort', 'reasoning_history_field']) {
-              const input = providerForm.querySelector('select[name="' + field + '"]');
-              if (input && settings[field] !== undefined) input.value = settings[field] || '';
-            }
-            status.className = 'notice';
-            status.textContent = 'Configuration applied to the form. Save the provider to persist it.';
-            modelSelect.disabled = true;
-            button.dataset.mode = 'save';
-            button.textContent = 'Save provider';
-            button.disabled = false;
-          });
-        });
-
         document.querySelectorAll('[data-open-modal]').forEach((button) => {
           button.addEventListener('click', () => {
             const modal = document.getElementById(button.dataset.openModal);
@@ -1788,16 +1685,32 @@ router.post('/admin/providers/:id/test.json', requireAdmin, async (req, res, nex
 });
 
 router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req, res, next) => {
+  const streaming = req.body?.stream_progress === true;
+  const controller = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+  const emit = (event) => { if (!res.destroyed) res.write(JSON.stringify(event) + '\n'); };
+  const respond = (status, body) => {
+    if (res.destroyed) return;
+    if (!streaming || !res.headersSent) return res.status(status).json(body);
+    emit({ type: 'result', ...body });
+    return res.end();
+  };
   try {
     const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
     if (!provider) return res.status(404).json({ ok: false, message: 'Provider not found.' });
 
+    if (streaming) {
+      res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
+      res.flushHeaders();
+      emit({ type: 'progress', activeTest: 'Reading the provider model catalog', results: [] });
+    }
     const discovery = await discoverProviderMetadata({
+      signal: controller.signal,
       slug: provider.slug,
       baseUrl: req.body?.base_url === undefined ? provider.base_url : validateUrl(req.body.base_url, 'Base URL'),
     });
     if (!discovery.ok) {
-      return res.status(502).json({
+      return respond(502, {
         ok: false,
         message: 'Autoconfiguration failed.',
         detail: `Model catalog${discovery.status ? ` (HTTP ${discovery.status})` : ''}: ${discovery.errorMessage}`,
@@ -1806,6 +1719,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       });
     }
 
+    controller.signal.throwIfAborted();
     const current = activeProviderModel(provider.id);
     const preferredModel = optionalText(req.body?.preferred_model, { max: 255 }) || current.upstream_model || '';
     const selected = discovery.models.find((model) => model.id === preferredModel) ||
@@ -1814,6 +1728,8 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       const release = reserveProviderForTest(provider.slug);
       try {
         const probe = await probeProviderModel({
+          signal: controller.signal,
+          onProgress: streaming ? (progress) => emit({ type: 'progress', model: selected.id, ...progress }) : undefined,
           baseUrl: req.body?.base_url === undefined ? provider.base_url : validateUrl(req.body.base_url, 'Base URL'),
           apiKey: provider.api_key, model: selected.id,
           timeoutMs: Math.min(Math.max(Number(provider.timeout_ms || config.requestTimeoutMs), 1000), 60000)
@@ -1850,7 +1766,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     ].filter(Boolean);
 
     if (!shouldApply) {
-      return res.json({
+      return respond(200, {
         ok: true,
         message: 'Configuration discovered. Review it before applying.',
         detail: detected.join('\n'),
@@ -1863,7 +1779,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     }
 
     if (!selected) {
-      return res.status(409).json({
+      return respond(409, {
         ok: false,
         message: 'Choose an upstream model before applying the configuration.',
         detail: `Available models: ${discovery.models.map((model) => model.id).join(', ')}`,
@@ -1905,7 +1821,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
     })();
 
     const updated = activeProviderModel(provider.id);
-    return res.json({
+    return respond(200, {
       ok: true,
       message: 'Autoconfiguration applied.',
       detail: detected.join('\n'),
@@ -1920,6 +1836,10 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       }
     });
   } catch (error) {
+    if (res.destroyed) return;
+    if (streaming && res.headersSent) return respond(error.status || 500, {
+      ok: false, message: error.message || 'Provider testing failed.', models: []
+    });
     next(error);
   }
 });

@@ -1529,9 +1529,12 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
   );
   assert.doesNotMatch(providerActions[1], />Cancel</);
   assert.doesNotMatch(edit.text, /Autoconfigure discovers model IDs/);
-  assert.match(edit.text, /Configuration applied to the form\. Save the provider to persist it\./);
-  assert.match(edit.text, /button\.textContent = 'Save provider'/);
-  assert.match(edit.text, /providerForm\.requestSubmit\(\)/);
+  assert.match(edit.text, /closedby="none"/);
+  assert.match(edit.text, /<progress aria-label="Provider capability tests in progress"/);
+  assert.match(edit.text, /Apply and save/);
+  assert.match(edit.text, /src="\/admin\/assets\/provider-autoconfigure.js"/);
+  await agent.get('/admin/assets/provider-autoconfigure.js').expect(200).expect(/stream_progress: true/);
+
 
   const preview = await agent
     .post(`/admin/providers/${provider.lastInsertRowid}/autoconfigure.json`)

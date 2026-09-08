@@ -38,7 +38,7 @@ function explicitlyUnsupported(result, feature) {
   return names.test(text) && /not support|unsupported|does not have|not a multimodal|only support.*text|requires.*(?:parser|enable.auto)|must.*(?:parser|enable.auto)|cannot.*(?:image|tool)/.test(text);
 }
 
-async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 60000, budgetMs = 180000, fetchImpl = fetch }) {
+async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 60000, budgetMs = 180000, fetchImpl = fetch, signal, onProgress }) {
   const clean = baseUrl.replace(/\/+$/, '');
   const url = `${clean}${clean.endsWith('/v1') ? '' : '/v1'}/chat/completions`;
   const deadline = Date.now() + budgetMs;
@@ -50,6 +50,8 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
     return value.slice(0, 1500);
   };
   async function call(name, messages, extra = {}) {
+    signal?.throwIfAborted();
+    onProgress?.({ activeTest: name, results: results.map((item) => ({ ...item })) });
     const start = Date.now();
     const result = { name, status: 'inconclusive', httpStatus: null, message: '', durationMs: 0 };
     results.push(result);
@@ -61,7 +63,7 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
       const response = await fetchImpl(url, {
         method: 'POST', redirect: 'error',
         headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-        signal: AbortSignal.timeout(Math.max(1, Math.min(timeoutMs, deadline - start))),
+        signal: AbortSignal.any([AbortSignal.timeout(Math.max(1, Math.min(timeoutMs, deadline - start))), ...(signal ? [signal] : [])]),
         body: JSON.stringify({ model, messages, max_tokens: 256, temperature: 0, stream: false, ...testControls, ...extra })
       });
       result.httpStatus = response.status;
@@ -137,6 +139,8 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
   if (!text.assistant) {
     results.push({ name: 'Remaining tests', status: 'inconclusive', httpStatus: null,
       message: 'Skipped because the basic request failed. Check the Base URL, credentials, model availability and the error above.' });
+    signal?.throwIfAborted();
+    onProgress?.({ activeTest: null, results: results.map((item) => ({ ...item })) });
     return { settings, results };
   }
 
@@ -206,6 +210,8 @@ async function probeProviderModel({ baseUrl, apiKey = '', model, timeoutMs = 600
     message: settings.supports_reasoning ? 'Nonempty reasoning was returned in reasoning or reasoning_content.' : 'No reasoning output was observed. This does not prove reasoning is unsupported.' });
   results.push({ name: 'Limits and reasoning controls', status: 'inconclusive', httpStatus: null,
     message: 'Tests do not infer maximum context/output limits or selectable reasoning efforts. Use published values or verify these settings manually. One successful sample does not guarantee every future request.' });
+  signal?.throwIfAborted();
+  onProgress?.({ activeTest: null, results: results.map((item) => ({ ...item })) });
   return { settings, results };
 }
 

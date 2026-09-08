@@ -465,7 +465,7 @@ async function testProvider({ slug, apiKey, baseUrl, model }) {
   };
 }
 
-async function discoverProviderMetadata({ slug, apiKey, baseUrl }) {
+async function discoverProviderMetadata({ slug, apiKey, baseUrl, signal }) {
   const provider = slug ? getProviderBySlug(slug) : null;
   const targetBaseUrl = String(baseUrl || provider?.base_url || '').replace(/\/+$/, '');
   const targetApiKey = apiKey || provider?.api_key || '';
@@ -479,7 +479,7 @@ async function discoverProviderMetadata({ slug, apiKey, baseUrl }) {
     const response = await fetch(url, {
       headers: targetApiKey ? { Authorization: `Bearer ${targetApiKey}` } : {},
       redirect: 'error',
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])])
     });
     const text = await response.text();
     let body;

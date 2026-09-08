@@ -59,6 +59,26 @@ test('timeouts, authentication, rate limits and server errors leave settings unk
   assert.match(bodyTimeout.results[0].message, /timed out/);
 });
 
+test('cancelling a probe aborts the upstream request and prevents subsequent tests', async () => {
+  const controller = new AbortController();
+  let started;
+  const pending = new Promise((resolve) => { started = resolve; });
+  let calls = 0;
+  const progress = [];
+  const probing = probeProviderModel({ baseUrl: 'http://provider', model: 'm', signal: controller.signal,
+    onProgress: (event) => progress.push(event), fetchImpl: async (_url, options) => {
+      calls++;
+      started();
+      return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+    }
+  });
+  await pending;
+  controller.abort();
+  await assert.rejects(probing, { name: 'AbortError' });
+  assert.equal(calls, 1);
+  assert.equal(progress[0].activeTest, 'Text completion');
+});
+
 test('HTTP 200 that ignores tools and image parameters does not establish those capabilities', async () => {
   const result = await probeProviderModel({ baseUrl: 'http://provider', model: 'm', fetchImpl: async () => completion({ content: 'OK' }) });
   assert.equal(result.settings.supports_tools, undefined);
@@ -171,6 +191,20 @@ test('autoconfigure uses official data first, tests only the selected model and 
     assert.match(preview.body.detail, /conflicts with the published value/);
     assert.match(preview.body.detail, /HTTP 400/);
     assert.match(preview.body.detail, /missing a thinking field/);
+    assert.equal(db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(providerId).upstream_model, 'old-model');
+    const streamed = await agent.post(endpoint).send({ stream_progress: true, apply: false }).buffer(true)
+      .parse((response, callback) => {
+        let data = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => { data += chunk; });
+        response.on('end', () => callback(null, data));
+      }).expect(200).expect('Content-Type', /application\/x-ndjson/);
+    const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(events[0].activeTest, 'Reading the provider model catalog');
+    assert.ok(events.some((event) => event.activeTest === 'Tool result round trip'));
+    assert.equal(events.at(-1).type, 'result');
+    assert.equal(events.at(-1).selectedModel, 'active-model');
+    assert.doesNotMatch(streamed.body, /Look up both codes\.|secret-key/);
     assert.equal(db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(providerId).upstream_model, 'old-model');
     await agent.post(endpoint).send({ apply: true }).expect(200);
     const saved = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(providerId);
