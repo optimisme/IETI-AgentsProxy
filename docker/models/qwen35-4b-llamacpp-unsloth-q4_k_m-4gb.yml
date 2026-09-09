@@ -1,12 +1,16 @@
-# Stop:    docker compose -f compose-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m.yml down
-# Start:   docker compose -f compose-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m.yml up -d
-# Logs:    docker logs -f --tail 80 qwen35_9b_cuda_vram8_llamacpp_unsloth_q4_k_m
-# Note:    Qwen3 8B Q5_K_M GGUF llama.cpp profile.
+# From docker/: docker compose -f models/qwen35-4b-llamacpp-unsloth-q4_k_m-4gb.yml up -d
+# Served model: Qwen3.5-4B-Q4_K_M.gguf
+# Note:    Qwen3.5 4B Q4_K_M GGUF llama.cpp profile.
+name: ieti-qwen35-4b-llamacpp-unsloth-q4-k-m-4gb
+
 services:
   qwen-llamacpp:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     pull_policy: always
-    container_name: qwen35_9b_cuda_vram8_llamacpp_unsloth_q4_k_m
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen35-4b-llamacpp-unsloth-q4_k_m-4gb.yml"
+    container_name: qwen35_4b_cuda_vram4_llamacpp_unsloth_q4_k_m
 
     environment:
       - HF_HOME=/root/.cache/huggingface
@@ -14,9 +18,14 @@ services:
       - LLAMA_CACHE=/root/.cache/llama.cpp
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
-      - xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-hf-cache:/root/.cache/huggingface
-      - xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-gguf-cache:/root/.cache/llama.cpp
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - xtec-qwen35-4b-cuda-vram4-llamacpp-unsloth-q4_k_m-hf-cache:/root/.cache/huggingface
+      - xtec-qwen35-4b-cuda-vram4-llamacpp-unsloth-q4_k_m-gguf-cache:/root/.cache/llama.cpp
 
     ports:
       - "8000:8000"
@@ -55,15 +64,15 @@ services:
         fi
 
         exec /app/llama-server \
-          --hf-repo unsloth/Qwen3.5-9B-GGUF \
-          --hf-file Qwen3.5-9B-Q4_K_M.gguf \
-          --alias active-model \
+          --hf-repo unsloth/Qwen3.5-4B-GGUF \
+          --hf-file Qwen3.5-4B-Q4_K_M.gguf \
+          --alias Qwen3.5-4B-Q4_K_M.gguf \
           --host 0.0.0.0 \
           --port 8000 \
           --log-timestamps \
           --log-prefix \
           --verbose \
-          -c 8192 \
+          -c 16384 \
           -ngl 99 \
           -np 1 \
           --temp 0.6 \
@@ -78,9 +87,7 @@ services:
           --chat-template-kwargs '{"enable_thinking":true}'
 
 volumes:
-  xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-hf-cache:
-    name: xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-hf-cache
-    external: true
-  xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-gguf-cache:
-    name: xtec-qwen35-9b-cuda-vram8-llamacpp-unsloth-q4_k_m-gguf-cache
-    external: true
+  xtec-qwen35-4b-cuda-vram4-llamacpp-unsloth-q4_k_m-hf-cache:
+    name: xtec-qwen35-4b-cuda-vram4-llamacpp-unsloth-q4_k_m-hf-cache
+  xtec-qwen35-4b-cuda-vram4-llamacpp-unsloth-q4_k_m-gguf-cache:
+    name: xtec-qwen35-4b-cuda-vram4-llamacpp-unsloth-q4_k_m-gguf-cache

@@ -1,226 +1,187 @@
-# Gestio de models Docker
+# Models Docker
 
-Aquest directori separa dues responsabilitats:
+## Aturar el model actual i arrencar-ne un altre
 
-- `compose-*.yml`: defineixen com arrenca cada servei Docker.
-- `models.json`: es el cataleg operatiu de models.
-- `RANKING.md`: ordena els perfils recomanats per programacio, VRAM i modalitat.
-- `CONFIGS.md`: resumeix context, concurrencia, VRAM, imatge i puntuacio dels compose actius.
-- `modelctl.sh`: es el gestor unic per listar, arrencar, parar, veure logs i gestionar caches.
-
-`run_docker.sh` ha quedat retirat. Fes servir sempre `modelctl.sh`.
-
-## Arquitectura
-
-Els serveis continuen arrencant amb Docker Compose, pero els noms curts, contenidors,
-fitxers compose i volums associats viuen a `models.json`. Aixi evitem mantenir la
-mateixa informacio duplicada dins d'un script amb blocs `case`.
-
-Els volums de cache son especifics de cada perfil/model i es declaren a
-`models.json`. Aixo fa mes facil esborrar totes les dades d'un perfil concret
-quan ja no es fa servir, sense barrejar-les amb caches d'altres proves.
-
-| Volum | Us |
-|---|---|
-| `xtec-<model>-hf-cache` | Cache de Hugging Face del perfil: pesos, tokenizers i snapshots |
-| `xtec-<model>-vllm-cache` | Cache/runtime vLLM del perfil |
-| `xtec-<model>-gguf-cache` | Models GGUF i cache llama.cpp del perfil, nomes en perfils GGUF |
-
-Els compose declaren aquests volums com a externs. `modelctl.sh start ...` els crea
-automaticament abans d'arrencar el servei si encara no existeixen.
-
-## Descoberta de capacitats
-
-`modelctl.sh` arrenca nomes el servei d'inferencia definit al Compose. No genera
-manifests ni arrenca servidors Python auxiliars. `info` mostra la configuracio del
-cataleg; no es una comprovacio de les capacitats del model en execucio.
-
-El proxy consulta `/v1/models` i prova directament el model seleccionat amb
-peticions petites de text, imatge, eines i historial de raonament. Les dades
-publicades pel servidor tenen prioritat. Les proves inconclusives no canvien els
-valors existents. No cal exposar `/server_info` ni activar el mode de desenvolupament.
-
-Docker ha d'estar configurat per iniciar-se amb el sistema. Cada model conserva
-la politica `restart` del seu Compose. Un contenidor eliminat amb `docker compose
-down` no es reinicia automaticament.
-
-Si encara existeixen sidecars d'una instal·lacio anterior, elimina nomes els
-contenidors amb les etiquetes `com.xtec.modelctl.owner=modelctl` i
-`com.xtec.modelctl.role=metadata`. Els manifests antics de `.modelctl-state/` ja no
-s'utilitzen. Aquesta migracio no requereix reiniciar el model.
-
-Els volums globals antics `xtec-hf-cache`, `xtec-vllm-cache` i `xtec-gguf-cache`
-es mantenen al cataleg nomes com a objectius de neteja despres de la migracio.
-
-## Estat actual
-
-El model per defecte de `models.json` es:
-
-```text
-qwen38-27b-cuda-vram128-vllm-radixark-nvfp4-dspark-128k-image
-```
-
-Tots els `compose-*.yml` que es mantenen en aquesta carpeta han d'apareixer a
-`RANKING.md`, i tots els compose del ranking han de tenir entrada a `models.json`.
-`CONFIGS.md` es la vista rapida per comparar perfils abans de desplegar.
-
-Els perfils amb imatge han de servir-se amb 64k de context
-(`--max-model-len 65536`) i el client tambe s'ha de configurar a 64k. Amb 32k
-les imatges poden fallar per falta de context.
-
-## Tokens privats de HuggingFace
-
-Els models Qwen amb pesos restringits necessiten un token
-de [HuggingFace](https://huggingface.co). El token no es desa dins dels `compose-*.yml`: es posa en un
-fitxer local `docker/tokens.env`, que no s'ha de publicar.
-
-Pots aconseguir un "Access Token" a l'espai "Settings" del teu compte personal de ["Hugging Face Settings"](https://huggingface.co/settings/profile)
-
-Format esperat:
+Executa les comandes dins de `docker/` al servidor GPU (o `~/docker` si nomes
+hi has copiat aquesta carpeta). Consulta el nom del YAML del model en execucio:
 
 ```bash
-HUGGINGFACE_ACCESS_TOKENS=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+docker ps --filter label=com.ieti.inference=true --format 'table {{.Names}}\t{{.Label "com.ieti.profile"}}\t{{.Status}}'
+ls models/*.yml
 ```
 
-Els compose munten aquest fitxer com a `/run/secrets/tokens.env` i, abans
-d'executar el runtime, fan:
-
-- carrega de `/run/secrets/tokens.env`
-- lectura de `HUGGINGFACE_ACCESS_TOKENS`
-- exportacio de `HF_TOKEN` i `HUGGING_FACE_HUB_TOKEN`
-
-Aixo fa que `huggingface_hub`, vLLM i llama.cpp rebin el token amb els noms que
-esperen internament.
-
-`modelctl.sh start ...` i `modelctl.sh restart ...` preparen `tokens.env` abans
-d'executar Docker Compose:
-
-- si `HUGGINGFACE_ACCESS_TOKENS` ja existeix a l'entorn, l'escriu a
-  `docker/tokens.env` i la fa servir;
-- si no existeix pero `docker/tokens.env` ja conte la variable, fa servir aquest
-  fitxer;
-- si no existeix enlloc i l'script s'executa en una terminal interactiva,
-  pregunta en angles si vols introduir el token;
-- si no hi ha terminal interactiva, continua sense token i mostra un avis.
-
-Per tant, en una maquina remota pots desplegar el token de dues maneres: sincronitzar
-`docker/tokens.env` abans d'arrencar el model, o executar `modelctl.sh` amb
-`HUGGINGFACE_ACCESS_TOKENS` definida a l'entorn remot.
-
-## Comandes principals
-
-Llista els models configurats:
+Atura el perfil actual amb el seu YAML; conserva els pesos descarregats:
 
 ```bash
-./docker/modelctl.sh list
+docker compose -f models/qwen38-27b-vllm-unsloth-nvfp4-mtp-128gb.yml down
 ```
 
-Mostra la vista detallada amb motor, contenidor i compose:
+Arrenca el nou perfil indicant el seu YAML:
 
 ```bash
-./docker/modelctl.sh list-full
+docker compose -f models/qwen35-9b-llamacpp-unsloth-q6_k-12gb.yml up -d
+docker compose -f models/qwen35-9b-llamacpp-unsloth-q6_k-12gb.yml logs -f --tail 80
 ```
 
-Arrenca un model sense parar altres serveis:
+Substitueix els noms dels exemples pels perfils que vols aturar i arrencar.
+Tots publiquen el port 8000: primer atura l'anterior. La primera arrencada pot
+trigar mentre descarrega pesos i prepara el runtime. Comprova l'estat i el model:
 
 ```bash
-./docker/modelctl.sh start qwen36-35b-a3b-cuda-vram128-vllm-nvidia-nvfp4-64k-image
+docker compose -f models/qwen35-9b-llamacpp-unsloth-q6_k-12gb.yml ps
+curl -fsS http://127.0.0.1:8000/v1/models
 ```
 
-Reinicia un model aturant abans tots els contenidors configurats:
+Els contenidors anteriors a aquesta reorganitzacio no tenen l'etiqueta del YAML.
+Si la primera comanda no els mostra, consulta la seccio de migracio abans d'arrencar.
+Per una instal·lacio nova, prepara primer `tokens.env` com s'explica mes avall.
+
+## Eliminar un model i els seus volums per recuperar espai
+
+Indica el YAML exacte del perfil que vols eliminar. Consulta primer els seus
+volums i imatges; els noms retornats per `config --volumes` coincideixen amb els
+noms persistents dels volums en aquests YAML:
 
 ```bash
-./docker/modelctl.sh restart qwen36-35b-a3b-cuda-vram128-vllm-nvidia-nvfp4-64k-image
+profile=models/qwen35-9b-llamacpp-unsloth-q6_k-12gb.yml
+docker compose -f "$profile" config --volumes
+docker compose -f "$profile" config --images
+docker compose -f "$profile" down --volumes --rmi all
+docker system df
 ```
 
-Segueix els logs:
+Aixo elimina els contenidors (inclosos els logs i els fitxers del seu sistema de
+fitxers), la xarxa del projecte i tots els volums del perfil: pesos, tokenizers,
+GGUF i caches de runtime o pip. Tambe intenta eliminar les imatges del servei.
+Les imatges o capes compartides amb altres contenidors poden continuar ocupant
+espai; Docker pot rebutjar-ne l'eliminacio si encara estan en us. Els altres
+perfils que comparteixen una imatge eliminada l'hauran de tornar a descarregar.
+Una imatge `local/...` necessita tornar-se a importar o construir; conserva'n
+una copia o la recepta abans d'eliminar-la si la voldras reutilitzar.
+
+Si un volum antic encara existeix despres del `down`, comprova els contenidors
+que el munten i elimina nomes aquell volum quan ja no estigui en us:
 
 ```bash
-./docker/modelctl.sh logs qwen36-35b-a3b-cuda-vram128-vllm-nvidia-nvfp4-64k-image
+docker ps -a --filter volume=NOM_EXACTE_DEL_VOLUM
+docker volume inspect NOM_EXACTE_DEL_VOLUM
+docker volume rm NOM_EXACTE_DEL_VOLUM
 ```
 
-El perfil arrencat exposa el model com `active-model` a
-`http://127.0.0.1:8000/v1`.
-
-Mostra contenidors:
+Conserva el YAML si vols poder tornar a desplegar el perfil. Per retirar-lo tambe
+del repositori, elimina'l **despres** de completar la neteja:
 
 ```bash
-./docker/modelctl.sh ps
+rm -- "$profile"
 ```
 
-Atura tots els models configurats:
+Actualitza `CONFIGS.md` i sincronitza la retirada als servidors. El fitxer de
+tokens es compartit i es conserva. `down` sense `--volumes` conserva les caches.
+No cal fer una neteja global de Docker per retirar un perfil.
+
+Referencia: [volums Compose](https://docs.docker.com/reference/compose-file/volumes/)
+i [opcions de down](https://docs.docker.com/reference/cli/docker/compose/down/).
+
+## Estructura i requisits
+
+- `models/*.yml`: un fitxer autonom per perfil, amb motor, arguments, identitat
+  real, health check i volums. Cada YAML declara un `name` de projecte unic.
+- `CONFIGS.md`: seleccio de models recomanats segons VRAM i tipus d'us.
+- `explain-docker.md`: origen local, sincronitzacio i execucio remota.
+- `tokens.env.example`: format del fitxer privat `tokens.env`.
+
+Cal Docker amb Compose i un host GPU compatible amb el runtime del perfil.
+No cal cap gestor, cataleg JSON ni carpeta de scripts. Els perfils experimentals
+que necessiten preparar dependències o aplicar patches ho fan dins del YAML.
+Els perfils que utilitzen una imatge `local/...` necessiten que aquesta imatge
+ja existeixi al servidor; consulta el camp `image` del YAML.
+
+No canviis el `name` del projecte ni els noms persistents dels volums quan ajustis
+context o concurrencia. Els volums son exclusius de cada perfil, encara que
+alguns perfils descarreguin els mateixos pesos. Cada YAML es fa servir tot sol,
+sense combinar-lo amb altres fitxers `-f` ni sobreescriure el projecte amb `-p`.
+
+## Preparar el token de Hugging Face
+
+Crea el fitxer una sola vegada, sense sobreescriure un token existent:
 
 ```bash
-./docker/modelctl.sh stop
+[ -f tokens.env ] || cp tokens.env.example tokens.env
+chmod 600 tokens.env
 ```
 
-## Gestio de caches
+Edita `tokens.env` i posa el token a `HUGGINGFACE_ACCESS_TOKENS`. Si el perfil no
+el necessita, deixa el valor buit. El fitxer esta ignorat per Git. Els YAML el
+munten en mode lectura des de `../tokens.env` i exporten `HF_TOKEN` i
+`HUGGING_FACE_HUB_TOKEN` dins del contenidor. Si falta el fitxer, l'arrencada falla
+sense crear un directori amb el seu nom. Ja no hi ha cap pregunta interactiva ni
+copia automatica del token des de l'entorn del host.
 
-Llista els volums de cache configurats:
+## Identitat del model i configuracio del proxy
+
+Cada servidor publica la identitat dels pesos seleccionats, amb el repositori
+i la quantitzacio quan correspon. Per exemple, el perfil Qwen3.8-27B NVFP4
+publica `unsloth/Qwen3.8-27B-NVFP4`. En GGUF amb un fitxer concret, publica el
+nom d'aquell fitxer. Consulta sempre `/v1/models` despres d'arrencar.
+
+Al web del proxy, executa **Autoconfigure** al proveidor corresponent i revisa
+els valors detectats. **Apply and save** desa la mateixa identitat a **Upstream
+model** i **OpenCode model alias**, juntament amb les capacitats detectades.
+Actualitza la configuracio dels clients despres de canviar de model. Els
+mappings d'una base de dades existent no canvien fins que apliques la descoberta.
+Els proveidors que publiquen la mateixa identitat queden agrupats al proxy.
+
+## Migracio dels desplegaments anteriors
+
+Aquesta reorganitzacio conserva els noms dels contenidors i dels 22 volums de
+perfil. Les caches existents es poden reutilitzar sense tornar a descarregar
+pesos. Els projectes Compose ara tenen noms explicits diferents dels antics.
+
+Abans del primer `up` al servidor, identifica el contenidor antic que publica
+el port 8000 i el seu projecte:
 
 ```bash
-./docker/modelctl.sh cache ls
+docker ps -a --format 'table {{.Names}}\t{{.Ports}}\t{{.Label "com.docker.compose.project"}}'
+docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' NOM_DEL_CONTENIDOR
 ```
 
-Mostra la mida de cada cache:
+Atura i elimina nomes aquell contenidor, conservant els volums:
 
 ```bash
-./docker/modelctl.sh cache du
+docker stop NOM_DEL_CONTENIDOR
+docker rm NOM_DEL_CONTENIDOR
 ```
 
-Esborra un volum de cache. Aquesta operacio requereix `--force`:
+Si ja estava aturat, fes nomes `docker rm`. Revisa tambe els contenidors aturats
+d'altres perfils abans d'arrencar-los amb els nous projectes. Pots eliminar una
+xarxa antiga amb `docker network rm NOM_EXACTE_DE_LA_XARXA` quan no tingui cap
+contenidor connectat. Despres fes `up -d` amb el nou YAML.
+
+Compose pot avisar que un volum existent no pertany al nou projecte. Conserva'n
+el nom i les dades; no acceptis recrear-lo si aixo n'elimina el contingut. Si la
+versio de Compose en rebutja la reutilitzacio, conserva'l temporalment com a
+`external: true` al YAML afectat fins a planificar la migracio. En aquest cas,
+`down --volumes` no el retirara: cal la neteja explicita del volum indicada a dalt.
+
+Les caches de perfils retirats no apareixen als YAML actuals. Revisa-les amb
+`docker volume ls`, comprova qui les munta i elimina-les individualment quan
+ja no calguin. Aixo inclou les antigues caches globals i de perfils retirats;
+canviar els fitxers locals no elimina dades dels servidors.
+
+## Afegir o validar un perfil
+
+Copia el YAML mes semblant dins de `models/`, assigna un `name` de projecte,
+un nom de contenidor i noms de volums exclusius, actualitza l'etiqueta
+`com.ieti.profile` amb el nom del fitxer i configura la identitat real servida.
+Mantén tota la logica d'arrencada dins del YAML. Actualitza `CONFIGS.md` si el
+perfil forma part de la seleccio recomanada.
+Valida sense arrencar contenidors:
 
 ```bash
-./docker/modelctl.sh cache rm xtec-gguf-cache --force
+for profile in models/*.yml; do
+  docker compose -f "$profile" config --quiet || break
+done
 ```
 
-Esborra tots els volums de cache associats a un model concret:
-
-```bash
-./docker/modelctl.sh cache rm-model qwen36-35b-a3b-cuda-vram128-vllm-nvidia-nvfp4-64k-image --force
-```
-
-Esborra totes les caches configurades:
-
-```bash
-./docker/modelctl.sh cache rm all --force
-```
-
-Docker no permet esborrar un volum que estigui muntat per un contenidor existent.
-Atura primer els serveis amb `./docker/modelctl.sh stop` si cal.
-
-## Afegir un model
-
-1. Crea el fitxer `compose-{model}-{target}-{runtime}-{origin}-{quant}.yml`. Exemple: `compose-qwen36-35b-a3b-cuda-vram128-vllm-qwen-fp8.yml`.
-2. Munta els volums especifics del model i conserva els punts interns:
-   - `xtec-<model>-hf-cache:/root/.cache/huggingface`.
-   - `xtec-<model>-vllm-cache:/root/.cache/vllm` per vLLM.
-   - `xtec-<model>-gguf-cache:/root/.cache/llama.cpp` per llama.cpp/GGUF.
-3. Afegeix l'entrada corresponent a `models.json`.
-4. Documenta el compose a `RANKING.md` i actualitza `CONFIGS.md`.
-5. Valida:
-
-```bash
-python3 -m json.tool docker/models.json >/tmp/models_valid.json
-for f in docker/compose-*.yml; do docker compose -f "$f" config --quiet; done
-./docker/modelctl.sh list
-```
-
-Comprovacio de consistencia entre ranking i cataleg:
-
-```bash
-node - <<'NODE'
-const fs = require('fs');
-const ranking = fs.readFileSync('docker/RANKING.md', 'utf8');
-const ranked = new Set([...ranking.matchAll(/compose-[A-Za-z0-9._-]+\.yml/g)].map(m => m[0]));
-const models = JSON.parse(fs.readFileSync('docker/models.json', 'utf8')).models;
-const catalog = new Set(Object.values(models).map(m => m.compose));
-for (const compose of ranked) {
-  if (!catalog.has(compose)) throw new Error(`Missing in models.json: ${compose}`);
-}
-for (const compose of catalog) {
-  if (!ranked.has(compose)) throw new Error(`Missing in RANKING.md: ${compose}`);
-}
-console.log('Ranking and models.json are aligned');
-NODE
-```
+La validacio del YAML no comprova compatibilitat GPU, qualitat, multimodalitat
+ni rendiment; registra aquests resultats als comentaris del YAML quan es provin.

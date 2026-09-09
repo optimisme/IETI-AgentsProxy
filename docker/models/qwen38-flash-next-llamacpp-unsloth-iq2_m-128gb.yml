@@ -1,13 +1,17 @@
-# Stop:    docker compose -f compose-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k.yml down
-# Start:   docker compose -f compose-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k.yml up -d
-# Logs:    docker logs -f --tail 100 qwen38_flash_next_cuda_vram128_llamacpp_unsloth_ud_iq2_m_8k
+# From docker/: docker compose -f models/qwen38-flash-next-llamacpp-unsloth-iq2_m-128gb.yml up -d
+# Served model: unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ2_M
 # Note:    Single-GB10 llama.cpp profile using Unsloth UD-IQ2_M GGUF.
 #          Text-only: the separate vision projector is intentionally not loaded.
+
+name: ieti-qwen38-flash-next-llamacpp-unsloth-iq2-m-128gb
 
 services:
   qwen-llamacpp:
     image: local/llama.cpp:qwen38-dflash2-cuda13
     pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-llamacpp-unsloth-iq2_m-128gb.yml"
     container_name: qwen38_flash_next_cuda_vram128_llamacpp_unsloth_ud_iq2_m_8k
 
     environment:
@@ -16,7 +20,12 @@ services:
       - LLAMA_CACHE=/root/.cache/llama.cpp
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k-hf-cache:/root/.cache/huggingface
       - xtec-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k-gguf-cache:/root/.cache/llama.cpp
 
@@ -57,7 +66,7 @@ services:
         fi
         exec /app/llama-server \
           -hf unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ2_M \
-          --alias active-model \
+          --alias unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ2_M \
           --host 0.0.0.0 \
           --port 8000 \
           --log-timestamps \
@@ -73,8 +82,6 @@ services:
 volumes:
   xtec-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k-hf-cache:
     name: xtec-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k-hf-cache
-    external: true
 
   xtec-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k-gguf-cache:
     name: xtec-qwen38-flash-next-cuda-vram128-llamacpp-unsloth-ud-iq2-m-8k-gguf-cache
-    external: true

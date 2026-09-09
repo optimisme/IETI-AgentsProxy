@@ -1,6 +1,5 @@
-# Start: docker compose -f compose-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image.yml up -d --force-recreate
-# Stop:  docker compose -f compose-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image.yml down
-# Logs:  docker logs -f --tail 100 qwen38_flash_next_cuda_vram128_vllm_mia_nvfp4_mtp_64k_image
+# From docker/: docker compose -f models/qwen38-flash-next-vllm-mia-nvfp4-mtp-128gb.yml up -d
+# Served model: Mia-AiLab/Qwen3.8-Flash-Next-NVFP4
 # Single 128GB DGX Spark / GB10, 64k per request, 8 concurrent sequences.
 # Downloads the pinned MiaAI Lab Git project and applies its patches in-container.
 # Fixed runtime: FP8 KV, MTP=3, native RoPE (YaRN off), automatic graph widths.
@@ -11,11 +10,16 @@
 # GPU startup, health/API, and 8 short concurrent chats validated on two GB10s, 2026-09-05.
 # Full 64k concurrent load, sustained throughput, and FP8 quality remain untested.
 # Reduced draft vocabulary is disabled (the upstream vocabulary is not shipped).
+name: ieti-qwen38-flash-next-vllm-mia-nvfp4-mtp-128gb
+
 services:
   qwen-vllm:
     image: vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
     platform: linux/arm64
     pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-vllm-mia-nvfp4-mtp-128gb.yml"
     container_name: qwen38_flash_next_cuda_vram128_vllm_mia_nvfp4_mtp_64k_image
     # A memory-watchdog stop must not automatically restart under the same pressure.
     restart: "no"
@@ -33,7 +37,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image-hf-cache:/root/.cache/huggingface
       - xtec-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image-vllm-cache:/root/.cache/vllm
     environment:
@@ -45,7 +54,6 @@ services:
       MIA_RECIPE_SHA256: eca839f2c3a8a954ef7afd4c658a312e6b144ccd409bf79af669edb7616f175e
       MODEL_ID: Mia-AiLab/Qwen3.8-Flash-Next-NVFP4
       MODEL_REVISION: 925d7be6c14c6c9442ef83e8f05b5a3c39304f69
-      SERVED_MODEL_NAME: active-model
       MAX_MODEL_LEN: "65536"
       MAX_NUM_SEQS: "8"
       MAX_NUM_BATCHED_TOKENS: "2048"
@@ -161,7 +169,7 @@ services:
             graph_sizes = list(range(4, 4 * sequences + 1, 4))
             return [
                 'vllm', 'serve', str(snapshot),
-                '--served-model-name', os.environ['SERVED_MODEL_NAME'],
+                '--served-model-name', os.environ['MODEL_ID'],
                 '--host', '0.0.0.0', '--port', '8000',
                 '--tensor-parallel-size', '1',
                 '--gpu-memory-utilization', f'{fraction:.3f}',
@@ -284,7 +292,5 @@ services:
 volumes:
   xtec-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image-hf-cache:
     name: xtec-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image-hf-cache
-    external: true
   xtec-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image-vllm-cache:
     name: xtec-qwen38-flash-next-cuda-vram128-vllm-mia-nvfp4-mtp-64k-image-vllm-cache
-    external: true

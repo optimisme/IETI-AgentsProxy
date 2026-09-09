@@ -1,12 +1,16 @@
-# Stop:    docker compose -f compose-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image.yml down
-# Start:   docker compose -f compose-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image.yml up -d
-# Logs:    docker logs -f --tail 100 qwen38_27b_cuda_vram16_llamacpp_unsloth_ud_q2_k_xl_64k_image
+# From docker/: docker compose -f models/qwen38-27b-llamacpp-unsloth-q2_k_xl-16gb.yml up -d
+# Served model: unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL
 # Note:    Qwen3.8 27B UD-Q2_K_XL GGUF, llama.cpp, native MTP, 64k context.
+
+name: ieti-qwen38-27b-llamacpp-unsloth-q2-k-xl-16gb
 
 services:
   qwen-llamacpp:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     pull_policy: always
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-27b-llamacpp-unsloth-q2_k_xl-16gb.yml"
     container_name: qwen38_27b_cuda_vram16_llamacpp_unsloth_ud_q2_k_xl_64k_image
 
     environment:
@@ -15,7 +19,12 @@ services:
       - LLAMA_CACHE=/root/.cache/llama.cpp
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-hf-cache:/root/.cache/huggingface
       - xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-gguf-cache:/root/.cache/llama.cpp
 
@@ -56,7 +65,7 @@ services:
         fi
         exec /app/llama-server \
           -hf unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL \
-          --alias active-model \
+          --alias unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL \
           --host 0.0.0.0 \
           --port 8000 \
           --log-timestamps \
@@ -74,8 +83,6 @@ services:
 volumes:
   xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-hf-cache:
     name: xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-hf-cache
-    external: true
 
   xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-gguf-cache:
     name: xtec-qwen38-27b-cuda-vram16-llamacpp-unsloth-ud-q2-k-xl-64k-image-gguf-cache
-    external: true

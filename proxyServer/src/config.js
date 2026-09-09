@@ -52,7 +52,7 @@ module.exports = {
   defaultProviderSlug: process.env.DEFAULT_PROVIDER_SLUG || 'deepseek',
   defaultProviderName: process.env.DEFAULT_PROVIDER_NAME || 'DeepSeek',
   defaultUpstreamModel: process.env.DEFAULT_UPSTREAM_MODEL || 'deepseek-chat',
-  publicModelName: process.env.PUBLIC_MODEL_NAME || 'active-model',
+  publicModelName: process.env.PUBLIC_MODEL_NAME || process.env.DEFAULT_UPSTREAM_MODEL || 'deepseek-chat',
   publicBaseUrl,
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'replace_with_a_secure_admin_password',

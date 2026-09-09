@@ -261,9 +261,9 @@ function parseModelMappingForm(body) {
 }
 
 function validatePublicModelAlias(value) {
-  const alias = requiredText(value, 'OpenCode model alias', { max: 120 });
-  if (/[\s/]/.test(alias)) {
-    throw apiError(400, 'invalid_form', 'OpenCode model alias cannot contain spaces or slashes.');
+  const alias = requiredText(value, 'OpenCode model alias', { max: 255 });
+  if (/\s/.test(alias)) {
+    throw apiError(400, 'invalid_form', 'OpenCode model alias cannot contain whitespace.');
   }
   return alias;
 }
@@ -1791,12 +1791,13 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       });
     }
 
+    const modelIdentity = validatePublicModelAlias(selected.id);
     const db = getDb();
     db.transaction(() => {
       if (current.id) {
         db.prepare(`
-          UPDATE provider_models SET upstream_model = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(selected.id, current.id);
+          UPDATE provider_models SET public_model = ?, upstream_model = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).run(modelIdentity, modelIdentity, current.id);
       } else {
         db.prepare(`
           INSERT INTO provider_models
@@ -1805,8 +1806,8 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
           VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 0, 0, 0)
         `).run(
           provider.id,
-          config.publicModelName,
-          selected.id,
+          modelIdentity,
+          modelIdentity,
           provider.name,
           Number(getSetting('default_model_context_limit')),
           Number(getSetting('default_model_output_limit'))
@@ -1832,6 +1833,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       models: discovery.models,
       selectedModel: selected.id,
       applied: {
+        publicModel: updated.public_model,
         upstreamModel: updated.upstream_model,
         contextLimit: updated.context_limit,
         outputLimit: updated.output_limit

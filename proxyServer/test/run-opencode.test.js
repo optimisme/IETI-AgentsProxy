@@ -82,7 +82,7 @@ test('set_agents_opencode updates only the IETI provider models and preserves th
   }, null, 2)}\n`);
 
   const address = await startCapabilitiesServer(t, 'ieti_sk_test_valid', [{
-    id: 'active-model', name: 'Active model', context: 32768, output: 8192,
+    id: 'unsloth/Qwen3.8-27B-NVFP4', name: 'Qwen3.8-27B NVFP4', context: 32768, output: 8192,
     image: true, tools: true, reasoning: true, parallelTools: true,
     reasoningEfforts: ['low', 'medium', 'xhigh'], defaultReasoningEffort: 'low',
     chatTemplateKwargs: true
@@ -99,18 +99,18 @@ test('set_agents_opencode updates only the IETI provider models and preserves th
   assert.deepEqual(config.provider.existing.models, { keep: {} });
   assert.deepEqual(config.permission, { bash: 'ask' });
   assert.deepEqual(config.mcp, { local: { type: 'local', command: ['example-mcp'] } });
-  assert.equal(config.model, 'ieti-agents/active-model');
+  assert.equal(config.model, 'ieti-agents/unsloth/Qwen3.8-27B-NVFP4');
   assert.equal(config.provider['ieti-agents'].custom_property, 'keep-me');
   assert.equal(config.provider['ieti-agents'].options.customOption, 'keep-me');
   assert.equal(config.provider['ieti-agents'].options.apiKey, '{file:.secrets/agents_server_key}');
-  assert.deepEqual(Object.keys(config.provider['ieti-agents'].models), ['active-model']);
-  assert.equal(config.provider['ieti-agents'].models['active-model'].limit.context, 32768);
-  assert.equal(config.provider['ieti-agents'].models['active-model'].limit.output, 8192);
-  assert.equal(config.provider['ieti-agents'].models['active-model'].tool_call, true);
-  assert.equal(config.provider['ieti-agents'].models['active-model'].reasoning, true);
-  assert.deepEqual(config.provider['ieti-agents'].models['active-model'].interleaved, { field: 'reasoning_content' });
-  assert.equal(config.provider['ieti-agents'].models['active-model'].options.reasoningEffort, 'low');
-  assert.deepEqual(config.provider['ieti-agents'].models['active-model'].variants, {
+  assert.deepEqual(Object.keys(config.provider['ieti-agents'].models), ['unsloth/Qwen3.8-27B-NVFP4']);
+  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].limit.context, 32768);
+  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].limit.output, 8192);
+  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].tool_call, true);
+  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].reasoning, true);
+  assert.deepEqual(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].interleaved, { field: 'reasoning_content' });
+  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].options.reasoningEffort, 'low');
+  assert.deepEqual(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].variants, {
     none: { disabled: true },
     minimal: { disabled: true },
     low: { reasoningEffort: 'low' },
@@ -119,7 +119,7 @@ test('set_agents_opencode updates only the IETI provider models and preserves th
     xhigh: { reasoningEffort: 'xhigh' },
     max: { disabled: true }
   });
-  assert.deepEqual(config.provider['ieti-agents'].models['active-model'].modalities.input, ['text', 'image']);
+  assert.deepEqual(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].modalities.input, ['text', 'image']);
   assert.equal(fs.existsSync(path.join(directory, '.opencode', 'ieti-models.json')), false);
 });
 

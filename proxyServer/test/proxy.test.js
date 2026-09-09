@@ -109,6 +109,9 @@ test.before(async () => {
   process.env.DATABASE_PATH = path.join(os.tmpdir(), `agents-proxy-test-${Date.now()}.sqlite`);
   process.env.DEFAULT_PROVIDER_BASE_URL = mockBaseUrl;
   process.env.DEFAULT_PROVIDER_API_KEY = 'test-provider-key';
+  process.env.DEFAULT_UPSTREAM_MODEL = 'deepseek-chat';
+  // Keep exercising existing installations with a manually configured legacy alias.
+  process.env.PUBLIC_MODEL_NAME = 'active-model';
   process.env.ADMIN_USERNAME = 'admin';
   process.env.ADMIN_PASSWORD = 'secret';
   process.env.SESSION_SECRET = 'test-session-secret-with-enough-length';
@@ -1502,6 +1505,35 @@ test('provider active mapping can be saved and both provider tests return modal-
   );
 });
 
+test('repository-qualified public model IDs survive form saving, discovery, client configuration and routing', async () => {
+  const identity = 'unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL';
+  const slug = 'qualified-model-id';
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const provider = db.prepare(`INSERT INTO providers (slug, name, base_url, api_key, enabled)
+    VALUES (?, 'Qualified model', ?, 'test-key', 1)`).run(slug, mockBaseUrl);
+  const form = { public_model: identity, upstream_model: identity, context_limit: '32000', output_limit: '4096' };
+  await agent.post(`/admin/providers/${provider.lastInsertRowid}/mapping`).type('form').send(form).expect(302);
+  for (const invalid of ['bad model', 'bad\tmodel', 'bad\nmodel']) {
+    await agent.post(`/admin/providers/${provider.lastInsertRowid}/mapping`).type('form')
+      .send({ ...form, public_model: invalid }).expect(400);
+  }
+  const mapping = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
+  assert.equal(mapping.public_model, identity);
+  assert.equal(mapping.upstream_model, identity);
+  const student = createStudent({ models: [slug] });
+  const catalog = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
+  assert.deepEqual(catalog.body.data.map((model) => model.id), [identity]);
+  const portal = request.agent(app);
+  await portal.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  const config = await portal.get('/portal/opencode.json').expect(200);
+  assert.equal(config.body.model, `ieti-agents/${identity}`);
+  assert.deepEqual(Object.keys(config.body.provider['ieti-agents'].models), [identity]);
+  await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ model: identity, messages: [{ role: 'user', content: 'Say OK.' }] }).expect(200);
+  assert.equal(lastChatPayload.model, identity);
+});
+
 test('provider autoconfigure imports standard model IDs and optional vLLM context metadata', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
@@ -1557,7 +1589,7 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
   assert.equal(response.body.applied.contextLimit, 65536);
 
   const updated = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
-  assert.equal(updated.public_model, 'autoconfigure-alias');
+  assert.equal(updated.public_model, 'active-model');
   assert.equal(updated.upstream_model, 'active-model');
   assert.equal(updated.context_limit, 65536);
   assert.equal(updated.output_limit, 4096);

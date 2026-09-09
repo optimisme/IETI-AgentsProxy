@@ -4,6 +4,9 @@
 
 ## Architecture
 
+- **Repository:** `docker/` contains GPU inference profiles; `proxyServer/` contains the proxy application and local deployment tooling.
+- **Working directory:** run npm commands from `proxyServer/`. Application paths below (`src/`, `test/`, `settings.env`, etc.) are relative to that directory.
+
 - **Stack:** Node.js (>=24), Express 4, better-sqlite3, bcryptjs
 - **Entry:** `src/server.js` → `src/app.js`
 - **Config:** `src/config.js` reads from `settings.env`
@@ -92,18 +95,18 @@ usernames, and private key paths in local configuration only.
 
 ### Prerequisites (one-time)
 
-1. Copy `proxmox/config.env.example` to `proxmox/config.env` and fill in your SSH user and private key path.
-2. Run `proxmox/proxmoxInstall.sh` to provision the container (installs Node.js, npm, pm2, MySQL; takes ~40 min).
+1. Copy `proxyServer/proxmox/config.env.example` to `proxyServer/proxmox/config.env` and fill in your SSH user and private key path.
+2. Run `proxyServer/proxmox/proxmoxInstall.sh` to provision the container (installs Node.js, npm, pm2, MySQL; takes ~40 min).
 
 ### Deploy
 
 ```bash
-cd proxmox
+cd proxyServer/proxmox
 ./proxmoxDeploy.sh [user] [rsa_path] [port]
 ```
 
 Default port is `3000`. The script:
-- Zips the project (excluding `proxmox/`, `node_modules/`, `data/`)
+- Archives the committed `proxyServer/` subtree without a directory wrapper (excluding deployment tooling, private settings, `node_modules/`, and `data/`); sibling `docker/` is outside its scope
 - SCPs the zip to the remote host
 - Stops the existing pm2 process
 - Unzips into `~/nodejs_server`

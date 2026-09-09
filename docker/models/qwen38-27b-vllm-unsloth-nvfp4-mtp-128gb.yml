@@ -1,14 +1,18 @@
-# Stop:    docker compose -f compose-qwen38-27b-cuda-vram128-vllm-unsloth-nvfp4-mtp-100k-image.yml down
-# Start:   docker compose -f compose-qwen38-27b-cuda-vram128-vllm-unsloth-nvfp4-mtp-100k-image.yml up -d
-# Logs:    docker logs -f --tail 80 qwen38_27b_cuda_vram128_vllm_unsloth_nvfp4_mtp_100k_image
+# From docker/: docker compose -f models/qwen38-27b-vllm-unsloth-nvfp4-mtp-128gb.yml up -d
+# Served model: unsloth/Qwen3.8-27B-NVFP4
 # Note:    Stable vLLM profile for Unsloth Qwen3.8-27B Dynamic V3 NVFP4 + native MTP.
 #          Vision enabled. Tuned for DGX Spark / GB10 and concurrent users.
 #          Prefix caching is intentionally disabled due to current MTP compatibility concerns.
+
+name: ieti-qwen38-27b-vllm-unsloth-nvfp4-mtp-128gb
 
 services:
   qwen-vllm:
     image: vllm/vllm-openai:v0.28.0
     pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-27b-vllm-unsloth-nvfp4-mtp-128gb.yml"
     container_name: qwen38_27b_cuda_vram128_vllm_unsloth_nvfp4_mtp_100k_image
 
     environment:
@@ -22,7 +26,12 @@ services:
       - TORCH_MATMUL_PRECISION=high
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen38-27b-cuda-vram128-unsloth-nvfp4-mtp-100k-image-hf-cache:/root/.cache/huggingface
       - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-nvfp4-mtp-100k-image-vllm-cache:/root/.cache/vllm
 
@@ -64,7 +73,7 @@ services:
         fi
 
         exec vllm serve unsloth/Qwen3.8-27B-NVFP4 \
-          --served-model-name active-model \
+          --served-model-name unsloth/Qwen3.8-27B-NVFP4 \
           --host 0.0.0.0 \
           --port 8000 \
           --tensor-parallel-size 1 \

@@ -1,6 +1,5 @@
-# Stop:    docker compose -f compose-qwen38-flash-next-cuda-vram16-llamacpp-unsloth-iq3_xxs-64k-image.yml down
-# Start:   docker compose -f compose-qwen38-flash-next-cuda-vram16-llamacpp-unsloth-iq3_xxs-64k-image.yml up -d
-# Logs:    docker logs -f --tail 80 qwen38_flash_next_cuda_vram16_llamacpp_unsloth_iq3_xxs_64k_image
+# From docker/: docker compose -f models/qwen38-flash-next-llamacpp-unsloth-iq3_xxs-16gb.yml up -d
+# Served model: unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS
 #
 # Note:    Qwen3.8-Flash-Next Unsloth UD-IQ3_XXS GGUF.
 #          Target: NVIDIA GPU with 16 GB VRAM + 96 GB system RAM.
@@ -10,10 +9,15 @@
 #          64k context and one parallel slot are used initially for memory headroom.
 #          N-gram speculative decoding is enabled, useful especially for code generation.
 
+name: ieti-qwen38-flash-next-llamacpp-unsloth-iq3-xxs-16gb
+
 services:
   qwen-llamacpp:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     pull_policy: always
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-llamacpp-unsloth-iq3_xxs-16gb.yml"
     container_name: qwen38_flash_next_cuda_vram16_llamacpp_unsloth_iq3_xxs_64k_image
 
     environment:
@@ -21,7 +25,12 @@ services:
       - CUDA_VISIBLE_DEVICES=0
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen38-flash-next-cuda-vram16-unsloth-iq3_xxs-64k-hf-cache:/root/.cache/huggingface
 
     ports:
@@ -63,7 +72,7 @@ services:
 
         exec /app/llama-server \
           --hf-repo unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS \
-          --alias active-model \
+          --alias unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS \
           --host 0.0.0.0 \
           --port 8000 \
           --ctx-size 65536 \

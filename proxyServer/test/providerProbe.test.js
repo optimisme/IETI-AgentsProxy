@@ -25,7 +25,7 @@ function fixture(body) {
 test('probes verify history repair and tool round trips, distinguish explicit image rejection, and retain useful errors', async () => {
   const bodies = [];
   const progress = [];
-  const result = await probeProviderModel({ baseUrl: 'http://provider/v1', apiKey: 'test-key', model: 'active-model',
+  const result = await probeProviderModel({ baseUrl: 'http://provider/v1', apiKey: 'test-key', model: 'unsloth/Qwen3.8-27B-NVFP4',
     onProgress: (event) => progress.push(event), fetchImpl: async (url, options) => {
     assert.equal(url, 'http://provider/v1/chat/completions');
     assert.equal(options.headers.Authorization, 'Bearer test-key');
@@ -160,7 +160,7 @@ test('JSON and SSE normalization preserve framing, content, tools and existing r
 
 test('autoconfigure uses official data first, tests only the selected model and persists only reviewed settings', async () => {
   const seen = [];
-  let catalog = { data: [{ id: 'active-model', owned_by: 'vllm', max_model_len: 32768, supports_image_input: true }] };
+  let catalog = { data: [{ id: 'unsloth/Qwen3.8-27B-NVFP4', owned_by: 'vllm', max_model_len: 32768, supports_image_input: true }] };
   const server = http.createServer(async (req, res) => {
     seen.push(req.url);
     res.setHeader('Content-Type', 'application/json');
@@ -211,14 +211,23 @@ test('autoconfigure uses official data first, tests only the selected model and 
     assert.ok(events.filter((event) => event.type === 'progress').every((event) => event.totalStages === 6));
     assert.ok(events.some((event) => event.activeTest === 'Tool result round trip'));
     assert.equal(events.at(-1).type, 'result');
-    assert.equal(events.at(-1).selectedModel, 'active-model');
+    assert.equal(events.at(-1).selectedModel, 'unsloth/Qwen3.8-27B-NVFP4');
     assert.doesNotMatch(streamed.body, /Look up both codes\.|secret-key/);
     assert.equal(db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(providerId).upstream_model, 'old-model');
     await agent.post(endpoint).send({ apply: true }).expect(200);
     const saved = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(providerId);
     assert.equal(saved.context_limit, 32768); assert.equal(saved.output_limit, 2048);
-    assert.equal(saved.public_model, 'my-alias'); assert.equal(saved.reasoning_history_field, 'reasoning_content');
+    assert.equal(saved.public_model, 'unsloth/Qwen3.8-27B-NVFP4');
+    assert.equal(saved.upstream_model, saved.public_model); assert.equal(saved.reasoning_history_field, 'reasoning_content');
     assert.equal(saved.supports_tools, 1);
+    // The same discovery also seeds both names for providers with no existing mapping.
+    const fresh = db.prepare("INSERT INTO providers (slug, name, base_url, api_key) VALUES ('probe-new', 'New probe', ?, 'secret-key')")
+      .run(`http://127.0.0.1:${server.address().port}`).lastInsertRowid;
+    const applied = await agent.post(`/admin/providers/${fresh}/autoconfigure.json`).send({ apply: true }).expect(200);
+    assert.equal(applied.body.applied.publicModel, saved.public_model);
+    assert.equal(applied.body.applied.upstreamModel, saved.public_model);
+    const created = db.prepare('SELECT public_model, upstream_model FROM provider_models WHERE provider_id = ?').get(fresh);
+    assert.deepEqual(created, { public_model: saved.public_model, upstream_model: saved.public_model });
     catalog.data[0].supports_tools = false;
     await agent.post(endpoint).send({ apply: true }).expect(200);
     assert.equal(db.prepare('SELECT supports_tools FROM provider_models WHERE provider_id = ?').get(providerId).supports_tools, 0,

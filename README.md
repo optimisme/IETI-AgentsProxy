@@ -23,9 +23,14 @@ L'objectiu és que l'alumnat pugui treballar amb eines compatibles amb OpenAI, c
 
 ## Posada en marxa en local
 
-Instal.la dependencies:
+El repositori separa `docker/` (inferencia GPU) i `proxyServer/` (aplicacio web,
+API, tests i eines Proxmox). Les comandes npm i les rutes de l'aplicacio que
+apareixen a continuacio parteixen de `proxyServer/`.
+
+Des de l'arrel del repositori, entra a l'aplicacio i instal.la dependencies:
 
 ```bash
+cd proxyServer
 npm install
 ```
 
@@ -113,7 +118,7 @@ DEFAULT_PROVIDER_BASE_URL=https://api.deepseek.com
 DEFAULT_PROVIDER_SLUG=deepseek
 DEFAULT_PROVIDER_NAME=DeepSeek
 DEFAULT_UPSTREAM_MODEL=deepseek-chat
-PUBLIC_MODEL_NAME=active-model
+PUBLIC_MODEL_NAME=
 PUBLIC_BASE_URL=https://your-public-domain.example
 
 ADMIN_USERNAME=admin
@@ -153,7 +158,7 @@ For providers rejecting assistant history without a thinking field, Autoconfigur
 
 Both `set_agents_opencode.sh` and `set_agents_opencode.ps1` generate `interleaved: { "field": "reasoning_content" }` when published reasoning is enabled. Save the provider settings and rerun the script to refresh `opencode.json`; unrelated providers, settings and existing custom options are preserved. Start a new conversation if earlier reasoning was already lost. A group alias shared by several providers publishes their common capabilities and lowest limits; use separate public aliases to expose different feature sets.
 
-Docker deployments no longer use Python metadata sidecars, metadata ports or generated manifests. `modelctl.sh` starts only inference services, and `info` shows catalog configuration. No Metadata URL or development-only vLLM endpoint is required.
+Docker inference profiles are self-contained YAML files in `docker/models/`, operated directly with Docker Compose. See [Docker operations](docker/README.md) for switching profiles and deleting caches. No Metadata URL or development-only vLLM endpoint is required. Autoconfigure uses the served `/v1/models` ID for both the upstream model and the OpenCode model alias when applied.
 
 Inicialitza la base de dades:
 
@@ -171,6 +176,13 @@ npm run pm2:save
 
 Els scripts PM2 fan servir `ecosystem.config.cjs` i mantenen el nom de proces `app`, compatible amb els scripts de desplegament existents.
 
+Les eines de desplegament son a `proxyServer/proxmox/` des de l'arrel del
+repositori. El paquet conte nomes els fitxers versionats de `proxyServer/`,
+sense aquesta carpeta contenidora, i exclou configuracio privada, dades,
+dependencies locals i les eines Proxmox. La carpeta germana `docker/` queda
+fora del paquet. Cal que la reorganitzacio estigui commitejada i publicada a
+`origin/main` abans de desplegar.
+
 Comandes habituals:
 
 ```bash
@@ -186,7 +198,7 @@ En produccio, fes servir HTTPS davant del servidor, per exemple amb un reverse p
 
 ## Configuracio important
 
-La configuracio es llegeix de `settings.env` a traves de `src/config.js`.
+La configuracio es llegeix de `proxyServer/settings.env` a traves de `proxyServer/src/config.js` (rutes des de l'arrel del repositori).
 
 Valors principals:
 
@@ -194,7 +206,7 @@ Valors principals:
 - `DATABASE_PATH`: ruta del fitxer SQLite.
 - `DEFAULT_PROVIDER_API_KEY`: clau inicial del proveidor per sembrar la primera base de dades.
 - `DEFAULT_PROVIDER_BASE_URL`: URL base del proveidor OpenAI-compatible.
-- `PUBLIC_MODEL_NAME`: nom de model que veuran els clients, per defecte `active-model`.
+- `PUBLIC_MODEL_NAME`: nom public per a la primera configuracio de la base de dades; si es buit, fa servir `DEFAULT_UPSTREAM_MODEL` (per defecte `deepseek-chat`). Autoconfigure desa la identitat detectada del servidor com a nom public i upstream.
 - `PUBLIC_BASE_URL`: origen HTTPS public i canonic de l'aplicacio web, sense `/v1` ni una barra final. Es fa servir per generar enllaços com `https://agents.ieti.site/invite/...` i les URL de descarrega. Quan existeix a `settings.env`, preval sobre el valor desat anteriorment a la taula `settings`.
 - `PROXY_AGENTS_BASE_URL`: URL base de l'API, normalment acabada en `/v1`, que els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` accepten com a override quan s'executen. No s'ha de confondre amb `PUBLIC_BASE_URL`, que identifica l'aplicacio web i construeix els enllaços d'invitacio.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`: credencials d'administracio.
@@ -272,7 +284,7 @@ Exemple de configuracio generada:
         "chunkTimeout": 600000
       },
       "models": {
-        "active-model": {
+        "deepseek-chat": {
           "limit": {
             "context": 90000,
             "output": 8192
@@ -287,7 +299,7 @@ Exemple de configuracio generada:
       }
     }
   },
-  "model": "ieti-agents/active-model"
+  "model": "ieti-agents/deepseek-chat"
 }
 ```
 
@@ -349,7 +361,7 @@ Codex fa servir la Responses API. El mateix servidor publica el cataleg i les ca
 Configuracio minima de `~/.codex/config.toml`:
 
 ```toml
-model = "active-model"
+model = "deepseek-chat"
 model_provider = "ieti-agents"
 show_raw_agent_reasoning = true
 

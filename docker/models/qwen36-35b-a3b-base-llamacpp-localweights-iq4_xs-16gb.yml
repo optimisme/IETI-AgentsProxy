@@ -1,19 +1,28 @@
-# Stop:    docker compose -f compose-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image.yml down
-# Restart: docker compose -f compose-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image.yml up -d
-# Logs:    docker logs -f --tail 80 qwen36_35b_a3b_base_cuda_vram16_llamacpp_localweights_iq4_mtp_image
+# From docker/: docker compose -f models/qwen36-35b-a3b-base-llamacpp-localweights-iq4_xs-16gb.yml up -d
+# Served model: localweights/Qwen3.6-35B-A3B-MTP-IQ4_XS-GGUF:IQ4_XS
 # Note:    llama.cpp / GGUF service, not vLLM. RTX 4060 Ti 16 GB with partial GPU offload.
 #          Image input uses the Unsloth Qwen3.6 mmproj with CPU mmproj execution to save VRAM.
+name: ieti-qwen36-35b-a3b-base-llamacpp-localweights-iq4-xs-16gb
+
 services:
   qwen-llamacpp:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     pull_policy: always
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen36-35b-a3b-base-llamacpp-localweights-iq4_xs-16gb.yml"
     container_name: qwen36_35b_a3b_base_cuda_vram16_llamacpp_localweights_iq4_mtp_image
     environment:
       - HF_HOME=/root/.cache/huggingface
       - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
       - LLAMA_CACHE=/root/.cache/llama.cpp
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-hf-cache:/root/.cache/huggingface
       - xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-gguf-cache:/root/.cache/llama.cpp
     ports:
@@ -51,7 +60,7 @@ services:
           -hf localweights/Qwen3.6-35B-A3B-MTP-IQ4_XS-GGUF:IQ4_XS \
           --mmproj-url https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-BF16.gguf \
           --no-mmproj-offload \
-          --alias active-model \
+          --alias localweights/Qwen3.6-35B-A3B-MTP-IQ4_XS-GGUF:IQ4_XS \
           --host 0.0.0.0 \
           --port 8000 \
           --log-timestamps \
@@ -74,7 +83,5 @@ services:
 volumes:
   xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-hf-cache:
     name: xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-hf-cache
-    external: true
   xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-gguf-cache:
     name: xtec-qwen36-35b-a3b-base-cuda-vram16-llamacpp-localweights-iq4-mtp-image-gguf-cache
-    external: true

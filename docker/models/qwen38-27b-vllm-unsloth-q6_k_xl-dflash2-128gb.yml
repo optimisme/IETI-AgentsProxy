@@ -1,14 +1,18 @@
-# Stop:    docker compose -f compose-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-incoai-dflash2-100k-image.yml down
-# Start:   docker compose -f compose-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-incoai-dflash2-100k-image.yml up -d
-# Logs:    docker logs -f --tail 80 qwen38_27b_cuda_vram128_vllm_unsloth_ud_q6_k_xl_incoai_dflash2_100k_image
+# From docker/: docker compose -f models/qwen38-27b-vllm-unsloth-q6_k_xl-dflash2-128gb.yml up -d
+# Served model: unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL
 # Note:    Experimental vLLM GGUF target using Unsloth Qwen3.8-27B Dynamic v3
 #          UD-Q6_K_XL + IncoAI DFlash2. GGUF support is currently experimental
 #          and DFlash2 compatibility with GGUF is not yet a validated combination.
+
+name: ieti-qwen38-27b-vllm-unsloth-q6-k-xl-dflash2-128gb
 
 services:
   qwen-vllm:
     image: vllm/vllm-openai:nightly
     pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-27b-vllm-unsloth-q6_k_xl-dflash2-128gb.yml"
     container_name: qwen38_27b_cuda_vram128_vllm_unsloth_ud_q6_k_xl_incoai_dflash2_100k_image
 
     environment:
@@ -27,7 +31,12 @@ services:
       - TORCH_MATMUL_PRECISION=high
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-hf-cache:/root/.cache/huggingface
       - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-vllm-cache:/root/.cache/vllm
       - xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-pip-cache:/root/.cache/pip
@@ -115,7 +124,7 @@ services:
           unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
           --tokenizer Qwen/Qwen3.8-27B \
           --hf-config-path Qwen/Qwen3.8-27B \
-          --served-model-name active-model \
+          --served-model-name unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
           --host 0.0.0.0 \
           --port 8000 \
           --tensor-parallel-size 1 \
@@ -139,12 +148,9 @@ services:
 volumes:
   xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-hf-cache:
     name: xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-hf-cache
-    external: true
 
   xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-vllm-cache:
     name: xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-vllm-cache
-    external: true
 
   xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-pip-cache:
     name: xtec-qwen38-27b-cuda-vram128-vllm-unsloth-ud-q6-k-xl-dflash2-100k-pip-cache
-    external: true

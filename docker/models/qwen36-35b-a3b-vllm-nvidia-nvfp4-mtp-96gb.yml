@@ -1,14 +1,18 @@
-# Stop:    docker compose -f compose-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image.yml down
-# Restart: docker compose -f compose-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image.yml up -d
-# Logs:    docker logs -f --tail 80 qwen36_35b_a3b_cuda_vram96_vllm_nvidia_nvfp4_mtp_75k_image
+# From docker/: docker compose -f models/qwen36-35b-a3b-vllm-nvidia-nvfp4-mtp-96gb.yml up -d
+# Served model: nvidia/Qwen3.6-35B-A3B-NVFP4
 #
 # Note:    Qwen3.6 35B A3B NVIDIA ModelOpt NVFP4 checkpoint with native MTP.
 #          Keeps 75k context and image input.
+
+name: ieti-qwen36-35b-a3b-vllm-nvidia-nvfp4-mtp-96gb
 
 services:
   qwen-vllm:
     image: vllm/vllm-openai:v0.28.0
     pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen36-35b-a3b-vllm-nvidia-nvfp4-mtp-96gb.yml"
     container_name: qwen36_35b_a3b_cuda_vram96_vllm_nvidia_nvfp4_mtp_75k_image
 
     environment:
@@ -23,7 +27,12 @@ services:
       - TORCH_MATMUL_PRECISION=high
 
     volumes:
-      - ./tokens.env:/run/secrets/tokens.env:ro
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
       - xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-hf-cache:/root/.cache/huggingface
       - xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-vllm-cache:/root/.cache/vllm
 
@@ -66,7 +75,7 @@ services:
 
         exec vllm serve nvidia/Qwen3.6-35B-A3B-NVFP4 \
           --revision 1355db6a052410cfd62085d94b58866fd0f2c3c5 \
-          --served-model-name active-model \
+          --served-model-name nvidia/Qwen3.6-35B-A3B-NVFP4 \
           --host 0.0.0.0 \
           --port 8000 \
           --tensor-parallel-size 1 \
@@ -93,8 +102,6 @@ services:
 volumes:
   xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-hf-cache:
     name: xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-hf-cache
-    external: true
 
   xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-vllm-cache:
     name: xtec-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image-vllm-cache
-    external: true
