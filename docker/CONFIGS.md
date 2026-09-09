@@ -4,9 +4,6 @@ Models recomanats per programar segons VRAM.
 
 ## 128GB servidor multiusuari
 
-K2-Horizon-MoVA-36B-A4B native NVFP4 (vLLM, 32k context, reasoning and tool calls, no-image)
-- `compose-k2-horizon-mova-36b-a4b-cuda-vram128-vllm-primitive-nvfp4-32k.yml`
-
 Qwen3.6 35B A3B NVFP4 (vLLM, MTP=3, 75k context, image input)
 - `compose-qwen36-35b-a3b-cuda-vram96-vllm-nvidia-nvfp4-mtp-75k-image.yml`
 
