@@ -1,5 +1,24 @@
 # Models Docker
 
+## Execucio local en un Mac amb Apple Silicon
+
+El perfil `models/qwen35-2b-llamacpp-unsloth-ud-q4_k_xl-local.yml` utilitza
+llama.cpp b10853 amb CPU ARM64 dins de Docker Desktop. Prepara `tokens.env`
+segons la seccio de tokens i arrenca Docker Desktop abans d'executar, des de `docker/`:
+
+```bash
+docker --context desktop-linux compose -f models/qwen35-2b-llamacpp-unsloth-ud-q4_k_xl-local.yml up -d
+docker --context desktop-linux compose -f models/qwen35-2b-llamacpp-unsloth-ud-q4_k_xl-local.yml logs -f --tail 80
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8000/v1/models
+```
+
+Publica nomes a `127.0.0.1:8000`; la URL base OpenAI es
+`http://127.0.0.1:8000/v1`. Els pesos i el projector BF16 es descarreguen
+automaticament en un volum exclusiu. No necessita CUDA. Per aturar-lo conservant
+els pesos, utilitza el mateix `docker --context desktop-linux compose -f ... down`.
+En altres hosts, utilitza el context local de Docker corresponent.
+
 ## Aturar el model actual i arrencar-ne un altre
 
 Executa les comandes dins de `docker/` al servidor GPU (o `~/docker` si nomes

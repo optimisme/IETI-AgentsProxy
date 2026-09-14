@@ -1,0 +1,93 @@
+# From docker/: docker compose -f models/qwen35-2b-llamacpp-unsloth-ud-q4_k_xl-local.yml up -d
+# Served model: Qwen3.5-2B-UD-Q4_K_XL.gguf
+# Local CPU profile (including Apple Silicon Docker Desktop); no NVIDIA runtime.
+# llama.cpp b10853 and generation settings follow the supplied screenshot.
+# MTP is disabled: this pinned 2B GGUF has no MTP layers; draft-mtp fails to load.
+# Model and BF16 vision projector are pinned to the same Hugging Face revision.
+# Verified 2026-09-14: ARM64 Docker Desktop (4 GiB), /health, /v1/models and chat.
+# 128k context allocates successfully; full-context throughput is not benchmarked.
+# Vision projector loads, but a 1024-image-token smoke test timed out at 240s on CPU.
+name: ieti-qwen35-2b-llamacpp-unsloth-ud-q4-k-xl-local
+
+services:
+  qwen-llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-b10853
+    pull_policy: always
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen35-2b-llamacpp-unsloth-ud-q4_k_xl-local.yml"
+    container_name: qwen35_2b_local_llamacpp_unsloth_ud_q4_k_xl
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - LLAMA_CACHE=/root/.cache/llama.cpp
+
+    volumes:
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - ieti-qwen35-2b-local-ud-q4_k_xl-gguf-cache:/root/.cache/llama.cpp
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30m
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/sh
+      - -lc
+
+    command:
+      - |
+        set -eu
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        exec /app/llama-server \
+          --model /root/.cache/llama.cpp/Qwen3.5-2B-UD-Q4_K_XL.gguf \
+          --model-url https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-UD-Q4_K_XL.gguf \
+          --mmproj /root/.cache/llama.cpp/mmproj-BF16.gguf \
+          --mmproj-url https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/mmproj-BF16.gguf \
+          --alias Qwen3.5-2B-UD-Q4_K_XL.gguf \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --n-gpu-layers 0 \
+          --no-mmproj-offload \
+          --spec-type none \
+          --fit off \
+          --reasoning on \
+          --ctx-size 131072 \
+          --parallel 1 \
+          --temp 0.6 \
+          --top-p 0.95 \
+          --top-k 20 \
+          --min-p 0.0 \
+          --repeat-penalty 1.0 \
+          --presence-penalty 0.0 \
+          --dry-multiplier 0.8 \
+          --dry-base 1.75 \
+          --dry-allowed-length 8 \
+          --dry-penalty-last-n 4096 \
+          --dry-sequence-breaker none \
+          --log-verbosity 4 \
+          --image-min-tokens 1024
+
+volumes:
+  ieti-qwen35-2b-local-ud-q4_k_xl-gguf-cache:
+    name: ieti-qwen35-2b-local-ud-q4_k_xl-gguf-cache
