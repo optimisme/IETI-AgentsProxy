@@ -229,6 +229,29 @@ function migrateSchema(database) {
   addColumn('api_key_lookup_hash', 'TEXT');
   addColumn('registration_status', "TEXT NOT NULL DEFAULT 'approved' CHECK (registration_status IN ('pending', 'approved', 'rejected'))");
   addColumn('auth_version', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('disabled_at', 'TEXT');
+  // Existing disabled accounts have no reliable disable date. Start their
+  // deletion waiting period now rather than inferring it from unrelated edits.
+  database.exec(`
+    UPDATE users SET disabled_at = CURRENT_TIMESTAMP
+    WHERE enabled = 0 AND disabled_at IS NULL;
+
+    CREATE TRIGGER IF NOT EXISTS users_track_disabled_insert
+    AFTER INSERT ON users
+    WHEN NEW.enabled = 0 AND NEW.disabled_at IS NULL
+    BEGIN
+      UPDATE users SET disabled_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_track_disabled_update
+    AFTER UPDATE OF enabled ON users
+    WHEN OLD.enabled != NEW.enabled
+    BEGIN
+      UPDATE users
+      SET disabled_at = CASE WHEN NEW.enabled = 0 THEN CURRENT_TIMESTAMP ELSE NULL END
+      WHERE id = NEW.id;
+    END;
+  `);
   for (const name of ['daily_token_limit', 'monthly_token_limit', 'monthly_cost_limit_eur', 'allowed_models']) {
     if (columns.includes(name)) database.exec(`ALTER TABLE users DROP COLUMN ${name}`);
   }

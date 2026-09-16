@@ -221,6 +221,14 @@ Valors principals:
 
 `DEFAULT_PROVIDER_API_KEY`, `DEFAULT_PROVIDER_BASE_URL`, `DEFAULT_PROVIDER_SLUG`, `DEFAULT_PROVIDER_NAME` i `DEFAULT_UPSTREAM_MODEL` nomes s'usen per crear el primer proveidor en una base de dades nova. Un cop creada la base de dades, els proveidors es gestionen des de l'administracio.
 
+## Gestio d'usuaris deshabilitats
+
+A `/admin/users`, el filtre **Enabled / Disabled / All** permet mostrar els comptes segons l'acces; per defecte mostra **All**. Es combina amb la cerca, el grup i l'estat de registre, i es conserva en canviar de pagina.
+
+El boto **Delete** de la fitxa nomes apareix quan l'usuari porta mes de 30 dies seguits deshabilitat. El servidor comprova el mateix requisit en eliminar-lo, encara que no tingui historial d'us. L'eliminacio es manual i permanent: elimina el compte, les claus, les invitacions i les dades dependents; conserva els registres d'us sense vincle amb el compte.
+
+La data `disabled_at` es registra en deshabilitar el compte i es mostra en UTC. Editar altres dades no reinicia el termini; tornar a habilitar el compte si que el reinicia. Per als comptes que ja estaven deshabilitats abans d'aquesta actualitzacio, el termini comença en aplicar la migracio, ja que no es coneix la data original.
+
 ## Enllaços d'invitacio
 
 Quan l'administrador crea un usuari, **Enabled** esta seleccionat per defecte i el servidor genera un enllaç d'invitacio individual d'un sol ús. L'enllaç es mostra a la fitxa de l'usuari perquè l'administrador el copiï i el comparteixi manualment. **Regenerate invitation key** invalida l'enllaç anterior i en genera un de nou.

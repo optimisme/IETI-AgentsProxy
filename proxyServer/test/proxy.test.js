@@ -981,7 +981,8 @@ test('admin users list links to edit page only', async () => {
 });
 
 test('admin user edit page separates management and stats', async () => {
-  const student = createStudent();
+  const student = createStudent({ enabled: 0 });
+  db.prepare("UPDATE users SET disabled_at = datetime('now', '-31 days') WHERE id = ?").run(student.id);
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
 
@@ -1037,8 +1038,9 @@ test('admin user recent usage is paginated', async () => {
   assert.equal((second.text.match(new RegExp(`${marker}-\\d+`, 'g')) || []).length, 5);
 });
 
-test('admin delete user shows modal reason when usage history exists', async () => {
+test('admin deletion rejects enabled accounts even with an old disabled timestamp', async () => {
   const student = createStudent();
+  db.prepare("UPDATE users SET disabled_at = datetime('now', '-31 days') WHERE id = ?").run(student.id);
   db.prepare(`
     INSERT INTO usage_logs (user_id, model, provider_slug, input_tokens, output_tokens, total_tokens, was_streaming, status, error_message)
     VALUES (?, 'delete-block-test', 'deepseek', 1, 1, 2, 0, 'success', NULL)
@@ -1047,16 +1049,16 @@ test('admin delete user shows modal reason when usage history exists', async () 
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
 
   const detail = await agent.get(`/admin/users/${student.id}`).expect(200);
-  assert.match(detail.text, /Non removable user/);
+  assert.match(detail.text, /continuously disabled for more than 30 days/);
   assert.doesNotMatch(detail.text, new RegExp(`/admin/users/${student.id}/delete`));
 
   await agent.post(`/admin/users/${student.id}/delete`)
     .expect(302)
-    .expect('Location', `/admin/users/${student.id}?delete_error=usage-history`);
+    .expect('Location', `/admin/users/${student.id}?delete_error=disabled-period`);
 
-  const res = await agent.get(`/admin/users/${student.id}?delete_error=usage-history`).expect(200);
+  const res = await agent.get(`/admin/users/${student.id}?delete_error=disabled-period`).expect(200);
   assert.match(res.text, /Delete failed/);
-  assert.match(res.text, /cannot be deleted without losing audit history/);
+  assert.match(res.text, /continuously disabled for more than 30 days/);
   assert.ok(db.prepare('SELECT id FROM users WHERE id = ?').get(student.id));
 });
 
@@ -2331,4 +2333,120 @@ test('a shared group alias advertises common capabilities instead of impossible 
   assert.equal(model.capabilities.image, false);
   assert.equal(model.capabilities.tools, false);
   assert.deepEqual(model.reasoning_efforts, ['low']);
+});
+
+test('admin deletion requires a known disable date older than 30 days even without usage', async () => {
+  const student = createStudent({ enabled: 0 });
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const recent = db.prepare("SELECT datetime('now', '-30 days', '+1 minute') AS date").get().date;
+  for (const disabledAt of [recent, null, 'invalid']) {
+    db.prepare('UPDATE users SET disabled_at = ? WHERE id = ?').run(disabledAt, student.id);
+    const detail = await agent.get(`/admin/users/${student.id}`).expect(200);
+    assert.doesNotMatch(detail.text, /data-open-user-delete-modal/);
+    await agent.post(`/admin/users/${student.id}/delete`).expect(302)
+      .expect('Location', `/admin/users/${student.id}?delete_error=disabled-period`);
+    assert.ok(db.prepare('SELECT id FROM users WHERE id = ?').get(student.id));
+  }
+});
+
+test('admin deletes an eligible account and its keys while retaining usage records', async () => {
+  const student = createStudent({ enabled: 0 });
+  db.prepare("UPDATE users SET disabled_at = datetime('now', '-30 days', '-1 minute') WHERE id = ?").run(student.id);
+  const { createUserApiKey } = require('../src/services/userApiKeyService');
+  createUserApiKey(student.id, 'Deletion test');
+  const usageId = db.prepare(`
+    INSERT INTO usage_logs (user_id, model, total_tokens, status)
+    VALUES (?, 'retained-after-deletion', 42, 'success')
+  `).run(student.id).lastInsertRowid;
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  await agent.get(`/admin/users/${student.id}`).expect(200).expect(/data-open-user-delete-modal/)
+    .expect(/Usage history will be retained without a link to this account/);
+  await request(app).post(`/admin/users/${student.id}/delete`).set('Accept', 'text/html')
+    .expect(302).expect('Location', '/?admin=1');
+  assert.ok(db.prepare('SELECT id FROM users WHERE id = ?').get(student.id));
+  await agent.post(`/admin/users/${student.id}/delete`).expect(302).expect('Location', '/admin/users?deleted=1');
+  assert.equal(db.prepare('SELECT id FROM users WHERE id = ?').get(student.id), undefined);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM user_api_keys WHERE user_id = ?').get(student.id).count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM user_groups WHERE user_id = ?').get(student.id).count, 0);
+  assert.deepEqual(db.prepare('SELECT user_id, total_tokens, status FROM usage_logs WHERE id = ?').get(usageId), {
+    user_id: null, total_tokens: 42, status: 'success'
+  });
+  await agent.post(`/admin/users/${student.id}/delete`).expect(404);
+});
+
+test('saving disabled users preserves their timer and re-enabling resets it', async () => {
+  const student = createStudent();
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  const form = { name: student.name, email: student.email, group_id: String(groupId) };
+  await agent.post(`/admin/users/${student.id}`).type('form').send(form).expect(302);
+  assert.ok(db.prepare('SELECT disabled_at FROM users WHERE id = ?').get(student.id).disabled_at);
+  db.prepare("UPDATE users SET disabled_at = datetime('now', '-31 days') WHERE id = ?").run(student.id);
+  const oldDate = db.prepare('SELECT disabled_at FROM users WHERE id = ?').get(student.id).disabled_at;
+  await agent.post(`/admin/users/${student.id}`).type('form').send({ ...form, name: 'Edited disabled user' }).expect(302);
+  assert.equal(db.prepare('SELECT disabled_at FROM users WHERE id = ?').get(student.id).disabled_at, oldDate);
+  await agent.post(`/admin/users/${student.id}`).type('form').send({ ...form, enabled: '1' }).expect(302);
+  assert.equal(db.prepare('SELECT disabled_at FROM users WHERE id = ?').get(student.id).disabled_at, null);
+  // A stale delete dialog must not allow deletion after re-enabling.
+  await agent.post(`/admin/users/${student.id}/delete`).expect(302)
+    .expect('Location', `/admin/users/${student.id}?delete_error=disabled-period`);
+  await agent.post(`/admin/users/${student.id}`).type('form').send(form).expect(302);
+  assert.notEqual(db.prepare('SELECT disabled_at FROM users WHERE id = ?').get(student.id).disabled_at, oldDate);
+  await agent.get(`/admin/users/${student.id}`).expect(200).expect((res) => {
+    assert.doesNotMatch(res.text, /data-open-user-delete-modal/);
+  });
+});
+
+test('disabled timestamp migration starts unknown timers once and tracks new disabled accounts', () => {
+  const database = new Database(':memory:');
+  const { initSchema, migrateSchema } = require('../src/db');
+  try {
+    initSchema(database);
+    database.exec(`
+      INSERT INTO users (name, email, enabled, updated_at) VALUES
+        ('Previously disabled', 'old-disabled@example.test', 0, '2020-01-01 00:00:00'),
+        ('Enabled', 'enabled@example.test', 1, '2020-01-01 00:00:00');
+    `);
+    migrateSchema(database);
+    const start = database.prepare('SELECT disabled_at FROM users WHERE id = 1').get().disabled_at;
+    assert.ok(Date.parse(`${start}Z`) >= Date.now() - 5000);
+    assert.equal(database.prepare('SELECT disabled_at FROM users WHERE id = 2').get().disabled_at, null);
+    database.prepare("UPDATE users SET disabled_at = '2026-01-01 00:00:00' WHERE id = 1").run();
+    migrateSchema(database);
+    assert.equal(database.prepare('SELECT disabled_at FROM users WHERE id = 1').get().disabled_at, '2026-01-01 00:00:00');
+    database.exec("INSERT INTO users (name, email, enabled) VALUES ('New disabled', 'new-disabled@example.test', 0)");
+    assert.ok(database.prepare('SELECT disabled_at FROM users WHERE id = 3').get().disabled_at);
+  } finally {
+    database.close();
+  }
+});
+
+test('admin enabled filter combines with search, group, status and pagination', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const groupId = db.prepare('SELECT id FROM groups ORDER BY id LIMIT 1').get().id;
+  const marker = `access-filter-${Date.now()}`;
+  for (let i = 0; i < 28; i += 1) {
+    const userId = db.prepare("INSERT INTO users (name, email, enabled) VALUES (?, ?, ?)")
+      .run(`${marker} ${i}`, `${marker}-${i}@example.test`, i < 26 ? 0 : 1).lastInsertRowid;
+    db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(userId, groupId);
+  }
+  const query = `q=${marker}&group_id=${groupId}&status=approved`;
+  const first = await agent.get(`/admin/users?${query}&enabled=disabled`).expect(200);
+  assert.match(first.text, /Page 1 of 2\. 26 users\./);
+  assert.match(first.text, /value="disabled" selected/);
+  assert.doesNotMatch(first.text, /class="status-enabled"/);
+  const next = first.text.match(/href="([^"]+)">Next<\/a>/)[1];
+  for (const part of [`q=${marker}`, `group_id=${groupId}`, 'status=approved', 'enabled=disabled', 'page=2']) {
+    assert.ok(next.includes(part));
+  }
+  await agent.get(next).expect(200).expect(/Page 2 of 2\. 26 users\./);
+  await agent.get(`/admin/users?${query}&enabled=enabled`).expect(200).expect(/2 users\.<\/p>/)
+    .expect((res) => assert.doesNotMatch(res.text, /class="status-disabled"/));
+  for (const filter of ['', '&enabled=all', '&enabled=invalid']) {
+    await agent.get(`/admin/users?${query}${filter}`).expect(200).expect(/Page 1 of 2\. 28 users\./);
+  }
 });

@@ -331,11 +331,15 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
   }
 }
 
-function adminUsersUrl({ search = '', groupId = 0, status = '', page = 1 } = {}) {
+const USER_DELETION_CONDITION = "enabled = 0 AND datetime(disabled_at) < datetime('now', '-30 days')";
+const USER_DELETION_MESSAGE = 'Users can only be deleted after being continuously disabled for more than 30 days.';
+
+function adminUsersUrl({ search = '', groupId = 0, status = '', enabled = 'all', page = 1 } = {}) {
   const params = new URLSearchParams();
   if (search) params.set('q', search);
   if (groupId) params.set('group_id', String(groupId));
   if (status) params.set('status', status);
+  if (enabled !== 'all') params.set('enabled', enabled);
   if (page > 1) params.set('page', String(page));
   const query = params.toString();
   return `/admin/users${query ? `?${query}` : ''}`;
@@ -384,13 +388,14 @@ function userForm(user = {}, action = '/admin/users') {
   const formId = user.id ? `user-edit-${user.id}` : 'user-new';
   const deleteFormId = user.id ? `user-delete-${user.id}` : '';
   const deleteModalId = user.id ? `user-delete-modal-${user.id}` : '';
-  const removable = user.id ? countUsage(user.id) === 0 : true;
+  const removable = user.id && Boolean(getDb().prepare(`SELECT id FROM users WHERE id = ? AND ${USER_DELETION_CONDITION}`).get(user.id));
   const enabled = user.enabled === undefined ? true : Boolean(user.enabled);
   const registrationStatus = user.registration_status || 'approved';
   const selectedRole = USER_ROLES.includes(user.role) ? user.role : 'student';
   return `
     <div class="panel">
       ${user.id ? `<p><strong>Registration status:</strong> ${escapeHtml(registrationStatus)}</p>` : ''}
+      ${user.id && !enabled && user.disabled_at ? `<p><strong>Disabled since (UTC):</strong> ${escapeHtml(user.disabled_at)}</p>` : ''}
       <form id="${formId}" method="post" action="${action}">
         <label>Name</label><input name="name" value="${escapeHtml(user.name)}" required>
         <label>Email</label><input name="email" type="email" value="${escapeHtml(user.email)}" required>
@@ -408,7 +413,7 @@ function userForm(user = {}, action = '/admin/users') {
         ${user.id ? `
           ${removable ? `
             <button type="button" class="danger" data-open-user-delete-modal="${deleteModalId}">Delete</button>
-          ` : '<span class="muted">Non removable user</span>'}
+          ` : `<span class="muted">${USER_DELETION_MESSAGE}</span>`}
         ` : ''}
       </div>
     </div>
@@ -416,7 +421,8 @@ function userForm(user = {}, action = '/admin/users') {
       <form id="${deleteFormId}" method="post" action="/admin/users/${user.id}/delete"></form>
       <dialog id="${deleteModalId}" class="modal" aria-labelledby="${deleteModalId}-title">
         <h2 id="${deleteModalId}-title">Delete user?</h2>
-        <p>This will permanently delete <strong>${escapeHtml(user.name)}</strong> (<code>${escapeHtml(user.email)}</code>) and the user's invitation and API keys.</p>
+        <p>This will permanently delete <strong>${escapeHtml(user.name)}</strong> (<code>${escapeHtml(user.email)}</code>) and the user's invitations, API keys, linked sign-in identities, conversations and messages.</p>
+        <p>Usage history will be retained without a link to this account.</p>
         <div class="actions">
           <button type="button" class="secondary" data-close-user-delete-modal>Cancel</button>
           <button type="submit" form="${deleteFormId}" class="danger">Delete user</button>
@@ -819,10 +825,15 @@ router.get('/admin/users', requireAdmin, (req, res) => {
   const search = String(req.query.q || '').trim();
   const groupId = Number(req.query.group_id || 0);
   const status = ['pending', 'approved', 'rejected'].includes(String(req.query.status || '')) ? String(req.query.status) : '';
+  const enabled = ['enabled', 'disabled'].includes(String(req.query.enabled || '')) ? String(req.query.enabled) : 'all';
   const pageSize = 25;
   const groups = getAllGroups();
   const where = [];
   const params = {};
+  if (enabled !== 'all') {
+    where.push('users.enabled = @enabled');
+    params.enabled = enabled === 'enabled' ? 1 : 0;
+  }
   if (search) {
     where.push('(users.name LIKE @search OR users.email LIKE @search OR users.id = @exact_id OR users.last_used_at LIKE @search OR users.created_at LIKE @search)');
     params.search = `%${search}%`;
@@ -869,15 +880,18 @@ router.get('/admin/users', requireAdmin, (req, res) => {
   `).join('');
   const pagination = totalPages > 1 ? `
     <nav class="pagination" aria-label="Users pages">
-      ${page > 1 ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, page: page - 1 })}">Previous</a>` : '<span class="muted">Previous</span>'}
+      ${page > 1 ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, enabled, page: page - 1 })}">Previous</a>` : '<span class="muted">Previous</span>'}
       <span class="muted">Page ${page} of ${totalPages}. ${totalUsers} users.</span>
-      ${page < totalPages ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, page: page + 1 })}">Next</a>` : '<span class="muted">Next</span>'}
+      ${page < totalPages ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, enabled, page: page + 1 })}">Next</a>` : '<span class="muted">Next</span>'}
     </nav>
   ` : `<p class="muted">${totalUsers} user${totalUsers === 1 ? '' : 's'}.</p>`;
   const content = `
     <p><a class="button" href="/admin/users/new">Create user</a></p>
     <form method="get" action="/admin/users" class="panel search-panel">
       <label>Search users</label><input name="q" value="${escapeHtml(search)}" placeholder="Name, email, id, or date">
+      <label>Filter by account access</label><select name="enabled">
+        ${[['enabled', 'Enabled'], ['disabled', 'Disabled'], ['all', 'All']].map(([value, label]) => `<option value="${value}" ${value === enabled ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
       <label>Filter by group</label><select name="group_id">
         <option value="">All groups</option>
         ${groups.map((group) => `<option value="${group.id}" ${group.id === groupId ? 'selected' : ''}>${escapeHtml(group.name)}</option>`).join('')}
@@ -891,7 +905,7 @@ router.get('/admin/users', requireAdmin, (req, res) => {
     <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Group</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="muted">No users found.</td></tr>'}</tbody></table>
     ${pagination}
   `;
-  render(req, res, 'users', { title: 'Users', content, flash: flash(req.query.created ? 'User created.' : '') });
+  render(req, res, 'users', { title: 'Users', content, flash: flash(req.query.created ? 'User created.' : req.query.deleted ? 'User deleted.' : '') });
 });
 
 router.get('/admin/users/new', requireAdmin, (req, res) => {
@@ -1077,7 +1091,7 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
   const requestedUsagePage = Math.max(1, Number.parseInt(req.query.usage_page || '1', 10) || 1);
   const usagePage = Math.min(requestedUsagePage, usageTotalPages);
   const deleteError = req.query.delete_error
-    ? `This user has ${totalUsage} usage/error record${totalUsage === 1 ? '' : 's'}, so it cannot be deleted without losing audit history. Disable the user from the Enabled checkbox instead.`
+    ? USER_DELETION_MESSAGE
     : '';
   const activeInvite = getActiveInviteForUser(user.id);
   const activeInviteUrl = activeInvite ? `${getRequestBaseUrl(req)}/invite/${encodeURIComponent(activeInvite.token)}` : '';
@@ -1300,11 +1314,14 @@ router.post('/admin/users/:id/revoke-key/:keyId', requireAdmin, (req, res) => {
 });
 
 router.post('/admin/users/:id/delete', requireAdmin, (req, res) => {
-  const count = countUsage(req.params.id);
-  if (count > 0) {
-    return res.redirect(userDetailUrl(req.params.id, { deleteError: 'usage-history' }));
+  const db = getDb();
+  if (!db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id)) {
+    return res.status(404).send('User not found');
   }
-  getDb().prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  const result = db.prepare(`DELETE FROM users WHERE id = ? AND ${USER_DELETION_CONDITION}`).run(req.params.id);
+  if (!result.changes) {
+    return res.redirect(userDetailUrl(req.params.id, { deleteError: 'disabled-period' }));
+  }
   res.redirect('/admin/users?deleted=1');
 });
 
