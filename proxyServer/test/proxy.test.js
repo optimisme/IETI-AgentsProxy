@@ -1077,7 +1077,7 @@ test('admin users list paginates search results', async () => {
     insertGroup.run(result.lastInsertRowid, groupId);
   }
 
-  const first = await agent.get(`/admin/users?q=${encodeURIComponent(marker)}`).expect(200);
+  const first = await agent.get(`/admin/users?q=${encodeURIComponent(marker)}&status=all`).expect(200);
   assert.match(first.text, /Page 1 of 2\. 30 users\./);
   assert.match(first.text, /Next/);
   assert.doesNotMatch(first.text, /<th>Group Provider<\/th>/);
@@ -1086,7 +1086,7 @@ test('admin users list paginates search results', async () => {
   assert.doesNotMatch(first.text, /<th>Usage<\/th>/);
   assert.equal((first.text.match(new RegExp(`${marker}-\\d+@example\\.test`, 'g')) || []).length, 25);
 
-  const second = await agent.get(`/admin/users?q=${encodeURIComponent(marker)}&page=2`).expect(200);
+  const second = await agent.get(`/admin/users?q=${encodeURIComponent(marker)}&status=all&page=2`).expect(200);
   assert.match(second.text, /Page 2 of 2\. 30 users\./);
   assert.equal((second.text.match(new RegExp(`${marker}-\\d+@example\\.test`, 'g')) || []).length, 5);
 });
@@ -2424,29 +2424,43 @@ test('disabled timestamp migration starts unknown timers once and tracks new dis
   }
 });
 
-test('admin enabled filter combines with search, group, status and pagination', async () => {
+test('admin registration filter defaults to approved/enabled and preserves filtering in pagination', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const groupId = db.prepare('SELECT id FROM groups ORDER BY id LIMIT 1').get().id;
-  const marker = `access-filter-${Date.now()}`;
-  for (let i = 0; i < 28; i += 1) {
-    const userId = db.prepare("INSERT INTO users (name, email, enabled) VALUES (?, ?, ?)")
-      .run(`${marker} ${i}`, `${marker}-${i}@example.test`, i < 26 ? 0 : 1).lastInsertRowid;
+  const marker = `status-filter-${Date.now()}`;
+  for (let i = 0; i < 32; i += 1) {
+    const registration = i < 28 ? 'approved' : i < 30 ? 'pending' : 'rejected';
+    const enabled = i < 26 ? 0 : i < 28 ? 1 : i % 2;
+    const userId = db.prepare('INSERT INTO users (name, email, enabled, registration_status) VALUES (?, ?, ?, ?)')
+      .run(`${marker} ${i}`, `${marker}-${i}@example.test`, enabled, registration).lastInsertRowid;
     db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(userId, groupId);
   }
-  const query = `q=${marker}&group_id=${groupId}&status=approved`;
-  const first = await agent.get(`/admin/users?${query}&enabled=disabled`).expect(200);
+  const query = `q=${marker}&group_id=${groupId}`;
+  const first = await agent.get(`/admin/users?${query}&status=approved-disabled`).expect(200);
   assert.match(first.text, /Page 1 of 2\. 26 users\./);
-  assert.match(first.text, /value="disabled" selected/);
-  assert.doesNotMatch(first.text, /class="status-enabled"/);
+  assert.match(first.text, /value="approved-disabled" selected>approved\/disabled/);
+  assert.doesNotMatch(first.text, /class="status-enabled"|name="enabled"|Filter by account access/);
   const next = first.text.match(/href="([^"]+)">Next<\/a>/)[1];
-  for (const part of [`q=${marker}`, `group_id=${groupId}`, 'status=approved', 'enabled=disabled', 'page=2']) {
+  for (const part of [`q=${marker}`, `group_id=${groupId}`, 'status=approved-disabled', 'page=2']) {
     assert.ok(next.includes(part));
   }
   await agent.get(next).expect(200).expect(/Page 2 of 2\. 26 users\./);
-  await agent.get(`/admin/users?${query}&enabled=enabled`).expect(200).expect(/2 users\.<\/p>/)
-    .expect((res) => assert.doesNotMatch(res.text, /class="status-disabled"/));
-  for (const filter of ['', '&enabled=all', '&enabled=invalid']) {
-    await agent.get(`/admin/users?${query}${filter}`).expect(200).expect(/Page 1 of 2\. 28 users\./);
+  for (const filter of ['', '&status=approved-enabled', '&status=invalid']) {
+    const response = await agent.get(`/admin/users?${query}${filter}`).expect(200);
+    assert.match(response.text, /2 users\.<\/p>/);
+    assert.match(response.text, /value="approved-enabled" selected>approved\/enabled/);
+    assert.doesNotMatch(response.text, /class="status-disabled"/);
+    for (const index of [26, 27]) assert.ok(response.text.includes(`${marker}-${index}@example.test`));
   }
+  for (const [status, indexes] of [['pending', [28, 29]], ['rejected', [30, 31]]]) {
+    const response = await agent.get(`/admin/users?${query}&status=${status}`).expect(200);
+    assert.match(response.text, /2 users\.<\/p>/);
+    for (const index of indexes) assert.ok(response.text.includes(`${marker}-${index}@example.test`));
+  }
+  const all = await agent.get(`/admin/users?${query}&status=all`).expect(200);
+  assert.match(all.text, /Page 1 of 2\. 32 users\./);
+  const allNext = all.text.match(/href="([^"]+)">Next<\/a>/)[1];
+  assert.ok(allNext.includes('status=all'));
+  await agent.get(allNext).expect(200).expect(/Page 2 of 2\. 32 users\./);
 });

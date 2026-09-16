@@ -223,7 +223,7 @@ Valors principals:
 
 ## Gestio d'usuaris deshabilitats
 
-A `/admin/users`, el filtre **Enabled / Disabled / All** permet mostrar els comptes segons l'acces; per defecte mostra **All**. Es combina amb la cerca, el grup i l'estat de registre, i es conserva en canviar de pagina.
+A `/admin/users`, el filtre **Filter by registration status** mostra **approved/enabled** per defecte. Les opcions son **approved/enabled**, **approved/disabled**, **pending**, **rejected** i **All users**. Es combina amb la cerca i el grup, i es conserva en canviar de pagina.
 
 El boto **Delete** de la fitxa nomes apareix quan l'usuari porta mes de 30 dies seguits deshabilitat. El servidor comprova el mateix requisit en eliminar-lo, encara que no tingui historial d'us. L'eliminacio es manual i permanent: elimina el compte, les claus, les invitacions i les dades dependents; conserva els registres d'us sense vincle amb el compte.
 

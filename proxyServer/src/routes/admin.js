@@ -334,12 +334,19 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
 const USER_DELETION_CONDITION = "enabled = 0 AND datetime(disabled_at) < datetime('now', '-30 days')";
 const USER_DELETION_MESSAGE = 'Users can only be deleted after being continuously disabled for more than 30 days.';
 
-function adminUsersUrl({ search = '', groupId = 0, status = '', enabled = 'all', page = 1 } = {}) {
+const USER_STATUS_FILTERS = [
+  { value: 'approved-enabled', label: 'approved/enabled', registrationStatus: 'approved', enabled: 1 },
+  { value: 'approved-disabled', label: 'approved/disabled', registrationStatus: 'approved', enabled: 0 },
+  { value: 'pending', label: 'pending', registrationStatus: 'pending' },
+  { value: 'rejected', label: 'rejected', registrationStatus: 'rejected' },
+  { value: 'all', label: 'All users' }
+];
+
+function adminUsersUrl({ search = '', groupId = 0, status = 'approved-enabled', page = 1 } = {}) {
   const params = new URLSearchParams();
   if (search) params.set('q', search);
   if (groupId) params.set('group_id', String(groupId));
   if (status) params.set('status', status);
-  if (enabled !== 'all') params.set('enabled', enabled);
   if (page > 1) params.set('page', String(page));
   const query = params.toString();
   return `/admin/users${query ? `?${query}` : ''}`;
@@ -824,15 +831,16 @@ router.get('/admin', requireAdmin, (req, res) => {
 router.get('/admin/users', requireAdmin, (req, res) => {
   const search = String(req.query.q || '').trim();
   const groupId = Number(req.query.group_id || 0);
-  const status = ['pending', 'approved', 'rejected'].includes(String(req.query.status || '')) ? String(req.query.status) : '';
-  const enabled = ['enabled', 'disabled'].includes(String(req.query.enabled || '')) ? String(req.query.enabled) : 'all';
+  const requestedStatus = String(req.query.status || '');
+  const filter = USER_STATUS_FILTERS.find((entry) => entry.value === requestedStatus) || USER_STATUS_FILTERS[0];
+  const status = filter.value;
   const pageSize = 25;
   const groups = getAllGroups();
   const where = [];
   const params = {};
-  if (enabled !== 'all') {
+  if (filter.enabled !== undefined) {
     where.push('users.enabled = @enabled');
-    params.enabled = enabled === 'enabled' ? 1 : 0;
+    params.enabled = filter.enabled;
   }
   if (search) {
     where.push('(users.name LIKE @search OR users.email LIKE @search OR users.id = @exact_id OR users.last_used_at LIKE @search OR users.created_at LIKE @search)');
@@ -843,9 +851,9 @@ router.get('/admin/users', requireAdmin, (req, res) => {
     where.push('EXISTS (SELECT 1 FROM user_groups WHERE user_groups.user_id = users.id AND user_groups.group_id = @group_id)');
     params.group_id = groupId;
   }
-  if (status) {
+  if (filter.registrationStatus) {
     where.push('users.registration_status = @registration_status');
-    params.registration_status = status;
+    params.registration_status = filter.registrationStatus;
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const totalUsers = getDb().prepare(`
@@ -880,25 +888,21 @@ router.get('/admin/users', requireAdmin, (req, res) => {
   `).join('');
   const pagination = totalPages > 1 ? `
     <nav class="pagination" aria-label="Users pages">
-      ${page > 1 ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, enabled, page: page - 1 })}">Previous</a>` : '<span class="muted">Previous</span>'}
+      ${page > 1 ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, page: page - 1 })}">Previous</a>` : '<span class="muted">Previous</span>'}
       <span class="muted">Page ${page} of ${totalPages}. ${totalUsers} users.</span>
-      ${page < totalPages ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, enabled, page: page + 1 })}">Next</a>` : '<span class="muted">Next</span>'}
+      ${page < totalPages ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, page: page + 1 })}">Next</a>` : '<span class="muted">Next</span>'}
     </nav>
   ` : `<p class="muted">${totalUsers} user${totalUsers === 1 ? '' : 's'}.</p>`;
   const content = `
     <p><a class="button" href="/admin/users/new">Create user</a></p>
     <form method="get" action="/admin/users" class="panel search-panel">
       <label>Search users</label><input name="q" value="${escapeHtml(search)}" placeholder="Name, email, id, or date">
-      <label>Filter by account access</label><select name="enabled">
-        ${[['enabled', 'Enabled'], ['disabled', 'Disabled'], ['all', 'All']].map(([value, label]) => `<option value="${value}" ${value === enabled ? 'selected' : ''}>${label}</option>`).join('')}
-      </select>
       <label>Filter by group</label><select name="group_id">
         <option value="">All groups</option>
         ${groups.map((group) => `<option value="${group.id}" ${group.id === groupId ? 'selected' : ''}>${escapeHtml(group.name)}</option>`).join('')}
       </select>
       <label>Filter by registration status</label><select name="status">
-        <option value="">All statuses</option>
-        ${['pending', 'approved', 'rejected'].map((entry) => `<option value="${entry}" ${entry === status ? 'selected' : ''}>${entry}</option>`).join('')}
+        ${USER_STATUS_FILTERS.map((entry) => `<option value="${entry.value}" ${entry.value === status ? 'selected' : ''}>${entry.label}</option>`).join('')}
       </select>
       <p><button>Search</button> <a class="button secondary" href="/admin/users">Clear</a></p>
     </form>
