@@ -1,0 +1,101 @@
+# From docker/: docker compose -f models/ternary-bonsai-2-27b-llamacpp-prism-ptq1_0-16gb.yml up -d --build
+# Served model: prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0
+# Target: NVIDIA GPU with 16 GB VRAM; PrismML llama.cpp CUDA fork required.
+# The Q8 vision projector stays in host RAM to reserve VRAM for model/KV cache.
+name: ieti-ternary-bonsai-2-27b-llamacpp-prism-ptq1-0-16gb
+
+services:
+  qwen-llamacpp:
+    image: local/llama.cpp:prism-b10683-cuda12.8
+    pull_policy: never
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "ternary-bonsai-2-27b-llamacpp-prism-ptq1_0-16gb.yml"
+    container_name: ternary_bonsai_2_27b_cuda_vram16_prism_ptq1_0_image
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+      - LLAMA_CACHE=/root/.cache/llama.cpp
+      - CUDA_VISIBLE_DEVICES=0
+
+    volumes:
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - xtec-ternary-bonsai-2-27b-ptq1-0-16gb-llama-cache:/root/.cache/llama.cpp
+
+    ports:
+      - "8000:8000"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45m
+
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    entrypoint:
+      - /bin/bash
+      - -lc
+
+    command:
+      - |
+        set -euo pipefail
+        model="$${LLAMA_CACHE}/Ternary-Bonsai-2-27B-PTQ1_0.gguf"
+        mmproj="$${LLAMA_CACHE}/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf"
+        if [ ! -s "$${model}" ]; then
+          tmp="$${model}.download"
+          curl -fL --retry 3 --retry-all-errors \
+            "https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-PTQ1_0.gguf" \
+            -o "$${tmp}"
+          mv "$${tmp}" "$${model}"
+        fi
+        if [ ! -s "$${mmproj}" ]; then
+          tmp="$${mmproj}.download"
+          curl -fL --retry 3 --retry-all-errors \
+            "https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf" \
+            -o "$${tmp}"
+          mv "$${tmp}" "$${mmproj}"
+        fi
+        exec /opt/prism-llama/llama-server \
+          --model "$${model}" \
+          --mmproj "$${mmproj}" \
+          --no-mmproj-offload \
+          --alias prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0 \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --ctx-size 65536 \
+          --parallel 1 \
+          --n-gpu-layers all \
+          --flash-attn on \
+          --batch-size 2048 \
+          --ubatch-size 512 \
+          --cache-type-k q8_0 \
+          --cache-type-v q8_0 \
+          --jinja \
+          --temp 1.0 \
+          --top-p 0.95 \
+          --top-k 20 \
+          --min-p 0 \
+          --reasoning on \
+          --image-max-tokens 1024
+
+volumes:
+  xtec-ternary-bonsai-2-27b-ptq1-0-16gb-llama-cache:
+    name: xtec-ternary-bonsai-2-27b-ptq1-0-16gb-llama-cache

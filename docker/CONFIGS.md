@@ -29,8 +29,11 @@ Qwen3.8 27B UD-Q2_K_XL (llama.cpp, native MTP, 64k context)
 
 ## 16GB monolloc (64GB RAM)
 
-Qwen3.6 35B A3B (llama.cpp, MTP, image input)
-- `models/qwen36-35b-a3b-base-llamacpp-localweights-iq4_xs-16gb.yml`
+Ternary Bonsai 2 27B PTQ1_0 (PrismML llama.cpp, 16 GB VRAM, image input)
+- `models/ternary-bonsai-2-27b-llamacpp-prism-ptq1_0-16gb.yml`
+- Uses the PrismML CUDA release because stock llama.cpp cannot load PTQ1_0.
+- The Q8_0 vision projector runs in system RAM to leave approximately 0.9 GiB
+  of VRAM available for the model and KV cache.
 
 ## 8GB monolloc
 
