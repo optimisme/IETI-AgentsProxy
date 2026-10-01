@@ -251,9 +251,50 @@ El rol d'usuari (`student` o `teacher`) es tria des de l'administracio en crear 
 
 Si Google recrea un compte institucional amb el mateix correu i un `sub` diferent, la peticio apareix a **OAuth reviews**. L'administrador pot conservar tot el compte i substituir-ne la identitat, reiniciar-lo com un usuari pendent nou, o rebutjar la peticio. El reinici elimina claus, configuracio, converses i missatges; els registres d'us queden anonimitzats.
 
+## Configuracio global d'OpenCode i Atomic Agent
+
+El portal ofereix `set_agents.sh` (Linux/macOS) i `set_agents.ps1` (Windows). Detecten les ordres `opencode` i `atomic-agent` al `PATH` i configuren nomes els clients instal·lats. No instal·len ni inicien els clients, i no creen fitxers al projecte actual.
+
+- **Windows:** PowerShell 5.1 o superior, amb HTTP i JSON natius de PowerShell/.NET. No necessita Python, Node.js, npm ni Bun.
+- **Linux/macOS:** Bash i Python 3.9+ (`python3`, o `python` si correspon a aquesta versio). Nomes usa la biblioteca estandard; no necessita `pip`, Node.js, npm ni Bun. Python no esta garantit a tots els sistemes: si falta, l'script mostra com instal·lar-lo. La comanda de descarrega del portal utilitza `curl`.
+
+```bash
+./proxyServer/assets/set_agents.sh
+# Override opcional de la URL; accepta l'arrel o /v1:
+PROXY_AGENTS_BASE_URL=https://agents.ieti.site ./proxyServer/assets/set_agents.sh
+```
+
+```powershell
+.\proxyServer\assets\set_agents.ps1
+# Override opcional de la URL:
+$env:PROXY_AGENTS_BASE_URL = 'https://agents.ieti.site'
+.\proxyServer\assets\set_agents.ps1
+```
+
+La primera execucio demana la URL si no existeix a la configuracio global i demana la clau amb entrada oculta. Les execucions posteriors reutilitzen la URL i la clau. `PROXY_AGENTS_BASE_URL` i `PROXY_AGENTS_KEY` permeten substituir aquests valors per a una execucio; `--sync-only` (Bash) o `-SyncOnly` (PowerShell) impedeixen preguntes interactives. No poseu claus a les URL.
+
+| Fitxer global | Contingut |
+|---|---|
+| `~/.config/opencode/opencode.json` | Proveidor `ieti-agents`, models, limits, modalitats i variants de raonament |
+| `~/.config/ieti-agents/agents_server_key` | Clau reutilitzable; OpenCode la referencia amb una ruta absoluta |
+| `~/.atomic-agent/config.json` | Proveidor `openai-compatible` i `userModels` amb context, visio, eines, raonament i parametres de sortida |
+| `~/.atomic-agent/.env` | `IETI_AGENTS_API_KEY`, referenciada amb `apiKeyEnvVar` |
+
+A Windows, `~` correspon a la carpeta de l'usuari. Es respecten `XDG_CONFIG_HOME` i `ATOMIC_AGENT_STATE_DIR`. Si existeix `opencode.jsonc`, s'actualitza aquest fitxer; els comentaris es conserven a la copia `.bak`, i la configuracio actualitzada s'escriu com a JSON. Si existeixen alhora `opencode.json` i `opencode.jsonc`, cal consolidar-los abans per evitar que la fusio d'OpenCode recuperi models antics.
+
+Abans de canviar cap configuracio, es valida `GET /v1/model-capabilities` amb la clau de l'usuari i es comproven tots els models i fitxers. Un error de xarxa, autenticacio, cataleg o JSON conserva la configuracio existent. Els fitxers canviats de configuracio i `.env` tenen una copia `.bak`; les claus i els fitxers generats tenen permisos restrictius (`0600` a Unix, ACL de l'usuari a Windows). Es conserven altres proveidors, MCPs, preferencies i secrets. Els models d'IETI es substitueixen pel cataleg actual i desapareixen els que l'usuari ja no te assignats.
+
+Atomic Agent utilitza `userModels[].params.max_tokens` per al limit de sortida de cada model, `parallel_tool_calls` per al suport d'eines paral·leles i el `reasoning_effort` per defecte quan esta publicat. El format de raonament es detecta automaticament quan el model en suporta. El cataleg no declara cache de prompts ni preus, per tant no s'inventen aquestes capacitats. Les variants interactives de raonament s'exporten a OpenCode; Atomic Agent rep el valor per defecte. [Format d'Atomic Agent](https://atomicagent.io/docs/features/models/#declaring-models-yourself).
+
+Es conserva el model/proveidor seleccionat si encara es valid; quan falta, se'n selecciona un del cataleg. Si un altre proveidor ja es actiu, IETI s'afegeix sense substituir-lo. Reinicieu els clients despres d'executar l'script. Les configuracions locals d'OpenCode continuen tenint prioritat sobre la global: un `opencode.json` creat per l'script antic pot requerir retirar-ne manualment el proveidor IETI per utilitzar la configuracio global. Reexecuteu l'script quan canviin els models o capacitats del grup; no es una sincronitzacio automatica en segon pla.
+
+### Scripts antics per projecte
+
+Els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` continuen disponibles per compatibilitat i conserven el seu comportament local i la dependencia de Node.js. El portal ara ofereix els nous scripts globals. La seccio seguent documenta el flux antic.
+
 ## Us amb OpenCode
 
-Cada usuari pot executar des del portal la comanda del seu sistema operatiu. La comanda descarrega `set_agents_opencode.sh` o `set_agents_opencode.ps1` des del mateix servidor i executa l'script en el directori actual. L'script:
+En el flux antic per projecte, la comanda descarrega `set_agents_opencode.sh` o `set_agents_opencode.ps1` des del mateix servidor i executa l'script en el directori actual. L'script:
 
 - detecta automaticament el domini i port publicats pel portal i els utilitza com a URL per defecte;
 - reutilitza la URL de `provider.ieti-agents.options.baseURL` si ja existeix a `opencode.json` i nomes la demana si no la pot trobar;
@@ -264,7 +305,7 @@ Cada usuari pot executar des del portal la comanda del seu sistema operatiu. La 
 - valida la connexio abans de modificar la configuracio i no desa la clau en cap variable d'entorn;
 - no inicia ni obre OpenCode.
 
-El portal mostra una comanda copiable per a cada sistema operatiu. A macOS/Linux té aquesta forma:
+La comanda antiga per projecte a macOS/Linux té aquesta forma:
 
 ```bash
 bash -c "$(curl -fsSL 'https://your-public-domain.example/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fyour-public-domain.example%2Fv1')"
@@ -323,7 +364,7 @@ L'script substitueix exclusivament els models de `provider.ieti-agents` pels mod
 ./set_agents_opencode.sh
 ```
 
-El portal mostra una comanda per a cada sistema operatiu. La comanda descarrega l'script des del domini i port publics de la peticio —o des de `PUBLIC_BASE_URL`— i inclou automaticament la URL de l'API com a valor per defecte. L'usuari encara pot substituir-la quan l'executa.
+La URL de l'API es pot injectar com a valor per defecte en descarregar l'script. L'usuari encara pot substituir-la quan l'executa.
 
 A Windows, `set_agents_opencode.ps1` ofereix el mateix flux des de PowerShell i comparteix `.secrets/agents_server_key` i `opencode.json` amb la versio Bash. Encara que el fitxer `.ps1` es descarregui temporalment a `%TEMP%`, les dades es llegeixen i s'escriuen en el directori actual; per tant, una clau existent es reutilitza correctament:
 

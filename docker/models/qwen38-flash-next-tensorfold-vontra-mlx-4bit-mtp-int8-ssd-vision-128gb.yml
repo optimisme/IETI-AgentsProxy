@@ -1,0 +1,163 @@
+# From docker/: docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d
+# Served model: Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP
+# TensorFold v0.6.0 plus a local image-only port of upstream PR #146.
+# CUDA on one ARM64 DGX Spark / GB10, internal MTP drafting and native vision.
+# Default profile: sixteen concurrent streams, 75000 tokens per stream, int8 KV
+# and SSD n-gram reads.
+# Thinking stays enabled with low reasoning effort and a 1024-token budget,
+# preserving the rest of the reply allowance for answers and tool calls.
+# Temperature 0.1 reduces sampling randomness. Requests can override defaults.
+# Applies ../patches/tensorfold-flash-next-vision-v0.6.0.patch before installation.
+# Patch origin: MiaAI patch 0008, ported by upstream PR #146, adapted here for
+# v0.6.0's dynamic KV growth and mixed prompt/decode rounds. Image input only.
+# PR source commit: 23e055556e543903ddf1ea9a985ba18374c8e997.
+# Keeps 4 GiB of vision workspace plus 2 GiB of runtime cache-growth headroom.
+# Reuses the existing Flash Next HF cache volume; it must already exist.
+# Runtime and compiled-kernel caches are separate from the text-only profile.
+# To test the tweet's five-stream / 262k settings from docker/:
+# TENSORFOLD_CONTEXT=262144 TENSORFOLD_STREAMS=5 docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d
+# Those overrides match the tweet's model/KV/context/stream choices.
+# The tweet author's v0.6.0 port of MiaAI's SSD reader and prefill geometry
+# patches was not supplied or found published; MiaAI's patch set targets v0.3.6.3.
+# Text-only baseline verified 2026-10-01: clean dependencies, CUDA startup,
+# text/SSE and sixteen concurrent drafted replies equal to serial replies.
+# Baseline estimate 84.51 GiB; the vision tower and workspace add memory.
+# The text-only baseline passed 256 cold-prefix requests and a 32k prefill test.
+# Vision verified 2026-10-01: swapped-image grounding, exact serial/MTP tokens,
+# image-cache isolation, thinking-budget continuation and four mixed requests.
+# 410 CPU checks and 19 CUDA checks passed; memory-guard regressions passed.
+# Vision startup estimate: 89.35 GiB within a 105.25 GiB admission budget.
+# Idle warm burst: 8 image + 8 text requests, all correct, max TTFT 1.52s,
+# 4.06s total and 273 aggregate generated tokens/s (short prompts, thinking off,
+# temperature 0; this is not the tweet benchmark). Large overlapping prefills
+# raised burst TTFT to 15.11-22.37s, so a 10s latency target is not guaranteed.
+# Image SSE through the main proxy passed with low/default thinking in 2.26s.
+# All sixteen full 75k windows at once remain unverified.
+# The checkpoint download is about 114 GB; leave at least 160 GB free disk.
+# Do not run alongside another large model on a 128 GB Spark.
+# Sources: https://github.com/ashhart/TensorFold/pull/146
+#          https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/tree/a3aa89835022c55ca8e55008c37785954834e04f
+
+name: ieti-qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb
+
+services:
+  qwen-tensorfold:
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    platform: linux/arm64
+    pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml"
+    container_name: qwen38_flash_next_cuda_vram128_tensorfold_vontra_mlx_4bit_mtp_int8_ssd_vision
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "8000:8000"
+    volumes:
+      - type: bind
+        source: ../patches/tensorfold-flash-next-vision-v0.6.0.patch
+        target: /opt/ieti-patches/flash-next-vision.patch
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-hf-cache:/root/.cache/huggingface
+      - xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-runtime-cache:/root/.cache/tensorfold
+      - xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-kernel-cache:/root/.cache/tensorfold-kernels
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface/hub
+      PIP_CACHE_DIR: /root/.cache/tensorfold/pip
+      TORCH_EXTENSIONS_DIR: /root/.cache/tensorfold-kernels/torch-extensions
+      TRITON_CACHE_DIR: /root/.cache/tensorfold-kernels/triton
+      CUDA_CACHE_PATH: /root/.cache/tensorfold-kernels/cuda
+      MAX_JOBS: "2"
+      PYTHONUNBUFFERED: "1"
+      TENSORFOLD_NO_LIVE: "1"
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      MODEL_ID: Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP
+      CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
+      PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
+    # Preserve NVIDIA's entrypoint and its CUDA compatibility initialization.
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        # Keep NVIDIA's PyTorch, Triton, CUDA libraries and extension compiler.
+        # The venv is recreated with the container; only downloads and caches persist.
+        python3 -m venv --system-site-packages /opt/tensorfold-venv
+        . /opt/tensorfold-venv/bin/activate
+        # Pin upstream and reject a patch with a different digest before applying it.
+        # Recreate this container-only checkout so restart never reapplies a patch.
+        rm -rf /opt/tensorfold-source
+        git clone --filter=blob:none --no-checkout https://github.com/ashhart/TensorFold.git /opt/tensorfold-source
+        git -C /opt/tensorfold-source checkout --detach c4646171139ee8a3c38103eaa1699dad226ec12b
+        printf '%s  %s\n' 'faf2fa62fd995d8c9f7587d590e3a57ce1028974b0023ca85d2394c09d4c4200' /opt/ieti-patches/flash-next-vision.patch | sha256sum -c -
+        git -C /opt/tensorfold-source apply --check /opt/ieti-patches/flash-next-vision.patch
+        git -C /opt/tensorfold-source apply /opt/ieti-patches/flash-next-vision.patch
+        # The test extra supplies pytest, also required by NGC's triton-kernels.
+        python -m pip install \
+          '/opt/tensorfold-source[test,vision]' \
+          'transformers==5.18.0' 'huggingface-hub==1.33.0' \
+          'hf-xet==1.6.0' 'pytest==9.1.1'
+
+        # Flash Next includes its own MTP head; its n-gram tables stay on SSD.
+        tensorfold pull "$${MODEL_ID}"
+        exec tensorfold serve "$${MODEL_ID}" \
+          --backend cuda \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" \
+          --parallel "$${PARALLEL_STREAMS}" \
+          --thinking \
+          --reasoning-effort low \
+          --thinking-budget 1024 \
+          --temperature 0.1 \
+          --kv-dtype int8 \
+          --ple-on-ssd \
+          --vision \
+          --mtp-drafts 6 \
+          --mtp-confidence 0.60 \
+          --no-update-check
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=10).read()"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 180m
+
+volumes:
+  xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-hf-cache:
+    external: true
+    name: xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-hf-cache
+  xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-runtime-cache:
+    name: xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-runtime-cache
+  xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-kernel-cache:
+    name: xtec-qwen38-flash-next-cuda-vram128-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-kernel-cache

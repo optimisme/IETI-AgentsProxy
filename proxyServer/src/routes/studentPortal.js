@@ -510,8 +510,8 @@ router.get('/portal', requireStudentSession, (req, res) => {
   }
   const usage = getUsageTotals(user.id);
   const models = getActiveModelsForUser(user);
-  const shellCommand = getClientScriptCommand(req, 'set_agents_opencode.sh');
-  const powershellCommand = getClientScriptCommand(req, 'set_agents_opencode.ps1');
+  const shellCommand = getClientScriptCommand(req, 'set_agents.sh');
+  const powershellCommand = getClientScriptCommand(req, 'set_agents.ps1');
   const buildLiteShellCommand = getBuildLiteScriptCommand(req, 'set_harness_buildlite.sh');
   const buildLitePowerShellCommand = getBuildLiteScriptCommand(req, 'set_harness_buildlite.ps1');
   const usageRows = recentUsage(25, user.id).map((row) => `
@@ -533,8 +533,8 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <p class="muted">${escapeHtml(user.email)}</p>
       ${usageLimitCards(models[0]?.group, usage)}
       <div class="panel" style="margin-top:16px">
-        <h2>OpenCode configuration</h2>
-        <p>Run the command for your operating system. It downloads the configuration script from this server, stores the IETI Agents key in <code>.secrets/agents_server_key</code>, and updates <code>opencode.json</code>.</p>
+        <h2>Agent configuration</h2>
+        <p>Run the command for your operating system. It detects installed OpenCode and Atomic Agent clients and updates their user-wide configuration with your available models and capabilities. Windows uses native PowerShell; macOS/Linux requires Python 3.9+. Existing project settings can override global settings.</p>
         <label>macOS/Linux</label>
         <div class="command-row">
           <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>
@@ -899,6 +899,14 @@ function sendClientScript(req, res, filename) {
   });
   res.send(script);
 }
+
+router.get('/downloads/set_agents.sh', (req, res) => {
+  sendClientScript(req, res, 'set_agents.sh');
+});
+
+router.get('/downloads/set_agents.ps1', (req, res) => {
+  sendClientScript(req, res, 'set_agents.ps1');
+});
 
 router.get('/downloads/set_agents_opencode.sh', (req, res) => {
   sendClientScript(req, res, 'set_agents_opencode.sh');

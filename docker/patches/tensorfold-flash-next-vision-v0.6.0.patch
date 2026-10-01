@@ -1,0 +1,1644 @@
+diff --git a/LICENSES/MiaAI-Lab-MIT.txt b/LICENSES/MiaAI-Lab-MIT.txt
+new file mode 100644
+index 0000000..2845716
+--- /dev/null
++++ b/LICENSES/MiaAI-Lab-MIT.txt
+@@ -0,0 +1,46 @@
++MIT License
++
++Copyright (c) 2026 MiaAI-Lab
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
++---
++
++The files in patches/ modify TensorFold (https://github.com/ashhart/TensorFold), which is distributed under the
++MIT License:
++
++Copyright (c) 2026 TensorFold contributors
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/THIRD_PARTY_NOTICES.md b/THIRD_PARTY_NOTICES.md
+index c8291c8..f63b0ac 100644
+--- a/THIRD_PARTY_NOTICES.md
++++ b/THIRD_PARTY_NOTICES.md
+@@ -110,3 +110,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
++
++## Flash Next CUDA image integration
++
++The multimodal rotary and image-feature integration is adapted from MiaAI-Lab's
++[Flash Next vision patch 0008](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/blob/a3aa89835022c55ca8e55008c37785954834e04f/patches/0008-flash-next-vision.patch),
++MIT License, Copyright (c) 2026 MiaAI-Lab. The license is included in `LICENSES/MiaAI-Lab-MIT.txt`.
++The port preserves the v0.5 CUDA execution APIs and adds an offline EXL3 vision adapter.
+diff --git a/docs/recipes/flash-next-vision.md b/docs/recipes/flash-next-vision.md
+new file mode 100644
+index 0000000..04bd005
+--- /dev/null
++++ b/docs/recipes/flash-next-vision.md
+@@ -0,0 +1,29 @@
++# Flash Next CUDA images
++
++Run a complete local Flash Next checkpoint with `--vision --parallel 2` (or more), on one CUDA GPU.
++This port supports images, including multiple images within the existing 4096 visual-token budget; video and
++large-image extensions are not included. Image rows replace embeddings in every hyperconnection stream.
++Multimodal RoPE follows the checkpoint's sections; text decode continues with its image-position offset.
++Image prompts always prefill from the start and are never retained in the text-prefix cache, since identical
++placeholder IDs can name different pixels. Grammar and ignore-EOS settings remain available.
++
++A floating-point tower in the indexed checkpoint is discovered normally. EXL3 packs whose vision tower is a
++quantized sidecar need a one-time CPU conversion, stored outside the original model snapshot:
++
++```bash
++python -m tensorfold.vision.exl3_convert /models/vision_k6.safetensors /cache/vision-f16-v3.safetensors
++TENSORFOLD_VISION_WEIGHTS=/cache/vision-f16-v3.safetensors tensorfold serve /models --vision --parallel 2
++```
++
++The converter decodes represented EXL3 weights, transposes matrices and combines split Q/K/V. It records the
++source SHA256 and converter/dtype version; repeat conversions reuse a matching artifact and refuse to
++replace a mismatched one. Conversion never runs in the serving loader. The FP16 artifact loads into the
++existing BF16 CUDA tower; rounding may differ from native quantized vision execution, so compare image
++features and quality for the checkpoint in use. The original weights stay unchanged.
++
++Admission counts an external tower separately, including its expanded resident bytes. It reserves 4 GiB of
++image workspace by default; `TENSORFOLD_VISION_WORKSPACE_MIB` sets a measured override from 0 to 16384 MiB.
++Image requests cannot use yieldable background lanes. Distributed vision and serial-only Flash Next image
++serving are not supported by this port.
++
++The integration is adapted from MiaAI-Lab patch 0008, with its MIT license in `LICENSES/MiaAI-Lab-MIT.txt`.
+diff --git a/src/tensorfold/families/qwen4_exp/__init__.py b/src/tensorfold/families/qwen4_exp/__init__.py
+index 526cf98..d346203 100644
+--- a/src/tensorfold/families/qwen4_exp/__init__.py
++++ b/src/tensorfold/families/qwen4_exp/__init__.py
+@@ -177,4 +177,6 @@ def cuda_engine(model_dir: str | Path, *, drafter: str = "", tp: int = 1, rank:
+                            context_explicit=options.get("context_explicit"), tp=int(tp), rank=int(rank),
+                            master=master, port=int(master_port), streams=max(1, int(options.get("parallel") or 1)),
+                            ple_on_ssd=ple_on_ssd, kv_dtype=kv_dtype,
+-                           share=0.0 if decode_share is None else float(decode_share))
++                           share=0.0 if decode_share is None else float(decode_share),
++                           vision=bool(options.get("vision", False)),
++                           vision_urls=bool(options.get("vision_urls", False)))
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/attention.py b/src/tensorfold/families/qwen4_exp/cuda/attention.py
+index 71265d1..57ac978 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/attention.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/attention.py
+@@ -187,14 +187,17 @@ def attention(q: torch.Tensor, kc: torch.Tensor, vc: torch.Tensor, pos0: torch.T
+ 
+ 
+ @triton.jit
+-def _pool(IKC, POOLED, POS0, W, INV, eps, R, DI: tl.constexpr, HALF: tl.constexpr, RATIO: tl.constexpr):
++def _pool(IKC, POOLED, POS0, W, INV, ROPE, DELTA, eps, R, DI: tl.constexpr, HALF: tl.constexpr,
++          RATIO: tl.constexpr, MODE: tl.constexpr = 0, S1: tl.constexpr = 11, S2: tl.constexpr = 10):
+     """Pool each complete RATIO-key block in fp32 order, then bf16 RMSNorm and rotate-half RoPE at its first position; recomputing a block preserves its bits."""
+ 
+-    _pool_block(IKC, POOLED, tl.load(POS0), tl.program_id(0), W, INV, eps, R, DI, HALF, RATIO)
++    _pool_block(IKC, POOLED, tl.load(POS0), tl.program_id(0), W, INV, eps, R, DI, HALF, RATIO,
++                ROPE, DELTA, MODE, S1, S2)
+ 
+ 
+ @triton.jit
+-def _pool_block(IKC, POOLED, p0, i, W, INV, eps, R, DI: tl.constexpr, HALF: tl.constexpr, RATIO: tl.constexpr):
++def _pool_block(IKC, POOLED, p0, i, W, INV, eps, R, DI: tl.constexpr, HALF: tl.constexpr, RATIO: tl.constexpr,
++                ROPE=None, DELTA=None, MODE: tl.constexpr = 0, S1: tl.constexpr = 11, S2: tl.constexpr = 10):
+     """Block i past p0 // RATIO, if rows [p0, p0 + R) complete it."""
+ 
+     b = p0 // RATIO + i
+@@ -213,7 +216,17 @@ def _pool_block(IKC, POOLED, p0, i, W, INV, eps, R, DI: tl.constexpr, HALF: tl.c
+         xp = (xp / RATIO).to(tl.bfloat16).to(tl.float32)
+         xpn = (xp * rinv * tl.load(W + partner)).to(tl.bfloat16).to(tl.float32)
+         j = tl.where(d < HALF, d, tl.where(d < 2 * HALF, d - HALF, 0))
+-        ang = (RATIO * b).to(tl.float32) * tl.load(INV + j)
++        if MODE == 0:
++            ang = (RATIO * b).to(tl.float32) * tl.load(INV + j)
++        elif MODE == 1:                              # the block starts in text after images
++            ang = (RATIO * b + tl.load(DELTA)).to(tl.float32) * tl.load(INV + j)
++        else:                                        # the block's first token in an image prompt's chunk
++            row = RATIO * b - p0
++            pt = tl.load(ROPE + row * 3)
++            ph = tl.load(ROPE + row * 3 + 1)
++            pv = tl.load(ROPE + row * 3 + 2)
++            axis = tl.where((j % 3 == 1) & (j < 3 * S1), ph, tl.where((j % 3 == 2) & (j < 3 * S2), pv, pt))
++            ang = axis.to(tl.float32) * tl.load(INV + j)
+         cos, sin = tl.cos(ang), tl.sin(ang)
+         rot = tl.where(d < HALF, xn * cos - xpn * sin, tl.where(d < 2 * HALF, xpn * sin + xn * cos, xn))
+         tl.store(POOLED + b.to(tl.int64) * DI + d, rot.to(tl.bfloat16))
+@@ -365,19 +378,24 @@ def _launch_select(scratch: AttnScratch, pos0: torch.Tensor, rows: int, blocks:
+ 
+ def qsa_select(iq: torch.Tensor, ikc: torch.Tensor, pooled: torch.Tensor, pos0: torch.Tensor, ik_scale: torch.Tensor,
+                inv_freq: torch.Tensor, eps: float, scratch: AttnScratch, rows: int,
+-               *, context: int | None = None) -> None:
++               *, context: int | None = None, rope=None, delta=None, sections=(11, 11, 10)) -> None:
+     """Pool the blocks the window completes, score and select each sparse row's blocks (scratch.ids/nk/sparse)."""
+ 
+-    qsa_pool(ikc, pooled, pos0, ik_scale, inv_freq, eps, scratch, rows)
++    qsa_pool(ikc, pooled, pos0, ik_scale, inv_freq, eps, scratch, rows, rope=rope, delta=delta, sections=sections)
+     qsa_rows(iq, pooled, pos0, scratch, rows, context=context)
+ 
+ 
+ def qsa_pool(ikc: torch.Tensor, pooled: torch.Tensor, pos0: torch.Tensor, ik_scale: torch.Tensor,
+-             inv_freq: torch.Tensor, eps: float, scratch: AttnScratch, rows: int) -> None:
+-    """The pooled key of every block that rows [P0, P0 + rows) complete."""
+-
+-    _pool[(rows // scratch.ratio + 2,)](ikc, pooled, pos0, ik_scale, inv_freq, eps, rows, DI=ikc.shape[1],
+-                                        HALF=inv_freq.numel(), RATIO=scratch.ratio, num_warps=1)
++             inv_freq: torch.Tensor, eps: float, scratch: AttnScratch, rows: int, *, rope=None, delta=None,
++             sections=(11, 11, 10)) -> None:
++    """The pooled key of every block that rows [P0, P0 + rows) complete, rotated at its first token's position:
++    ``delta`` [1] for text after images, ``rope`` [rows, 3] for an image prompt's chunk (as ``glue.attn_prep``)."""
++
++    mode = 2 if rope is not None else 1 if delta is not None else 0
++    _pool[(rows // scratch.ratio + 2,)](ikc, pooled, pos0, ik_scale, inv_freq,
++                                        rope if rope is not None else pos0, delta if delta is not None else pos0,
++                                        eps, rows, DI=ikc.shape[1], HALF=inv_freq.numel(), RATIO=scratch.ratio,
++                                        MODE=mode, S1=sections[1], S2=sections[2], num_warps=1)
+ 
+ 
+ def qsa_rows(iq: torch.Tensor, pooled: torch.Tensor, pos0: torch.Tensor, scratch: AttnScratch, rows: int, *,
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/decode.py b/src/tensorfold/families/qwen4_exp/cuda/decode.py
+index 6548c6f..c883f80 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/decode.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/decode.py
+@@ -256,16 +256,31 @@ def draft(e: Engine, streams: torch.Tensor, next_tokens: Sequence[int], position
+     return drafts
+ 
+ 
++
++def image_piece(vision, start: int, rows: int, *, offset: int = 0):
++    """One image prompt piece's positions and feature rows, optionally packed after other prompts."""
++    image_rows = torch.tensor(vision.rows, dtype=torch.int64, device=vision.features.device)
++    inside = ((image_rows >= start) & (image_rows < start + rows)).nonzero().flatten()
++    features = None
++    if inside.numel():
++        features = (image_rows.index_select(0, inside) - start + offset,
++                    vision.features.index_select(0, inside))
++    return vision.positions.t().contiguous()[start:start + rows], features
++
++
+ def _absorbs(e: Engine, mtp: bool) -> bool:
+     return mtp and e.w.mtp is not None and e.mbuf is not None
+ 
+ 
+ @torch.no_grad()
+-def prefill_begin(e: Engine, prompt: Sequence[int], *, mtp: bool = True, resume: dict | None = None) -> int:
++def prefill_begin(e: Engine, prompt: Sequence[int], *, mtp: bool = True, resume: dict | None = None,
++                  vision=None) -> int:
+     """Empty the state, or restore a kept prompt end and absorb its tail; returns the first prompt row to commit."""
+ 
+     if not prompt:
+         raise ValueError("prefill requires at least one token")
++    if vision is not None and resume is not None:
++        raise ValueError("an image prompt prefills from its start")
+     if resume is None:
+         e.reset()
+         return 0
+@@ -281,7 +296,7 @@ def prefill_begin(e: Engine, prompt: Sequence[int], *, mtp: bool = True, resume:
+ 
+ @torch.no_grad()
+ def prefill_chunk(e: Engine, prompt: Sequence[int], start: int, *, mtp: bool = True,
+-                  keep_at: int | None = None) -> torch.Tensor | None:
++                  keep_at: int | None = None, vision=None) -> torch.Tensor | None:
+     """Commit up to ``e.prefill_rows`` rows from ``start`` (the last chunk returns its logits); a chunk holding ``keep_at`` sets ``e.kept``."""
+ 
+     w, st, pb = e.w, e.st, e.pbuf
+@@ -291,8 +306,16 @@ def prefill_chunk(e: Engine, prompt: Sequence[int], start: int, *, mtp: bool = T
+     final = end == len(prompt)
+     point = keep_at - start if keep_at is not None and start < keep_at <= end else 0     # the kept point's row
+     cut = Cut(point) if 0 < point < R else None           # inside the chunk, not at its end
++    features = None
++    if vision is not None:
++        if keep_at is not None:
++            raise ValueError("image states cannot seed the text prompt cache")
++        if pb.attn.qsa and start % pb.attn.ratio:
++            raise ValueError(f"image prefill starts must be divisible by {pb.attn.ratio}")
++        pb.rope_rows, features = image_piece(vision, start, R)
+     # only the prompt's last row is sampled: the head runs on the final chunk alone
+-    logits = forward(w, st, pb, chunk, logits=final, cut=cut)
++    logits = forward(w, st, pb, chunk, logits=final, cut=cut,
++                     **({"features": features} if features is not None else {}))
+     last = logits.clone() if final else None
+     e.last_streams = pb.streams[R - 1:R].clone()
+     use_mtp = _absorbs(e, mtp)
+@@ -312,16 +335,27 @@ def prefill_chunk(e: Engine, prompt: Sequence[int], start: int, *, mtp: bool = T
+ 
+ @torch.no_grad()
+ def prefill(e: Engine, prompt: Sequence[int], sampling: Sampling | None, *, mtp: bool = True,
+-            resume: dict | None = None, constraint=None, probabilities=None, keep_at: int | None = None) -> int:
++            resume: dict | None = None, constraint=None, probabilities=None, keep_at: int | None = None,
++            vision=None) -> int:
+     """Commit the prompt in chunks and sample the first token (``resume`` equals a fresh run); ``e.kept`` resumes prompt[:keep_at]."""
+ 
+-    start, last = prefill_begin(e, prompt, mtp=mtp, resume=resume), None
++    if vision is not None and e.pbuf.attn.qsa and e.prefill_rows % e.pbuf.attn.ratio:
++        raise ValueError(f"image prefill rows must be divisible by {e.pbuf.attn.ratio}")
++    start, last = prefill_begin(e, prompt, mtp=mtp, resume=resume,
++                              **({"vision": vision} if vision is not None else {})), None
+     if keep_at is not None and not start <= keep_at <= len(prompt):
+         raise ValueError(f"keep_at {keep_at} is outside the prefilled range [{start}, {len(prompt)}]")
+     e.kept = resume if keep_at == start else None                 # the same prompt again: its own point
+-    while start < len(prompt):
+-        last = prefill_chunk(e, prompt, start, mtp=mtp, keep_at=keep_at)
+-        start += e.prefill_rows
++    try:
++        while start < len(prompt):
++            last = prefill_chunk(e, prompt, start, mtp=mtp, keep_at=keep_at,
++                                 **({"vision": vision} if vision is not None else {}))
++            start += e.prefill_rows
++    finally:
++        if vision is not None:
++            e.pbuf.rope_rows = None
++    if vision is not None:
++        e.st.set_rope_delta(vision.rope_delta)
+     if constraint is not None:                           # a reply's grammar: this rank's vocabulary columns
+         last = constraint.mask(last, None, e.w.meta.get("vocab_offset", 0))
+     first = e.sample(last, [len(prompt)], sampling)[0]
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/engine.py b/src/tensorfold/families/qwen4_exp/cuda/engine.py
+index 4a78fd2..8f2bb1f 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/engine.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/engine.py
+@@ -13,6 +13,19 @@ from . import CONFIDENCE, DEPTH
+ 
+ MAX_DEPTH = 15           # a verify window of at most 16 rows
+ KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from
++VISION_WORKSPACE = 4 * 2**30
++
++
++def vision_workspace() -> int:
++    """Reserve bounded vision workspace, or a measured deployment override in MiB."""
++    import os
++
++    value = os.environ.get("TENSORFOLD_VISION_WORKSPACE_MIB")
++    if value is None or value == "":
++        return VISION_WORKSPACE
++    if not value.isdecimal() or int(value) > 16384:
++        raise ValueError(f"TENSORFOLD_VISION_WORKSPACE_MIB: 0 to 16,384 MiB, not {value!r}")
++    return int(value) * 2**20
+ 
+ 
+ class FlashNextEngine:
+@@ -22,7 +35,8 @@ class FlashNextEngine:
+                  draft_vocab: str | int | None = "default", max_len: int | None = None,
+                  context_explicit: bool | None = None, tp: int = 1, rank: int = 0, master: str = "", port: int = 29551,
+                  prefetch: bool = True, graphs: bool = True, streams: int = 1, ple_on_ssd: bool = False,
+-                 kv_dtype: str = "bf16", share: float = 0.0) -> None:
++                 kv_dtype: str = "bf16", share: float = 0.0, vision: bool = False,
++                 vision_urls: bool = False) -> None:
+         import torch
+ 
+         from .exl3_pack import admission, extra_files, is_exl3
+@@ -33,6 +47,8 @@ class FlashNextEngine:
+         if (exl3 or quant_method(read_config(model_dir)) == "modelopt") and tp != 1:
+             raise ValueError(f"{'EXL3 packs' if exl3 else 'NVFP4 checkpoints'} of Flash Next run on one GPU: drop --tp "
+                              "2, or serve the MLX checkpoint (Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP) on two")
++        if vision and (streams < 2 or tp != 1):
++            raise ValueError("image input on Flash Next runs on one GPU with --parallel 2 or more")
+         if exl3 and ple_on_ssd:
+             raise ValueError("--ple-on-ssd reads the MLX checkpoint's n-gram tables; an EXL3 pack maps its own table "
+                              "from its file, so drop --ple-on-ssd")
+@@ -55,6 +71,8 @@ class FlashNextEngine:
+         self.tp, self.rank, self.depth, self.confidence = tp, rank, int(depth), float(confidence)
+         self.kv_dtype = check_kv(kv_dtype)
+         self.comm = None
++        self.vision = None                   # the image tower (``QwenCudaVision``) with --vision
++        workspace = vision_workspace() if vision else 0
+         ids = draft_token_ids(draft_vocab) if self.depth > 0 else None
+         if tp == 2:
+             from tensorfold.cuda.comm import NCCL
+@@ -71,8 +89,11 @@ class FlashNextEngine:
+                     (lambda text: gdn_geometry(text, tp, each, indexed=True, mtp=mtp, kv_bits=bits)))
+         if exl3:
+             geometry = admission(geometry)
+-        self.capacity_plan = admit(model_dir, max_len, context_explicit, torch, geometry,
+-                                   indexed_weights(tp, mtp, mapped_tables=not ple_on_ssd), rank=rank, world=tp,
++        from tensorfold.vision.qwen_cuda import capacity_geometry, weight_transform as vision_weights
++
++        self.capacity_plan = admit(model_dir, max_len, context_explicit, torch,
++                                   capacity_geometry(geometry, model_dir, vision, rank, workspace),
++                                   vision_weights(indexed_weights(tp, mtp, mapped_tables=not ple_on_ssd), vision, rank), rank=rank, world=tp,
+                                    gather=gather, extra_files=extra_files(model_dir) if exl3 else ())
+         self.max_len = self.capacity_plan["cache_slots"]
+         if tp == 2:
+@@ -100,6 +121,15 @@ class FlashNextEngine:
+             raise ValueError("this checkpoint has no MTP head, which Flash Next's CUDA engine drafts with: use one "
+                              "that has it, or --no-drafts for the serial reference (one token a round)")
+         self.w = w
++        if vision:
++            from tensorfold.vision.qwen_cuda import QwenCudaVision
++
++            self.vision = QwenCudaVision(model_dir, torch.device("cuda", 0),
++                                         allow_urls=vision_urls)
++            torch.cuda.empty_cache()
++            print(f"[tensorfold] vision: image input, a "
++                  f"{self.vision.weight_bytes / 2**30:.2f} GiB tower with {workspace / 2**30:.2f} GiB of "
++                  f"workspace reserved{'; https URLs allowed' if vision_urls else ''}", flush=True)
+         # ``streams`` > 1: up to that many requests decoded together, every stream's chain in one forward
+         self.concurrent = streams > 1
+         self.multi = self.scheduler = None
+@@ -110,7 +140,8 @@ class FlashNextEngine:
+ 
+             self.e = None
+             self.multi = MultiDecoder(w, slots=streams, capacity=self.max_len, depth=self.depth,
+-                                      confidence=self.confidence, keep=KEEP, kv_dtype=self.kv_dtype, share=share)
++                                      confidence=self.confidence, keep=KEEP, kv_dtype=self.kv_dtype, share=share,
++                                      vision=self.vision, vision_workspace=workspace)
+             self.scheduler = Scheduler(self.multi, max_streams=streams)
+         else:
+             self.e = Engine(w, capacity=self.max_len, max_rows=max(8, self.depth + 1), graphs=graphs,
+@@ -135,6 +166,9 @@ class FlashNextEngine:
+             from .decode import warm
+ 
+             warm(self.e)
++        if self.vision is not None:
++            self.vision.warm()
++            torch.cuda.empty_cache()
+         warm_s = time.perf_counter() - started
+         self.eos = tuple(w.cfg.eos)
+         self.model_dir = Path(model_dir)
+@@ -314,10 +348,15 @@ class FlashNextEngine:
+ 
+     def generate(self, prompt: list[int], max_tokens: int, sampling,
+                  on_tokens: Callable[[list[int]], bool | None], draft: bool = True, constraint=None,
+-                 stop_eos: bool = True, background: bool = False, probabilities=None) -> dict[str, Any]:
++                 stop_eos: bool = True, background: bool = False, probabilities=None, *,
++                 vision=None) -> dict[str, Any]:
+         """``draft=False``: one token a round, no MTP drafts; ``background``: last, yielding lanes to waiting ones."""
+ 
+         max_tokens = self._limit(prompt, max_tokens)
++        if vision is not None and self.vision is None:
++            raise ValueError("image inputs require starting this server with --vision")
++        if vision is not None and background:
++            raise ValueError("image requests cannot yield a background lane")
+         if probabilities is not None and not self.supports_logprobs:
+             raise ValueError("logprobs are supported on one GPU only")
+         if probabilities is not None and constraint is not None:
+@@ -325,7 +364,8 @@ class FlashNextEngine:
+         if self.scheduler is not None:
+             grammar = {} if constraint is None else {"constraint": constraint}
+             return self.scheduler.submit(list(prompt), max_tokens, sampling, draft, on_tokens, stop_eos=stop_eos,
+-                                         **grammar, **({"background": True} if background else {}), probabilities=probabilities)
++                                         **grammar, **({"background": True} if background else {}), probabilities=probabilities,
++                                         **({"vision": vision} if vision is not None else {}))
+         hit = self._resume(prompt) if draft else None
+         if self.tp == 2:                     # rank 0 decodes exactly what it hands rank 1
+             prompt, max_tokens, sampling, draft, _, _, stop_eos = self._share(
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/forward.py b/src/tensorfold/families/qwen4_exp/cuda/forward.py
+index 0af42e6..1703252 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/forward.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/forward.py
+@@ -208,20 +208,34 @@ def attn_block(layer: LayerW, w: Weights, segs: Sequence[Seg], b: Buffers, R: in
+     _mm(b.mixed[:R], a.proj, b.xs_mixed[:R], b.pa[:R], b)
+     scale = c.head_dim ** -0.5
+     step = None if b.prefill else getattr(b, "attn_step", None)     # a concurrent step: every stream at once
+-    if step is not None:
++    # The fused text kernels keep their original arithmetic. Image offsets use the
++    # per-stream path, which also rotates pooled sparse-attention keys correctly.
++    if step is not None and not any(getattr(st, "rope_delta", 0) for st, _, _ in segs):
+         o = attn_multi.layer(layer, w, b, step, mtp, scale)
+         glue.attn_gate(o[:R], b.pa[:R], b.gated[:R], b.xs_gated[:R], q_heads=c.heads, head_dim=c.head_dim)
+         return _out_proj(w, b, b.gated[:R], a.o, b.xs_gated[:R], R)
++    sections = getattr(c, "mrope_section", (11, 11, 10))
+     for st, a0, a1 in segs:
+         cache, ikc, pooled, pos, host_pos = _caches(layer, st, mtp)
+         bits = 0 if not cache.quantized else cache.bits
+         keys = context if context is not None else host_pos + a1 - a0
++        # rotary positions: an image prompt chunk's t/h/w rows, text after images at the stream's offset, or plain
++        packed = getattr(b, "rope_by_state", None)
++        if packed is not None:
++            rope = packed.get(id(st))
++            rope = rope[:a1 - a0] if rope is not None else None
++        else:
++            rope = getattr(b, "rope_rows", None)
++            rope = rope[a0:a1] if rope is not None else None
++        delta = st.rope_delta_dev if rope is None and getattr(st, "rope_delta", 0) else None
+         glue.attn_prep(b.pa[a0:a1], pos, a.q_scale, a.k_scale, a.iq_scale, w.inv_freq, b.q[a0:], cache.k, cache.v,
+                        b.iq[a0:], ikc, c.eps, q_heads=c.heads, kv_heads=c.kv_heads, head_dim=c.head_dim,
+-                       index_heads=c.index_heads, index_dim=c.index_dim, ks=cache.ks, vs=cache.vs, bits=bits)
++                       index_heads=c.index_heads, index_dim=c.index_dim, ks=cache.ks, vs=cache.vs, bits=bits,
++                       rope=rope, delta=delta, sections=sections)
+         if b.prefill:
+             if b.attn.qsa:
+-                attn_mod.qsa_pool(ikc, pooled, pos, a.ik_scale, w.inv_freq, c.eps, b.attn, a1 - a0)
++                attn_mod.qsa_pool(ikc, pooled, pos, a.ik_scale, w.inv_freq, c.eps, b.attn, a1 - a0, rope=rope,
++                                  delta=delta, sections=sections)
+             for r0 in range(a0, a1, ATT_ROWS):
+                 n = min(ATT_ROWS, a1 - r0)
+                 b.pos_blk.fill_(host_pos + r0 - a0)
+@@ -233,7 +247,7 @@ def attn_block(layer: LayerW, w: Weights, segs: Sequence[Seg], b: Buffers, R: in
+             continue
+         if b.attn.qsa:
+             attn_mod.qsa_select(b.iq[a0:a1], ikc, pooled, pos, a.ik_scale, w.inv_freq, c.eps, b.attn, a1 - a0,
+-                                context=keys)
++                                context=keys, rope=rope, delta=delta, sections=sections)
+         o = attn_mod.attention(b.q[a0:a1], cache.k, cache.v, pos, b.attn, a1 - a0, scale, context=keys,
+                                ks=cache.ks, vs=cache.vs, bits=bits)
+         if len(segs) > 1:                       # the scratch output is the next stream's too
+@@ -450,12 +464,15 @@ def stage(w: Weights, b: Buffers, windows: Sequence[tuple[State, Sequence[int]]]
+ 
+ 
+ def compute(w: Weights, segs: Sequence[Seg], b: Buffers, *, logits: bool = True, context: int | None = None,
+-            ends: Sequence[int] = (), cuts: Sequence[Cut] = ()):
++            ends: Sequence[int] = (), cuts: Sequence[Cut] = (), features=None):
+     """The forward's GPU work on staged rows (capturable); ``context`` bounds attention, ``ends`` get the head, ``cuts`` keep states."""
+ 
+     c = w.cfg
+     R = segs[-1][2]
+     _embed(w, b.ids[:R], c.streams, b.h[:R])
++    if features is not None:
++        target, source = features
++        b.h.index_copy_(0, target, source.to(b.h.dtype).repeat(1, c.streams))
+     pending = None
+     for layer in w.layers:
+         pending = layer_forward(layer, w, segs, b, R, pending, context=context, cuts=cuts)
+@@ -470,7 +487,7 @@ def converges(w: Weights) -> bool:
+ 
+ 
+ def compute_mixed(w: Weights, dsegs: Sequence[Seg], db: Buffers, psegs: Sequence[Seg], pb: Buffers, *,
+-                  ends: Sequence[int] = (), cuts: Sequence[Cut] = ()) -> tuple:
++                  ends: Sequence[int] = (), cuts: Sequence[Cut] = (), features=None) -> tuple:
+     """A decode window and a prompt pass in one forward, each on its own kernels and bits, experts read once."""
+ 
+     c = w.cfg
+@@ -479,6 +496,9 @@ def compute_mixed(w: Weights, dsegs: Sequence[Seg], db: Buffers, psegs: Sequence
+         raise ValueError(f"a pass of {Rp} rows and a window of {Rd} exceed the prompt buffers' {pb.rows}")
+     _embed(w, db.ids[:Rd], c.streams, db.h[:Rd])
+     _embed(w, pb.ids[:Rp], c.streams, pb.h[:Rp])
++    if features is not None:
++        target, source = features
++        pb.h.index_copy_(0, target, source.to(pb.h.dtype).repeat(1, c.streams))
+     dp = pp = None
+     for layer in w.layers:
+         _pre_moe(layer, w, dsegs, db, Rd, dp)
+@@ -491,12 +511,13 @@ def compute_mixed(w: Weights, dsegs: Sequence[Seg], db: Buffers, psegs: Sequence
+ 
+ @torch.no_grad()
+ def forward(w: Weights, st: State, b: Buffers, tokens: Sequence[int], *, logits: bool = True,
+-            cut: Cut | None = None):
++            cut: Cut | None = None, features=None):
+     """Rows for ``tokens`` at positions st.pos .. st.pos + R - 1: logits [R, V] bf16 (a view of b.logits) and the residual streams b.streams[:R]. The committed state is unchanged until ``commit``; ``cut`` (a prompt chunk): keeps each DeltaNet layer's state at its row."""
+ 
+     if cut is not None and not (b.prefill and cut.at == 0 and 0 < cut.row < len(tokens)):
+         raise ValueError(f"a prompt chunk of {len(tokens)} rows has no kept point at row {cut.row}")
+-    return compute(w, stage(w, b, [(st, tokens)]), b, logits=logits, cuts=() if cut is None else (cut,))
++    return compute(w, stage(w, b, [(st, tokens)]), b, logits=logits, cuts=() if cut is None else (cut,),
++                   **({"features": features} if features is not None else {}))
+ 
+ 
+ @triton.jit
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/glue.py b/src/tensorfold/families/qwen4_exp/cuda/glue.py
+index 64c5e77..3df8b9e 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/glue.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/glue.py
+@@ -271,20 +271,22 @@ def rmsnorm(x: torch.Tensor, w: torch.Tensor, eps: float, group: int | None = No
+ 
+ 
+ @triton.jit
+-def _attn_prep(P, POS0, QW, KW, IW, INV, Q, KC, VC, KS, VS, IQ, IKC, eps,
++def _attn_prep(P, POS0, QW, KW, IW, INV, Q, KC, VC, KS, VS, IQ, IKC, ROPE, DELTA, eps,
+                PW: tl.constexpr, NQ: tl.constexpr, NKV: tl.constexpr, HD: tl.constexpr, NI: tl.constexpr,
+-               IHD: tl.constexpr, HALF: tl.constexpr, BITS: tl.constexpr):
++               IHD: tl.constexpr, HALF: tl.constexpr, BITS: tl.constexpr, MODE: tl.constexpr = 0,
++               S1: tl.constexpr = 11, S2: tl.constexpr = 10):
+     """Normalize stacked q/k/indexer heads in fp32, round to bf16, apply rotate-half RoPE and round again; store keys, values and raw indexer keys at POS0 + r; BITS 8 or 4 quantize keys and values and rotate q alike (q . Hk = Hq . k)."""
+ 
+     r = tl.program_id(0)
+     _prep_row(P, tl.load(POS0) + r, r, tl.program_id(1), QW, KW, IW, INV, Q, KC, VC, KS, VS, IQ, IKC, eps, PW, NQ,
+-              NKV, HD, NI, IHD, HALF, BITS)
++              NKV, HD, NI, IHD, HALF, BITS, ROPE, DELTA, MODE, S1, S2)
+ 
+ 
+ @triton.jit
+ def _prep_row(P, pos, r, head, QW, KW, IW, INV, Q, KC, VC, KS, VS, IQ, IKC, eps, PW: tl.constexpr, NQ: tl.constexpr,
+               NKV: tl.constexpr, HD: tl.constexpr, NI: tl.constexpr, IHD: tl.constexpr, HALF: tl.constexpr,
+-              BITS: tl.constexpr):
++              BITS: tl.constexpr, ROPE=None, DELTA=None, MODE: tl.constexpr = 0,
++              S1: tl.constexpr = 11, S2: tl.constexpr = 10):
+     """``_attn_prep``'s head ``head`` of row r at position ``pos``, into the caches given."""
+ 
+     d = tl.arange(0, HD)
+@@ -318,7 +320,16 @@ def _prep_row(P, pos, r, head, QW, KW, IW, INV, Q, KC, VC, KS, VS, IQ, IKC, eps,
+             wp = tl.load(IW + partner, mask=live, other=0.0).to(tl.float32)
+         xpn = (xp * rinv * wp).to(tl.bfloat16).to(tl.float32)
+         i = tl.where(d < HALF, d, tl.where(d < 2 * HALF, d - HALF, 0))
+-        ang = pos.to(tl.float32) * tl.load(INV + i)
++        if MODE == 0:                                # text: the row's cache position
++            ang = pos.to(tl.float32) * tl.load(INV + i)
++        elif MODE == 1:                              # text after images: the position plus the stream's offset
++            ang = (pos + tl.load(DELTA)).to(tl.float32) * tl.load(INV + i)
++        else:                                        # an image prompt's rows: interleaved (t, h, w) positions
++            pt = tl.load(ROPE + r * 3)
++            ph = tl.load(ROPE + r * 3 + 1)
++            pv = tl.load(ROPE + r * 3 + 2)
++            axis = tl.where((i % 3 == 1) & (i < 3 * S1), ph, tl.where((i % 3 == 2) & (i < 3 * S2), pv, pt))
++            ang = axis.to(tl.float32) * tl.load(INV + i)
+         cos = tl.cos(ang)
+         sin = tl.sin(ang)
+         rot = tl.where(d < HALF, xn * cos - xpn * sin, tl.where(d < 2 * HALF, xpn * sin + xn * cos, xn))
+@@ -365,17 +376,22 @@ def _prep_row(P, pos, r, head, QW, KW, IW, INV, Q, KC, VC, KS, VS, IQ, IKC, eps,
+ 
+ def attn_prep(p: torch.Tensor, pos0: torch.Tensor, q_scale, k_scale, i_scale, inv_freq, q, kc, vc, iq, ikc,
+               eps: float, *, q_heads: int, kv_heads: int, head_dim: int, index_heads: int, index_dim: int,
+-              ks: torch.Tensor | None = None, vs: torch.Tensor | None = None, bits: int = 0) -> None:
+-    """Write the rows' queries (rotated when the cache is quantized), keys and values; ``bits`` 0 (bf16), 8 or 4 with scales ``ks``/``vs``."""
++              ks: torch.Tensor | None = None, vs: torch.Tensor | None = None, bits: int = 0,
++              rope: torch.Tensor | None = None, delta: torch.Tensor | None = None,
++              sections: tuple[int, int, int] = (11, 11, 10)) -> None:
++    """Write the rows' queries (rotated when the cache is quantized), keys and values; ``bits`` 0 (bf16), 8 or 4 with scales ``ks``/``vs``. Rotary positions: the cache position; plus ``delta`` [1] (text after images); or ``rope`` [rows, 3] (an image prompt's interleaved t/h/w positions, ``sections`` as the checkpoint's mrope_section)."""
+ 
+     rows, pw = p.shape
+     if bits and (ks is None or vs is None):
+         raise ValueError("a quantized KV cache needs its scale tensors")
+     if ks is None:
+         ks = vs = kc
++    mode = 2 if rope is not None else 1 if delta is not None else 0
+     _attn_prep[(rows, q_heads + kv_heads + index_heads + 1)](
+-        p, pos0, q_scale, k_scale, i_scale, inv_freq, q, kc, vc, ks, vs, iq, ikc, eps, PW=pw, NQ=q_heads, NKV=kv_heads,
+-        HD=head_dim, NI=index_heads, IHD=index_dim, HALF=inv_freq.numel(), BITS=bits, num_warps=2)
++        p, pos0, q_scale, k_scale, i_scale, inv_freq, q, kc, vc, ks, vs, iq, ikc,
++        rope if rope is not None else pos0, delta if delta is not None else pos0, eps, PW=pw, NQ=q_heads,
++        NKV=kv_heads, HD=head_dim, NI=index_heads, IHD=index_dim, HALF=inv_freq.numel(), BITS=bits, MODE=mode,
++        S1=sections[1], S2=sections[2], num_warps=2)
+ 
+ 
+ @triton.jit
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/multi.py b/src/tensorfold/families/qwen4_exp/cuda/multi.py
+index bdd3398..fbe0fa8 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/multi.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/multi.py
+@@ -16,7 +16,7 @@ from tensorfold.cuda.streams import Stream, accept
+ from tensorfold.engine.exact_sampling import MARGIN, choose_rows
+ from tensorfold.engine.grammar import GrammarError
+ 
+-from .decode import PREFILL_ROWS, WARM_TAIL, Engine, draft, entry_end, prefill_begin
++from .decode import PREFILL_ROWS, WARM_TAIL, Engine, draft, entry_end, image_piece, prefill_begin
+ from . import attn_multi, gdn_multi
+ from .forward import Cut, commit, compute, compute_mixed, converges, cut_snapshot, stage
+ from .mtp import mtp_compute, mtp_stage
+@@ -43,10 +43,14 @@ class MultiDecoder:
+ 
+     def __init__(self, w, *, slots: int, capacity: int, depth: int = DEPTH, confidence: float = CONFIDENCE,
+                  stop_eos: bool = True, keep: int = 8, kv_dtype: str = "bf16", prefill_rows: int = PREFILL_ROWS,
+-                 share: float = SHARE) -> None:
++                 share: float = SHARE, vision=None, vision_workspace: int = 0) -> None:
+         if w.comm is not None:
+             raise ValueError("concurrent Flash Next runs on one GPU for now")
+         self.w, self.depth, self.confidence, self.capacity = w, depth, confidence, capacity
++        self.vision = vision
++        if int(vision_workspace) < 0:
++            raise ValueError("vision workspace must be non-negative")
++        self.vision_workspace = int(vision_workspace) if vision is not None else 0
+         self.eos = tuple(w.cfg.eos) if stop_eos else ()
+         rows = slots * (depth + 1)
+         # a round's window and a prompt pass share each layer's expert launch: the pass's buffers hold both
+@@ -65,7 +69,9 @@ class MultiDecoder:
+         free = torch_live(torch, available_bytes) if torch.cuda.is_available() else None
+         # the mapped n-gram tables are not held back (they barely fit on a Spark); lookups page from disk instead
+         live = free
+-        self.memory_gate = MemoryGate(live() if live is not None else 1 << 62, reserve=2 * GIB, live=live)
++        # Keep the startup tower-workspace reserve intact as every lane's KV cache grows.
++        self.memory_gate = MemoryGate(live() if live is not None else 1 << 62,
++                                      reserve=2 * GIB + self.vision_workspace, live=live)
+         self.streams: dict[int, Stream] = {}
+         self.filling: list[Stream] = []                  # admitted, prompts still prefilling (oldest first)
+         self.fills: dict[int, list] = {}                 # stream id -> [its engine, drafts?, next row, kept state]
+@@ -81,7 +87,7 @@ class MultiDecoder:
+         self.kept = [k for k in self.kept if k[1] is not st]
+ 
+     def _grow(self, st: State, rows: int, *, alone: bool = False) -> bool:
+-        """Grow caches to hold ``rows`` while the gate has room, kept ends first; ``alone`` grows anyway."""
++        """Grow caches while the gate has room; a text-only server preserves its lone-stream override."""
+ 
+         if rows <= st.capacity or st.capacity >= st.limit:       # admission's count keeps a stream within its window
+             return True
+@@ -89,7 +95,7 @@ class MultiDecoder:
+         grow = st.cache_bytes(size) - st.cache_bytes()
+         while not self.memory_gate.fits(grow + st.layer_bytes(size)):     # a layer's old buffers stay until its copy
+             if not self._evict_kept(st):
+-                if alone:
++                if alone and getattr(self, "vision", None) is None:
+                     break
+                 return False
+         self.memory_gate.take(st.resize(size))
+@@ -126,9 +132,12 @@ class MultiDecoder:
+             rows = max(s.st.pos, s.st.mtp_len) + len(s.drafts) + self.depth + 2
+             s.waiting = rows > s.st.capacity if blocked else not self._grow(s.st, rows, alone=len(live) == 1)
+             blocked = blocked or s.waiting
+-        if live and live[0].waiting and len(live) > 1:        # even the oldest can't grow: the newest ends
++        if live and live[0].waiting and (len(live) > 1 or getattr(self, "vision", None) is not None):
++            # An unfillable lone vision lane must end too: it cannot override the tower reserve.
+             newest = live[-1]
+             newest.error = RuntimeError(
++                ("The server could not grow this request's cache while preserving its vision workspace reserve. "
++                 "Shorten the prompt or max_tokens, or retry after memory is available.") if len(live) == 1 else
+                 f"This server ran out of memory with {len(live)} streams decoding, so the newest (this request, after "
+                 f"{len(newest.out)} tokens) was stopped for the older ones to finish. Retry it, shorten the prompt or "
+                 "max_tokens, or start the server with a smaller --parallel.")
+@@ -202,21 +211,42 @@ class MultiDecoder:
+         s.count = max(1, min(s.count, room))
+         if any(x.waiting for x in self.streams.values()):
+             raise NoRoom("streams already wait for memory; a new request waits until one finishes")
++        image = s.vision is not None
++        if image and self.vision is None:
++            raise ValueError("image inputs require starting this server with --vision")
++        s.image = image
+         t0 = time.perf_counter()
+-        st, resume, s.cached = self._slot_for(list(s.prompt), s.draft)
++        st, resume, s.cached = self._slot_for(list(s.prompt), s.draft and not image)
+         if not self._grow(st, len(s.prompt) + self.depth + 2, alone=not self.streams and not self.filling):
+             if resume is None:
+                 self.free.append(st)
+             else:                                        # the kept prompt end stays kept
+                 self._remember(list(s.prompt[:s.cached]), st, resume["state"], resume["tail"])
+             raise NoRoom(f"a {len(s.prompt)}-token prompt waits for memory until a live stream finishes")
++        if image:
++            # A previously allocated slot may need no KV growth, yet the tower still needs its workspace.
++            # Reclaim idle text snapshots first; retain the image input when the scheduler must retry.
++            while not self.memory_gate.fits(0):
++                if not self._evict_kept(st):
++                    self._shrink(st)
++                    self.free.append(st)
++                    raise NoRoom("image encoding waits for memory to preserve the vision workspace reserve")
+         e = _slot(self.w, st, self.buf, self.mbuf, self.pbuf, self.capacity, self.prefill_rows)
+         mtp = s.draft and self.depth > 0 and self.mbuf is not None
++        encoded = None
+         try:
+-            begin = prefill_begin(e, s.prompt, mtp=mtp, resume=resume)
++            if image:
++                encoded = self.vision.encode(s.vision, s.prompt)
++            begin = prefill_begin(e, s.prompt, mtp=mtp, resume=resume,
++                                  **({"vision": encoded} if image else {}))
+         except Exception:
+             self.free.append(st)
+             raise
++        finally:
++            s.vision = None
++            if image:
++                torch.cuda.empty_cache()
++        s.encoded_vision = encoded
+         s.sid, s.st = self.next_id, st
+         self.next_id += 1
+         s.prefill_s = time.perf_counter() - t0
+@@ -258,6 +288,9 @@ class MultiDecoder:
+         for s in sorted(self.filling, key=lambda x: x.background):     # foreground prompts first, each oldest first
+             e, mtp, start, _ = self.fills[s.sid]
+             n = min(len(s.prompt) - start, room)
++            if getattr(s, "image", False) and start + n < len(s.prompt):
++                # A QSA block's first image position must be in the same prompt chunk.
++                n = n // s.st.ratio * s.st.ratio
+             ends = sum(1 for x, a, k in pieces if a + k == len(x.prompt))
+             if n == 0 or (start + n == len(s.prompt) and ends == ENDS):
+                 break
+@@ -273,13 +306,32 @@ class MultiDecoder:
+         try:
+             segs = stage(self.w, self.pbuf, [(s.st, s.prompt[a:a + n]) for s, a, n in pieces])
+             ends, cuts = self._end_rows(pieces, segs), self._cuts(pieces, segs)
+-            logits = compute(self.w, segs, self.pbuf, logits=bool(ends), ends=ends, cuts=cuts)
++            features = self._image_features(pieces, segs)
++            logits = compute(self.w, segs, self.pbuf, logits=bool(ends), ends=ends, cuts=cuts,
++                             **({"features": features} if features is not None else {}))
+             heads = logits[:len(ends)].clone() if ends else None
+             lasts = self._absorb(pieces, segs, cuts)
+         except Exception as exc:                         # noqa: BLE001  (these requests fail, the others go on)
+             return self._failed(pieces, exc)
++        finally:
++            self.pbuf.rope_by_state = None
+         return self._joined(pieces, heads, lasts, (time.perf_counter() - t0) / len(pieces))
+ 
++    def _image_features(self, pieces, segs):
++        """Image pieces' own rotary positions and packed feature rows; text pieces keep the release path."""
++        positions, targets, sources = {}, [], []
++        for (s, start, rows), (st, offset, _) in zip(pieces, segs):
++            encoded = getattr(s, "encoded_vision", None)
++            if encoded is None:
++                continue
++            rope, features = image_piece(encoded, start, rows, offset=offset)
++            positions[id(st)] = rope
++            if features is not None:
++                targets.append(features[0])
++                sources.append(features[1])
++        self.pbuf.rope_by_state = positions or None
++        return (torch.cat(targets), torch.cat(sources)) if targets else None
++
+     @staticmethod
+     def _end_rows(pieces, segs) -> list[int]:
+         """The pass rows that end a prompt (each gets the head)."""
+@@ -290,7 +342,7 @@ class MultiDecoder:
+     def _keep_at(s: Stream) -> int | None:
+         """Where a drafting stream's prompt state is kept: one token before its end, which a next turn extends."""
+ 
+-        return entry_end(s.prompt) if s.draft else None
++        return entry_end(s.prompt) if s.draft and not getattr(s, "image", False) else None
+ 
+     def _cuts(self, pieces, segs) -> list[Cut]:
+         """The kept points strictly inside the pass's pieces, where their DeltaNet chains split."""
+@@ -332,6 +384,7 @@ class MultiDecoder:
+             s.error, s.done = exc, True
+             self.filling.remove(s)
+             self.fills.pop(s.sid)
++            s.encoded_vision = None
+         return failed                                    # finish() frees their slots
+ 
+     def _joined(self, pieces, heads, lasts, spent: float) -> list[Stream]:
+@@ -347,6 +400,10 @@ class MultiDecoder:
+             self.filling.remove(s)
+             self.fills.pop(s.sid)
+             st, e.last_streams = s.st, last
++            encoded = getattr(s, "encoded_vision", None)
++            if encoded is not None:
++                st.set_rope_delta(encoded.rope_delta)
++                s.encoded_vision = None
+             logits = heads[head:head + 1]
+             if s.constraint is not None:                 # a reply's grammar: the first token too
+                 logits = s.constraint.mask(logits, None, self.w.meta.get("vocab_offset", 0))
+@@ -356,7 +413,8 @@ class MultiDecoder:
+             if s.constraint is not None:
+                 s.constraint.advance([first])
+             head += 1
+-            if s.draft:                # the state one token before the prompt's end, which a next turn extends
++            if s.draft and not getattr(s, "image", False):
++                # The kept state is text only; image placeholders cannot identify pixels.
+                 self._remember(list(s.prompt[:self._keep_at(s)]), st, *kept)
+             s.context = list(s.prompt)
+             s.drafts = draft(e, last, [first], st.pos + 1, min(self.depth, s.count - 1), s.sampling,
+@@ -418,13 +476,16 @@ class MultiDecoder:
+         try:
+             if pieces:                                 # the window and the pass: each layer's experts once for both
+                 pends = self._end_rows(pieces, psegs)
+-                logits, heads = compute_mixed(self.w, segs, self.buf, psegs, self.pbuf, ends=pends, cuts=cuts)
++                features = self._image_features(pieces, psegs)
++                logits, heads = compute_mixed(self.w, segs, self.buf, psegs, self.pbuf, ends=pends, cuts=cuts,
++                                              **({"features": features} if features is not None else {}))
+                 heads = heads[:len(pends)].clone() if pends else None
+             else:
+                 logits = compute(self.w, segs, self.buf)
++            lasts = self._absorb(pieces, psegs, cuts) if pieces else None
+         finally:
+             self.buf.gdn_tables = self.buf.attn_step = None
+-        lasts = self._absorb(pieces, psegs, cuts) if pieces else None
++            self.pbuf.rope_by_state = None
+         starts = [a0 for _, a0, _ in segs] + [segs[-1][2]]
+         for s, (_, a0, a1) in zip(live, segs):
+             if s.sid in grammars:
+@@ -546,6 +607,7 @@ class MultiDecoder:
+         """Drop finished streams; a slot whose prompt state is kept stays with it, the rest are free again."""
+ 
+         for s in done:
++            s.encoded_vision = None
+             self.streams.pop(s.sid, None)
+             if not any(k[1] is s.st for k in self.kept) and all(f is not s.st for f in self.free):
+                 self._shrink(s.st)
+@@ -555,6 +617,7 @@ class MultiDecoder:
+         live = [s for s in self.streams.values() if not s.done] + self.filling
+         self.filling, self.fills = [], {}
+         for s in live:
++            s.encoded_vision = None
+             self.streams.pop(s.sid, None)
+             self.held.pop(s.sid, None)
+             self._drop_kept(s.st)
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/state.py b/src/tensorfold/families/qwen4_exp/cuda/state.py
+index 1287a1e..15fdd60 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/state.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/state.py
+@@ -28,6 +28,8 @@ class Buffers:
+         dev = w.device
+         wide = c.streams * c.hidden
+         self.rows, self.prefill = rows, prefill
++        self.rope_rows = None          # one image chunk's [rows, 3] rotary positions
++        self.rope_by_state = None      # positions for image pieces in a packed prompt pass
+         head_rows = ENDS if prefill else rows
+         bf, f32 = torch.bfloat16, torch.float32
+         self.ids = torch.zeros((rows,), dtype=torch.int32, device=dev)
+@@ -145,6 +147,9 @@ class State:
+         self.version = 0                 # counts reallocations: a graph's pointer table refreshes on a change
+         self.pos = 0
+         self.pos_dev = torch.zeros((1,), dtype=torch.int32, device=dev)
++        # text after an image prompt rotates at its cache position plus this offset (0: no images, the plain path)
++        self.rope_delta = 0
++        self.rope_delta_dev = torch.zeros((1,), dtype=torch.int32, device=dev)
+         lin = [l for l in w.layers if l.linear]
+         att = [l for l in w.layers if not l.linear]
+         self.lin_index = {l.index: i for i, l in enumerate(lin)}
+@@ -232,9 +237,14 @@ class State:
+         self.ple_history = w.cfg.ngram(0).initial_history() if w.cfg.ple_layers else None
+         self.ple_last = None
+         self.set_pos(0)
++        self.set_rope_delta(0)
+         self.mtp_drafted = 0
+         self.set_mtp_len(0)
+ 
++    def set_rope_delta(self, delta: int) -> None:
++        self.rope_delta = int(delta)
++        self.rope_delta_dev.fill_(int(delta))
++
+     def clone(self) -> "State":
+         """An independent copy (tests and A/B checks)."""
+ 
+@@ -280,5 +290,6 @@ class State:
+         self.ple_history = None if snap["ple_history"] is None else snap["ple_history"].copy()
+         self.ple_last = None
+         self.set_pos(snap["pos"])
++        self.set_rope_delta(0)                       # kept prompts are text only
+         self.mtp_drafted = 0
+         self.set_mtp_len(snap["mtp_len"])
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+index be0c5ef..587670a 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+@@ -75,6 +75,7 @@ class Config:
+     bits: int
+     quant: str = "mlx"                 # "mlx" (affine 4-bit everywhere) or "modelopt" (NVFP4 routed experts)
+     nvfp4_group: int = 16              # the NVFP4 block size (the checkpoint's config_groups weights.group_size)
++    mrope_section: tuple[int, int, int] = (11, 11, 10)
+ 
+     @classmethod
+     def read(cls, model_dir: str | Path) -> "Config":
+@@ -113,6 +114,7 @@ class Config:
+             ple_eos=int(teos[0] if isinstance(teos, list) else teos) if teos is not None else 0,
+             eos=eos, group_size=int(quant.get("group_size", 32)), bits=int(quant.get("bits", 4)),
+             quant=method, nvfp4_group=group,
++            mrope_section=tuple(int(x) for x in rope.get("mrope_section", (11, 11, 10))),
+         )
+ 
+     @property
+diff --git a/src/tensorfold/serve_options.py b/src/tensorfold/serve_options.py
+index 658f828..340b10d 100644
+--- a/src/tensorfold/serve_options.py
++++ b/src/tensorfold/serve_options.py
+@@ -19,6 +19,8 @@ def check(args: argparse.Namespace, family: Any, backend: str, config_dir: Any =
+         from tensorfold.vision.config import validate_vision_config
+ 
+         validate_vision_config(read_config(config_dir) if config_dir else {}, family.model_type)
++        if family.model_type == "qwen4_exp" and backend != "cuda":
++            raise ValueError("--vision for Flash Next runs on the CUDA engine; the MLX path has no image tower yet")
+     share = getattr(args, "decode_share", None)
+     if share is not None and backend == "cuda" and not getattr(family.package, "CUDA_DECODE_SHARE", False):
+         raise ValueError("--decode-share sets the Mac server's share, and Flash Next's on CUDA; this CUDA engine runs "
+diff --git a/src/tensorfold/vision/config.py b/src/tensorfold/vision/config.py
+index 0b96136..e5cbc99 100644
+--- a/src/tensorfold/vision/config.py
++++ b/src/tensorfold/vision/config.py
+@@ -2,9 +2,13 @@
+ from __future__ import annotations
+ 
+ 
++FAMILIES = ('qwen3_5', 'qwen4_exp', 'glm5_next')
++
++
+ def validate_vision_config(config, family):
+-    if family not in {'qwen3_5', 'glm5_next'}:
+-        raise ValueError('--vision supports GLM-5.3-Flash and Qwen3.5/3.8 dense checkpoints with their vision tower')
++    if family not in FAMILIES:
++        raise ValueError('--vision supports GLM-5.3-Flash and Qwen3.5/3.8 dense and Flash Next checkpoints with their '
++                         'vision tower')
+     vision = config.get('vision_config')
+     text = config.get('text_config', config)
+     if not isinstance(vision, dict) or not vision:
+diff --git a/src/tensorfold/vision/exl3_convert.py b/src/tensorfold/vision/exl3_convert.py
+new file mode 100644
+index 0000000..263fe94
+--- /dev/null
++++ b/src/tensorfold/vision/exl3_convert.py
+@@ -0,0 +1,117 @@
++"""Convert an EXL3 Qwen vision sidecar once; serving loads the cached floating tower.
++
++Usage: python -m tensorfold.vision.exl3_convert vision_k6.safetensors vision-f16.safetensors
++Set TENSORFOLD_VISION_WEIGHTS to the output when starting a CUDA vision server.
++The source remains unchanged. The artifact records its hash, codec and conversion version.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++
++import numpy as np
++
++VERSION = "3"
++
++
++def convert_tensors(tensors, config=None):
++    from tensorfold.cuda.exl3 import format as fmt
++    from .qwen_checkpoint import vision_key
++
++    local = {}
++    for name, value in tensors.items():
++        key = vision_key(name)
++        if key is None:
++            raise ValueError(f"non-vision tensor in sidecar: {name}")
++        if key in local:
++            raise ValueError(f"duplicate vision tensor: {key}")
++        local[key] = value
++    groups = {name[:-8] for name in local if name.endswith(".trellis")}
++    consumed, result = set(), {}
++    for group in sorted(groups):
++        parts = {part: local[group + "." + part] for part in fmt.PARTS if group + "." + part in local}
++        if "suh" not in parts and "su" not in parts or "svh" not in parts and "sv" not in parts:
++            raise ValueError(f"missing EXL3 scales: {group}")
++        codebook = "mul1" if "mul1" in parts else "mcg" if "mcg" in parts else "3inst"
++        suh = parts["suh"] if "suh" in parts else fmt.unpack_signs(parts["su"])
++        svh = parts["svh"] if "svh" in parts else fmt.unpack_signs(parts["sv"])
++        result[group + ".weight"] = fmt.dequantize(parts["trellis"], suh, svh,
++                                                   fmt.bits_of(parts["trellis"].shape), codebook).T.astype(np.float16)
++        consumed.update(group + "." + part for part in parts if part != "bias")
++    for name, value in local.items():
++        if name in consumed:
++            continue
++        if name in result or np.asarray(value).dtype.kind != "f":
++            raise ValueError(f"unsupported or duplicate vision tensor: {name}")
++        result[name] = np.asarray(value).astype(np.float16)
++    blocks = {name.split(".attn.")[0] for name in result if ".attn.q_proj." in name}
++    for block in sorted(blocks):
++        for part in ("weight", "bias"):
++            names = [f"{block}.attn.{proj}_proj.{part}" for proj in ("q", "k", "v")]
++            if any(name not in result for name in names):
++                raise ValueError(f"incomplete split QKV: {block}")
++            combined = f"{block}.attn.qkv.{part}"
++            # Some packs retain the original fused float QKV beside quantized split projections.
++            # ExLlamaV3 loads the split projections; reconstruct those instead of the stale fused copy.
++            result[combined] = np.concatenate([result.pop(name) for name in names], axis=0)
++    if config is not None:
++        hidden, mid = config["hidden_size"], config["intermediate_size"]
++        padded = ((mid + 127) // 128) * 128
++        for layer in range(config["depth"]):
++            prefix = f"blocks.{layer}.mlp."
++            fc1, bias, fc2 = (result[prefix + part] for part in
++                             ("linear_fc1.weight", "linear_fc1.bias", "linear_fc2.weight"))
++            if (fc1.shape not in ((mid, hidden), (padded, hidden))
++                    or bias.shape != (fc1.shape[0],) or fc2.shape != (hidden, fc1.shape[0])):
++                raise ValueError(f"unexpected EXL3 vision MLP padding: {prefix}")
++            result[prefix + "linear_fc1.weight"] = fc1[:mid]
++            result[prefix + "linear_fc1.bias"] = bias[:mid]
++            result[prefix + "linear_fc2.weight"] = fc2[:, :mid]
++    return {"vision_tower." + name: np.ascontiguousarray(value) for name, value in result.items()}
++
++
++def convert(source: Path, output: Path):
++    from safetensors import safe_open
++    from safetensors.numpy import load_file, save_file
++
++    config_path = source.parent / "config.json"  # retain the snapshot directory before following HF blob symlinks
++    source, output = source.resolve(), output.resolve()
++    if source == output:
++        raise ValueError("output must differ from the immutable source")
++    digest = hashlib.sha256()
++    with source.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(8 * 1024**2), b""):
++            digest.update(chunk)
++    config_raw = config_path.read_bytes() if config_path.exists() else b""
++    config = json.loads(config_raw).get("vision_config") if config_raw else None
++    metadata = {"tensorfold_converter": VERSION, "source_sha256": digest.hexdigest(), "dtype": "F16",
++                "config_sha256": hashlib.sha256(config_raw).hexdigest()}
++    if output.exists():
++        with safe_open(str(output), framework="np") as existing:
++            if existing.metadata() != metadata:
++                raise ValueError("existing artifact belongs to a different source or converter; choose a new output")
++        return output
++    tensors = convert_tensors(load_file(str(source)), config)
++    output.parent.mkdir(parents=True, exist_ok=True)
++    temporary = output.with_name(output.name + ".tmp-" + str(os.getpid()))
++    try:
++        save_file(tensors, str(temporary), metadata=metadata)
++        os.replace(temporary, output)
++    finally:
++        temporary.unlink(missing_ok=True)
++    return output
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    print(convert(args.source, args.output))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/tensorfold/vision/qwen_checkpoint.py b/src/tensorfold/vision/qwen_checkpoint.py
+index 349a0ce..c0f001a 100644
+--- a/src/tensorfold/vision/qwen_checkpoint.py
++++ b/src/tensorfold/vision/qwen_checkpoint.py
+@@ -36,12 +36,14 @@ def _header(path: Path) -> tuple[dict, int]:
+     return header, 8 + length
+ 
+ 
+-def vision_tensors(model_dir: Path) -> dict[str, tuple[Path, dict, int]]:
++def vision_tensors(model_dir: Path, *, weights_path: Path | None = None) -> dict[str, tuple[Path, dict, int]]:
+     """Inspect headers only and return local tower names with their file, tensor metadata and data start."""
+     model_dir = Path(model_dir)
+     index = model_dir / "model.safetensors.index.json"
+     expected = None
+-    if index.exists():
++    if weights_path is not None:
++        files = [Path(weights_path)]
++    elif index.exists():
+         mapping = json.loads(index.read_text())["weight_map"]
+         expected = {name: shard for name, shard in mapping.items() if vision_key(name) is not None}
+         shards = sorted(set(expected.values()))
+diff --git a/src/tensorfold/vision/qwen_cuda.py b/src/tensorfold/vision/qwen_cuda.py
+index e5624f0..33f51fc 100644
+--- a/src/tensorfold/vision/qwen_cuda.py
++++ b/src/tensorfold/vision/qwen_cuda.py
+@@ -5,6 +5,7 @@ from __future__ import annotations
+ from dataclasses import dataclass
+ import json
+ import math
++import os
+ from pathlib import Path
+ from typing import Any
+ 
+@@ -35,7 +36,7 @@ class EncodedVision:
+ def vision_config(model_dir: str | Path) -> dict:
+     raw = json.loads((Path(model_dir) / "config.json").read_text())
+     config = raw.get("vision_config")
+-    if not isinstance(config, dict) or config.get("model_type") != "qwen3_5":
++    if not isinstance(config, dict) or config.get("model_type") not in ("qwen3_5", "qwen4_exp"):
+         raise ValueError("CUDA vision requires a Qwen3.5-compatible vision checkpoint")
+     if config.get("deepstack_visual_indexes"):
+         raise ValueError("CUDA Qwen vision does not support deepstack image features")
+@@ -60,13 +61,18 @@ def vision_config(model_dir: str | Path) -> dict:
+     return config
+ 
+ 
++def _vision_sources(model_dir):
++    from .qwen_checkpoint import vision_tensors
++
++    override = os.environ.get("TENSORFOLD_VISION_WEIGHTS")
++    return vision_tensors(Path(model_dir), weights_path=Path(override) if override else None)
++
++
+ def checkpoint_vision(model_dir: str | Path) -> tuple[dict, int]:
+     """Validate vision tensor headers before any model or accelerator allocation."""
+     from tensorfold.cuda.capacity import SIZES
+-    from .qwen_checkpoint import vision_tensors
+-
+     config = vision_config(model_dir)
+-    sources = vision_tensors(Path(model_dir))
++    sources = _vision_sources(model_dir)
+     tensors = {k: value[1] for k, value in sources.items()}
+     for name, (path, info, begin) in sources.items():
+         shape, offsets = info.get("shape", ()), info.get("data_offsets", ())
+@@ -102,25 +108,33 @@ def checkpoint_vision(model_dir: str | Path) -> tuple[dict, int]:
+ 
+ def weight_transform(base, enabled: bool, rank: int):
+     def transform(name, info):
+-        if enabled and rank == 0 and name.startswith("vision_tower."):
+-            from tensorfold.cuda.geometry import size
++        from .qwen_checkpoint import vision_key
++
++        if enabled and vision_key(name) is not None:
++            if rank != 0 or os.environ.get("TENSORFOLD_VISION_WEIGHTS"):
++                return 0, 0
++            from tensorfold.cuda.capacity import SIZES
+ 
+-            return size(info), 0
++            return math.prod(info["shape"]) * max(2, SIZES[info["dtype"]]), 0
+         return base(name, info)
+     return transform
+ 
+ 
+-def capacity_geometry(base, model_dir, enabled: bool, rank: int):
++def capacity_geometry(base, model_dir, enabled: bool, rank: int, workspace: int = WORKSPACE_BYTES):
+     def geometry(text):
+         from tensorfold.cuda.capacity import Geometry
+ 
+         result = base(text)
+         if not enabled:
+             return result
++        external_weights = 0
+         if rank == 0:
+-            checkpoint_vision(model_dir)
+-        reserve = WORKSPACE_BYTES if rank == 0 else 128 * 1024**2
+-        return Geometry(lambda slots: result.bytes_at(slots) + reserve, result.reserve, result.minimum_slots)
++            _, tower_bytes = checkpoint_vision(model_dir)
++            if os.environ.get("TENSORFOLD_VISION_WEIGHTS"):
++                external_weights = tower_bytes
++        reserve = workspace if rank == 0 else 128 * 1024**2
++        return Geometry(lambda slots: result.bytes_at(slots) + reserve + external_weights,
++                        result.reserve, result.minimum_slots)
+     return geometry
+ 
+ 
+@@ -141,24 +155,39 @@ class QwenCudaVision:
+         raw = json.loads((Path(model_dir) / "config.json").read_text())
+         self.image_token = int(raw["image_token_id"])
+         self.device = device
+-        config = Qwen3_5VisionConfig(**self.config)
++        config = Qwen3_5VisionConfig(**{k: v for k, v in self.config.items()
++                                      if k not in ("model_type", "deepstack_visual_indexes")})
+         config._attn_implementation = "sdpa"
+         with torch.device("meta"):
+             tower = Qwen3_5VisionModel(config)
+         tensors = {}
+-        for path in sorted(Path(model_dir).glob("*.safetensors")):
++        by_file = {}
++        for key, (path, info, begin) in _vision_sources(model_dir).items():
++            by_file.setdefault(path, {})[key] = info
++        for path, selected in by_file.items():
+             with safe_open(str(path), framework="pt", device="cpu") as source:
+-                for name in source.keys():
+-                    key = vision_key(name)
+-                    if key is not None and "position_ids" not in key:
+-                        value = source.get_tensor(name)
+-                        if key == "patch_embed.proj.weight" and value.shape[-1] == self.config["in_channels"]:
+-                            value = value.permute(0, 4, 1, 2, 3).contiguous()
+-                        tensors[key] = value.to(device=device, dtype=torch.bfloat16)
++                names = {vision_key(name): name for name in source.keys()}
++                for key in selected:
++                    value = source.get_tensor(names[key])
++                    if key == "patch_embed.proj.weight" and value.shape[-1] == self.config["in_channels"]:
++                        value = value.permute(0, 4, 1, 2, 3).contiguous()
++                    tensors[key] = value.to(device=device, dtype=torch.bfloat16)
+         tower.load_state_dict(tensors, strict=True, assign=True)
+         rotary_frequencies(tower.rotary_pos_emb, self.config, device)
+         self.tower = tower.eval()
+ 
++    def warm(self):
++        """Load tower kernels at startup using one small, merge-aligned image grid."""
++        import torch
++
++        merge = self.config["spatial_merge_size"]
++        patches = merge * merge
++        width = self.config["in_channels"] * self.config["temporal_patch_size"] * self.config["patch_size"]**2
++        with torch.inference_mode():
++            self.tower(torch.zeros((patches, width), dtype=torch.bfloat16, device=self.device),
++                       grid_thw=torch.tensor([[1, merge, merge]], device=self.device), return_dict=True)
++        torch.cuda.synchronize()
++
+     def prepare(self, *args, **kwargs):
+         return self.frontend.prepare(*args, **kwargs)
+ 
+diff --git a/src/tensorfold/vision/qwen_processing.py b/src/tensorfold/vision/qwen_processing.py
+index 1a91af9..417b552 100644
+--- a/src/tensorfold/vision/qwen_processing.py
++++ b/src/tensorfold/vision/qwen_processing.py
+@@ -127,8 +127,8 @@ class QwenImageProcessor:
+         if not path.is_dir():
+             raise ValueError("Image preprocessing requires a local checkpoint directory")
+         config = json.loads((path / "config.json").read_text())
+-        if config.get("model_type") != "qwen3_5" or not config.get("vision_config"):
+-            raise ValueError("Image preprocessing currently supports Qwen3.5/3.8 dense multimodal checkpoints only")
++        if config.get("model_type") not in ("qwen3_5", "qwen4_exp") or not config.get("vision_config"):
++            raise ValueError("Image preprocessing currently supports Qwen3.5/3.8 dense and Flash Next multimodal checkpoints")
+         AutoTokenizer, ImageProcessor = _processor_runtime()
+         tokenizer = AutoTokenizer.from_pretrained(str(path), local_files_only=True, trust_remote_code=False)
+         processor = ImageProcessor(**_processor_options(path, config["vision_config"]))
+diff --git a/tests/cuda/test_flashnext_vision.py b/tests/cuda/test_flashnext_vision.py
+new file mode 100644
+index 0000000..9acb669
+--- /dev/null
++++ b/tests/cuda/test_flashnext_vision.py
+@@ -0,0 +1,119 @@
++"""Flash Next image features, rotary offsets and image-cache isolation on tiny CUDA weights."""
++from types import SimpleNamespace
++
++import pytest
++import torch
++
++if not torch.cuda.is_available():
++    pytest.skip("CUDA only", allow_module_level=True)
++
++from test_flashnext_forward import _model
++from tensorfold.cuda.streams import Stream
++from tensorfold.families.qwen4_exp.cuda.decode import Engine, prefill, serial_decode
++from tensorfold.families.qwen4_exp.cuda.multi import MultiDecoder
++from tensorfold.vision.qwen_cuda import EncodedVision
++
++
++def _image(w, prompt, seed, start=1):
++    generator = torch.Generator(device="cuda").manual_seed(seed)
++    features = torch.randn((4, w.cfg.hidden), device="cuda", generator=generator, dtype=torch.bfloat16)
++    positions = torch.arange(len(prompt), device="cuda", dtype=torch.int32).repeat(3, 1)
++    positions[:, start + 4:] -= 2
++    positions[:, start:start + 4] = torch.tensor(
++        [[start] * 4, [start, start, start + 1, start + 1],
++         [start, start + 1, start, start + 1]], device="cuda")
++    return EncodedVision(tuple(range(start, start + 4)), features, positions, -2)
++
++
++def _drain(decoder):
++    # A bounded loop makes a broken join/prefill path fail instead of hanging a deployment check.
++    for _ in range(256):
++        if not decoder.live():
++            return
++        decoder.finish(decoder.round())
++    pytest.fail("Flash Next vision streams did not finish after 256 rounds")
++
++
++def _reference(w, prompt, count, image=None, kv_dtype="int8"):
++    engine = Engine(w, capacity=1024, max_rows=8, prefill_rows=16, kv_dtype=kv_dtype)
++    first = prefill(engine, prompt, None, mtp=False, vision=image)
++    return serial_decode(engine, first, count, None).tokens
++
++
++@pytest.mark.parametrize("kv_dtype", ["bf16", "int8"])
++def test_image_prefill_is_chunk_invariant_and_clears_positions(kv_dtype):
++    w = _model()
++    prompt = [5, 17, 17, 17, 17] + list(range(20, 55))
++    image = _image(w, prompt, 9)
++    engines = [Engine(w, capacity=1024, max_rows=8, prefill_rows=rows, kv_dtype=kv_dtype) for rows in (16, 64)]
++    tokens = []
++    for engine in engines:
++        first = prefill(engine, prompt, None, mtp=False, vision=image)
++        assert engine.pbuf.rope_rows is None and engine.st.rope_delta == -2
++        tokens.append(serial_decode(engine, first, 8, None).tokens)
++    assert tokens[0] == tokens[1]
++    with pytest.raises(ValueError, match="from its start"):
++        prefill(engines[0], prompt, None, resume={}, vision=image)
++
++
++@pytest.mark.parametrize("kv_dtype", ["bf16", "int8"])
++def test_image_streams_match_serial_and_never_reuse_placeholder_states(kv_dtype):
++    w = _model()
++    prompt = [5, 17, 17, 17, 17] + list(range(20, 55))
++    images = [_image(w, prompt, seed) for seed in (9, 12)]
++    tower = SimpleNamespace(encode=lambda prepared, ids: prepared)
++    dec = MultiDecoder(w, slots=2, capacity=1024, depth=3, confidence=0.3, kv_dtype=kv_dtype,
++                       prefill_rows=16, vision=tower)
++    for image in images:
++        engine = Engine(w, capacity=1024, max_rows=8, prefill_rows=16, kv_dtype=kv_dtype)
++        reference = serial_decode(engine, prefill(engine, prompt, None, mtp=False, vision=image), 8, None).tokens
++        stream = Stream(prompt, 8, vision=image, stop_eos=False)
++        dec.admit(stream)
++        assert not stream.out and stream in dec.filling
++        _drain(dec)
++        assert stream.error is None and stream.out == reference and stream.cached == 0 and not dec.kept
++    assert len(dec.free) == 2
++
++
++def test_mixed_text_and_two_image_prefills_match_serial_with_mtp(monkeypatch):
++    """Exercise 0.6's shared decode/prefill forward, including two image feature sets in one pass."""
++    from tensorfold.families.qwen4_exp.cuda import multi
++
++    w = _model()
++    text = [5, 11, 13, 15, 19]
++    late_image = list(range(20, 33))
++    late_image[9:13] = [17] * 4
++    early_image = [5, 17, 17, 17, 17] + list(range(20, 55))
++    images = [_image(w, late_image, 9, start=9), _image(w, early_image, 12)]
++    refs = [_reference(w, text, 64), _reference(w, text, 8),
++            _reference(w, late_image, 16, images[0]), _reference(w, early_image, 16, images[1])]
++    encodes = []
++    tower = SimpleNamespace(encode=lambda prepared, ids: encodes.append(tuple(ids)) or prepared)
++    dec = MultiDecoder(w, slots=4, capacity=1024, depth=3, confidence=0.3,
++                       kv_dtype="int8", prefill_rows=16, vision=tower)
++    assert dec.converged
++    first = Stream(text, 64, stop_eos=False)
++    dec.admit(first)
++    dec.finish(dec.round())
++    assert first.out and not first.done
++    following = [Stream(text, 8, stop_eos=False),
++                 Stream(late_image, 16, vision=images[0], stop_eos=False),
++                 Stream(early_image, 16, vision=images[1], stop_eos=False)]
++    for stream in following:
++        dec.admit(stream)
++    original, feature_rows = multi.compute_mixed, []
++
++    def compute_mixed(*args, **kwargs):
++        features = kwargs.get("features")
++        if features is not None:
++            feature_rows.append(len(features[0]))
++        return original(*args, **kwargs)
++
++    monkeypatch.setattr(multi, "compute_mixed", compute_mixed)
++    _drain(dec)
++    streams = [first, *following]
++    assert all(stream.error is None and stream.out == ref for stream, ref in zip(streams, refs))
++    assert len(encodes) == 2 and max(feature_rows, default=0) == 8
++    assert all(stream.cached == 0 for stream in following[1:])
++    assert all(17 not in ids for ids, *_ in dec.kept)
++    assert all(stream.st.rope_delta == 0 for stream in (first, following[0]))
+diff --git a/tests/test_flashnext_vision_memory.py b/tests/test_flashnext_vision_memory.py
+new file mode 100644
+index 0000000..4fcfb51
+--- /dev/null
++++ b/tests/test_flashnext_vision_memory.py
+@@ -0,0 +1,113 @@
++"""Flash Next keeps image encoder headroom when admitting or growing CUDA lanes."""
++
++import importlib
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import pytest
++
++from tensorfold.cuda.memory_gate import MemoryGate, NoRoom
++from tensorfold.cuda.streams import Stream
++from tests.test_cuda_geometry import allocations  # noqa: F401 (CPU-only Triton import fixture)
++
++pytestmark = pytest.mark.torch
++GIB = 1024**3
++
++
++class Slot:
++    """Cache byte counts without allocating tensors or touching an accelerator."""
++
++    def __init__(self, capacity):
++        self.capacity, self.limit = capacity, 65536
++        self.resizes = []
++
++    def cache_bytes(self, rows=None):
++        return (self.capacity if rows is None else rows) * (GIB // 8192)
++
++    def layer_bytes(self, rows):
++        return GIB // 4
++
++    def resize(self, rows):
++        old = self.cache_bytes()
++        self.capacity = rows
++        self.resizes.append(rows)
++        return self.cache_bytes() - old
++
++    def reset(self, weights):
++        pass
++
++
++def decoder(module, monkeypatch, *, capacity=256, busy=False, available=5 * GIB):
++    """A real memory gate, fake cache sizes, and an encoder whose invocation is observable."""
++
++    free = [available]
++    encode = Mock(return_value=object())
++    dec = module.MultiDecoder.__new__(module.MultiDecoder)
++    dec.w = SimpleNamespace(mtp=None)
++    dec.depth, dec.capacity, dec.prefill_rows = 3, 65536, 16
++    dec.vision, dec.vision_workspace = SimpleNamespace(encode=encode), 4 * GIB
++    dec.memory_gate = MemoryGate(100 * GIB, reserve=2 * GIB + dec.vision_workspace,
++                                 live=lambda: free[0])
++    slot = Slot(capacity)
++    dec.free, dec.kept, dec.keep = [slot], [], 8
++    dec.streams = {1: SimpleNamespace(waiting=False, st=Slot(256))} if busy else {}
++    dec.filling, dec.fills, dec.held, dec.next_id = [], {}, {}, 2
++    dec.buf, dec.mbuf, dec.pbuf = SimpleNamespace(rows=8), None, SimpleNamespace()
++    monkeypatch.setattr(module, "_slot", lambda *args: SimpleNamespace())
++    monkeypatch.setattr(module, "prefill_begin", lambda *args, **kwargs: 0)
++    monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
++    monkeypatch.setattr(module.torch.cuda, "empty_cache", lambda: None)
++    return dec, slot, free, encode
++
++
++@pytest.mark.parametrize("busy", [False, True], ids=["alone", "other-lane"])
++@pytest.mark.parametrize("capacity,prompt_rows", [(256, 300), (8192, 10)],
++                         ids=["kv-needs-growth", "kv-already-fits"])
++def test_image_waits_before_encoder_without_workspace(allocations, monkeypatch, busy, capacity, prompt_rows):  # noqa: F811
++    module = importlib.import_module("tensorfold.families.qwen4_exp.cuda.multi")
++    dec, slot, _, encode = decoder(module, monkeypatch, capacity=capacity, busy=busy)
++    prepared = object()
++    request = Stream([1] * prompt_rows, 8, vision=prepared)
++
++    with pytest.raises(NoRoom, match="wait|memory|workspace"):
++        dec.admit(request)
++
++    encode.assert_not_called()
++    assert request.vision is prepared                 # the scheduler can retry the same image
++    assert not dec.filling and not dec.fills
++    assert sum(state is slot for state in dec.free) == 1
++    assert all(rows <= capacity for rows in slot.resizes)
++
++
++def test_waiting_image_is_admitted_when_workspace_returns(allocations, monkeypatch):  # noqa: F811
++    module = importlib.import_module("tensorfold.families.qwen4_exp.cuda.multi")
++    dec, slot, free, encode = decoder(module, monkeypatch)
++    prepared = object()
++    request = Stream([1] * 300, 8, vision=prepared)
++    with pytest.raises(NoRoom):
++        dec.admit(request)
++    encode.assert_not_called()
++
++    free[0] = 8 * GIB
++    dec.admit(request)
++
++    encode.assert_called_once_with(prepared, request.prompt)
++    assert request.st is slot and request in dec.filling
++    assert request.vision is None
++    assert dec.free == [] and slot.capacity == 8192
++
++
++def test_lone_decoding_lane_ends_without_spending_vision_workspace(allocations, monkeypatch):  # noqa: F811
++    module = importlib.import_module("tensorfold.families.qwen4_exp.cuda.multi")
++    dec, slot, _, encode = decoder(module, monkeypatch)
++    slot.pos = slot.mtp_len = 254
++    request = Stream([1] * 10, 16, sid=3, st=slot, out=[2, 3])
++    dec.free, dec.streams = [], {request.sid: request}
++
++    ended = dec._make_room()
++
++    assert ended == [request] and request.done and not request.waiting
++    assert isinstance(request.error, RuntimeError) and "vision workspace" in str(request.error)
++    assert dec.memory_gate.ends == 1 and not dec.streams
++    assert dec.free == [slot] and slot.resizes == []
++    encode.assert_not_called()
+diff --git a/tests/test_flashnext_vision_options.py b/tests/test_flashnext_vision_options.py
+new file mode 100644
+index 0000000..3a8aedc
+--- /dev/null
++++ b/tests/test_flashnext_vision_options.py
+@@ -0,0 +1,57 @@
++"""Flash Next vision admission without downloading weights or importing accelerators."""
++
++import json
++from types import SimpleNamespace
++
++import pytest
++
++from tensorfold.serve_options import check
++from tensorfold.vision.config import validate_vision_config
++from tensorfold.vision.qwen_cuda import checkpoint_vision
++
++
++def _config():
++    return {"model_type": "qwen4_exp", "text_config": {"hidden_size": 8},
++            "vision_config": {"model_type": "qwen4_exp", "out_hidden_size": 8}}
++
++
++def _family():
++    return SimpleNamespace(model_type="qwen4_exp", title="Flash Next",
++                           package=SimpleNamespace(CUDA_KV_DTYPES=("bf16", "int8", "int4")))
++
++
++def test_flash_next_vision_is_admitted_on_cuda_and_refused_on_mlx(tmp_path):
++    config = _config()
++    (tmp_path / "config.json").write_text(json.dumps(config))
++    args = SimpleNamespace(vision=True, vision_urls=False, kv_dtype="int8", parallel="16")
++    assert validate_vision_config(config, "qwen4_exp") == config["vision_config"]
++    assert check(args, _family(), "cuda", tmp_path) is None
++    with pytest.raises(ValueError, match="Flash Next runs on the CUDA engine"):
++        check(args, _family(), "mlx", tmp_path)
++
++
++def test_flash_next_tower_requires_matching_language_width():
++    config = _config()
++    config["vision_config"]["out_hidden_size"] = 16
++    with pytest.raises(ValueError, match="output width"):
++        validate_vision_config(config, "qwen4_exp")
++
++
++@pytest.mark.parametrize("dtype", ["BF16", "F16", "F32"])
++def test_flash_next_original_floating_tower_headers_and_prefix_are_supported(tmp_path, dtype):
++    from test_vision_cuda import _checkpoint, _write_tensors
++
++    entries, _ = _checkpoint(tmp_path)
++    config = json.loads((tmp_path / "config.json").read_text())
++    config["model_type"] = config["vision_config"]["model_type"] = "qwen4_exp"
++    (tmp_path / "config.json").write_text(json.dumps(config))
++    offset, tower = 0, {}
++    for name, item in entries.items():
++        # Vontra stores the original float tower next to quantized language tensors.
++        size = (item["data_offsets"][1] - item["data_offsets"][0]) * (2 if dtype == "F32" else 1)
++        tower[name.replace("vision_tower.", "model.language_model.visual.")] = {
++            **item, "dtype": dtype, "data_offsets": [offset, offset + size]}
++        offset += size
++    _write_tensors(tmp_path, tower, offset)
++    vision, resident = checkpoint_vision(tmp_path)
++    assert vision["model_type"] == "qwen4_exp" and resident == offset
+diff --git a/tests/test_vision_exl3_convert.py b/tests/test_vision_exl3_convert.py
+new file mode 100644
+index 0000000..ff8ae5b
+--- /dev/null
++++ b/tests/test_vision_exl3_convert.py
+@@ -0,0 +1,112 @@
++"""Offline EXL3 vision conversion and externally supplied tower admission."""
++import json
++
++import numpy as np
++import pytest
++
++from tensorfold.vision.exl3_convert import convert, convert_tensors
++
++
++def _group(rng, prefix, bits=6):
++    return {prefix + ".trellis": rng.integers(-32768, 32767, (8, 8, 16 * bits), dtype=np.int16),
++            prefix + ".suh": np.full(128, 0.1, dtype=np.float16),
++            prefix + ".svh": np.full(128, 0.2, dtype=np.float16),
++            prefix + ".mul1": np.array([-2082672339], dtype=np.int32),
++            prefix + ".bias": np.arange(128, dtype=np.float16) * np.float16(0.01)}
++
++
++def test_converter_preserves_represented_linears_and_qkv_order():
++    from tensorfold.cuda.exl3 import format as fmt
++
++    rng = np.random.default_rng(31)
++    source = {}
++    for proj in ("q", "k", "v"):
++        source.update(_group(rng, f"model.visual.blocks.0.attn.{proj}_proj"))
++    source["model.visual.blocks.0.attn.qkv.weight"] = np.zeros((384, 128), dtype=np.float16)
++    source["model.visual.blocks.0.attn.qkv.bias"] = np.zeros(384, dtype=np.float16)
++    result = convert_tensors(source)
++    weight = result["vision_tower.blocks.0.attn.qkv.weight"]
++    bias = result["vision_tower.blocks.0.attn.qkv.bias"]
++    x = rng.normal(size=(2, 128)).astype(np.float16)
++    refs = []
++    for proj in ("q", "k", "v"):
++        p = f"model.visual.blocks.0.attn.{proj}_proj"
++        refs.append(fmt.forward(x, source[p + ".trellis"], source[p + ".suh"], source[p + ".svh"], 6,
++                                "mul1", source[p + ".bias"]))
++    np.testing.assert_allclose(x.astype(np.float64) @ weight.astype(np.float64).T + bias,
++                               np.concatenate(refs, axis=1), atol=0.001, rtol=0.002)
++    assert weight.shape == (384, 128) and weight.dtype == np.float16
++    assert not any("q_proj" in name or "trellis" in name for name in result)
++
++
++def test_converter_is_hashed_reusable_and_never_overwrites_source(tmp_path):
++    from safetensors.numpy import save_file
++    from safetensors import safe_open
++
++    source, output = tmp_path / "source.safetensors", tmp_path / "output.safetensors"
++    tensors = _group(np.random.default_rng(1), "model.visual.attn.proj")
++    save_file(tensors, str(source))
++    original = source.read_bytes()
++    assert convert(source, output) == output
++    timestamp = output.stat().st_mtime_ns
++    assert convert(source, output) == output and output.stat().st_mtime_ns == timestamp
++    with safe_open(str(output), framework="np") as artifact:
++        assert len(artifact.metadata()["source_sha256"]) == 64
++    with pytest.raises(ValueError, match="immutable"):
++        convert(source, source)
++    tensors["model.visual.attn.proj.suh"][0] *= 2
++    save_file(tensors, str(source))
++    with pytest.raises(ValueError, match="different source"):
++        convert(source, output)
++    assert original != source.read_bytes()
++
++
++def test_external_tower_is_read_without_language_payloads_and_counted_once(tmp_path, monkeypatch):
++    from test_vision_cuda import _checkpoint
++    from tensorfold.cuda.capacity import Geometry
++    from tensorfold.vision.qwen_cuda import checkpoint_vision, capacity_geometry, weight_transform
++
++    _, size = _checkpoint(tmp_path)
++    tower = tmp_path / "external.safetensors"
++    (tmp_path / "model.safetensors").rename(tower)
++    (tmp_path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {"language.weight": "absent"}}))
++    monkeypatch.setenv("TENSORFOLD_VISION_WEIGHTS", str(tower))
++    assert checkpoint_vision(tmp_path)[1] == size
++    base = lambda text: Geometry(lambda slots: 100 + slots, 2)
++    assert capacity_geometry(base, tmp_path, True, 0, 50)({}).bytes_at(10) == 160 + size
++    assert weight_transform(lambda n, i: (7, 0), True, 0)("model.visual.test", {}) == (0, 0)
++
++
++def test_converter_removes_only_configured_mlp_padding():
++    rng = np.random.default_rng(8)
++    source = {}
++    for part in ("linear_fc1", "linear_fc2"):
++        source.update(_group(rng, "model.visual.blocks.0.mlp." + part))
++    config = {"depth": 1, "hidden_size": 128, "intermediate_size": 112}
++    full = convert_tensors(source)
++    trimmed = convert_tensors(source, config)
++    prefix = "vision_tower.blocks.0.mlp."
++    np.testing.assert_array_equal(trimmed[prefix + "linear_fc1.weight"], full[prefix + "linear_fc1.weight"][:112])
++    np.testing.assert_array_equal(trimmed[prefix + "linear_fc1.bias"], full[prefix + "linear_fc1.bias"][:112])
++    np.testing.assert_array_equal(trimmed[prefix + "linear_fc2.weight"], full[prefix + "linear_fc2.weight"][:, :112])
++    with pytest.raises(ValueError, match="padding"):
++        convert_tensors(source, {**config, "intermediate_size": 129})
++
++
++def test_conversion_hashes_config_beside_snapshot_symlink(tmp_path):
++    from safetensors.numpy import save_file
++    from safetensors import safe_open
++    import hashlib
++
++    blob = tmp_path / "blob.safetensors"
++    save_file({"model.visual.pos_embed.weight": np.zeros((4, 8), np.float16)}, str(blob))
++    snapshot = tmp_path / "snapshot"
++    snapshot.mkdir()
++    source = snapshot / "vision.safetensors"
++    source.symlink_to(blob)
++    config = b'{"vision_config": {"depth": 0, "hidden_size": 8, "intermediate_size": 8}}'
++    (snapshot / "config.json").write_bytes(config)
++    output = tmp_path / "converted.safetensors"
++    convert(source, output)
++    with safe_open(str(output), framework="np") as artifact:
++        assert artifact.metadata()["config_sha256"] == hashlib.sha256(config).hexdigest()

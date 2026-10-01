@@ -1959,16 +1959,16 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .set('X-Forwarded-Proto', 'https')
     .expect(200)
     .expect(/Tokens today/)
-    .expect(/OpenCode configuration/)
+    .expect(/Agent configuration/)
     .expect(/BuildLite Configuration/)
     .expect(/set_harness_buildlite\.sh/)
     .expect(/set_harness_buildlite\.ps1/)
-    .expect(/set_agents_opencode\.sh/)
-    .expect(/set_agents_opencode\.ps1/);
+    .expect(/set_agents\.sh/)
+    .expect(/set_agents\.ps1/);
   assert.match(portal.text, /bash -c/);
   assert.match(portal.text, /powershell\.exe/);
   assert.match(portal.text, /https%3A%2F%2Fcourse\.example\.test%3A8443%2Fv1/);
-  assert.match(portal.text, /https:\/\/course\.example\.test:8443\/downloads\/set_agents_opencode\.sh/);
+  assert.match(portal.text, /https:\/\/course\.example\.test:8443\/downloads\/set_agents\.sh/);
   assert.match(portal.text, /class="command-scroll"/);
   assert.equal((portal.text.match(/data-copy-target=/g) || []).length, 4);
   assert.equal((portal.text.match(/data-copy-value=/g) || []).length, 4);
@@ -1998,6 +1998,16 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.doesNotMatch(portal.text, /config\.toml/);
   assert.doesNotMatch(portal.text, /env_key/);
   assert.doesNotMatch(portal.text, /chunkTimeout/);
+
+  for (const extension of ['sh', 'ps1']) {
+    const script = await request(app).get(`/downloads/set_agents.${extension}?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1`).expect(200);
+    assert.match(script.headers['content-type'], /text\/plain/);
+    assert.ok(script.headers['content-disposition'].includes(`set_agents.${extension}`));
+    assert.ok(script.text.includes('https://download.example.test/v1'));
+    assert.ok(script.text.includes('model-capabilities'));
+    assert.ok(script.text.includes('userModels'));
+    assert.doesNotMatch(script.text, /__IETI_DEFAULT_BASE_URL__/);
+  }
 
   const shellScript = await request(app).get('/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
   assert.match(shellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.sh"/);
