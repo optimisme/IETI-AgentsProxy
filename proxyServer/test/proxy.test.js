@@ -2069,7 +2069,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .expect(/set_agents_opencode\.sh/)
     .expect(/set_agents_opencode\.ps1/);
   assert.match(portal.text, /ieti_setup=\$\(curl -fsSL/);
-  const instructions = portal.text.match(/<h2>OpenCode configuration<\/h2>\s*(<ol>[\s\S]*?<\/ol>)/)?.[1];
+  const instructions = portal.text.match(/<h2>OpenCode configuration<\/h2>\s*(<ol class="opencode-instructions">[\s\S]*?<\/ol>)/)?.[1];
   assert.ok(instructions, 'OpenCode setup instructions must be a numbered list');
   assert.equal((instructions.match(/<li>/g) || []).length, 5);
   assert.match(instructions, /href="https:\/\/opencode\.ai\/download"/);

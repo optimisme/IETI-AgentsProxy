@@ -529,7 +529,7 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <p class="muted">${escapeHtml(user.email)}</p>
       <div class="panel" style="margin-top:16px">
         <h2>OpenCode configuration</h2>
-        <ol>
+        <ol class="opencode-instructions">
           <li>Install OpenCode Terminal or Desktop from <a href="https://opencode.ai/download" target="_blank" rel="noopener noreferrer">https://opencode.ai/download</a>.</li>
           <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
           <li>Run the next command for your operating system to install or update your global OpenCode configuration.</li>
@@ -584,7 +584,6 @@ router.get('/portal', requireStudentSession, (req, res) => {
             });
           })();
         </script>
-        <p class="muted">Manage your API keys from <a href="/portal/settings">Settings</a>.</p>
       </div>
       ${renderActiveModels(req, models)}
       <h2>Recent usage</h2>
