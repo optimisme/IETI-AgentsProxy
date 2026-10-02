@@ -233,11 +233,12 @@
     }
   }
 
-  function createCopyButton(getText, label, kind) {
+  function createCopyButton(getText, label, kind, caption = 'Copy') {
     const button = document.createElement('button');
+    let feedbackTimer;
     button.type = 'button';
     button.className = `chat-copy-button${kind === 'message' ? ' chat-message-copy' : ''}`;
-    button.textContent = 'Copy';
+    button.textContent = caption;
     button.title = label;
     button.setAttribute('aria-label', label);
     button.setAttribute('data-copy-kind', kind);
@@ -246,6 +247,7 @@
     button.addEventListener('click', async () => {
       const text = getText();
       if (button.copyInProgress || !text.trim()) return;
+      clearTimeout(feedbackTimer);
       button.copyInProgress = true;
       button.disabled = true;
       try {
@@ -260,6 +262,12 @@
       } finally {
         button.copyInProgress = false;
         button.disabled = !getText().trim();
+        feedbackTimer = setTimeout(() => {
+          button.textContent = caption;
+          button.title = label;
+          button.setAttribute('aria-label', label);
+          feedbackTimer = undefined;
+        }, 2000);
       }
     });
     return button;
@@ -320,10 +328,11 @@
       article.className = `chat-message chat-message-${message.role}`;
       const label = document.createElement('div');
       label.className = 'chat-message-label';
-      label.textContent = message.role === 'assistant' ? (message.model || 'Assistant') : message.role === 'user' ? 'You' : 'Chat';
+      label.textContent = message.role === 'assistant' ? `Answered by: ${message.model || 'Assistant'}` : message.role === 'user' ? 'You' : 'Chat';
       const heading = document.createElement('div');
-      heading.className = 'chat-message-heading';
-      message.copyButton = createCopyButton(() => contentText(message.content), message.role === 'user' ? 'Copy user message' : 'Copy model answer', 'message');
+      heading.className = `chat-message-heading${message.role === 'assistant' ? ' chat-message-heading-assistant' : ''}`;
+      const copyCaption = message.role === 'user' ? 'Copy request' : 'Copy response';
+      message.copyButton = createCopyButton(() => contentText(message.content), copyCaption, 'message', copyCaption);
       heading.append(label, message.copyButton);
       const body = document.createElement('div');
       body.className = 'chat-markdown';

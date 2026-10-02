@@ -105,6 +105,15 @@ function browser(overrides = {}) {
   const calls = [];
   const copied = [];
   const copyReplies = [];
+  let timerNow = 0;
+  let nextTimer = 1;
+  const timers = new Map();
+  const setTimeout = (callback, delay = 0) => {
+    const id = nextTimer++;
+    timers.set(id, { callback, due: timerNow + delay });
+    return id;
+  };
+  const clearTimeout = (id) => timers.delete(id);
   const navigator = {
     clipboard: {
       async writeText(text) {
@@ -116,8 +125,9 @@ function browser(overrides = {}) {
     }
   };
   const sandbox = {
-    window: { navigator },
+    window: { navigator, setTimeout, clearTimeout },
     navigator,
+    setTimeout, clearTimeout,
     document: { getElementById: (id) => elements.get(id), createElement: (tag) => new Element(tag) },
     AbortController, TextDecoder, Intl,
     fetch: async (url, options) => {
@@ -137,6 +147,19 @@ function browser(overrides = {}) {
   const get = (id) => elements.get(`chat-${id}`);
   return {
     calls, get, config, copied,
+    advanceTime(milliseconds) {
+      const until = timerNow + milliseconds;
+      for (;;) {
+        const next = [...timers].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+        if (!next) break;
+        const [id, timer] = next;
+        timers.delete(id);
+        timerNow = timer.due;
+        timer.callback();
+      }
+      timerNow = until;
+    },
+    pendingTimers: () => timers.size,
     queue: (reply) => replies.push(reply),
     queueCopy: (reply) => copyReplies.push(reply),
     async draft(text) { get('input').value = text; await get('input').dispatch('input'); },
@@ -366,12 +389,50 @@ test('full-message Copy preserves user and model Markdown without labels or priv
   await fixture.submit(question);
   const [userCopy, modelCopy] = messageCopyButtons(fixture);
   assert.equal(messageCopyButtons(fixture).length, 2);
-  assert.equal(userCopy.attributes.get('aria-label'), 'Copy user message');
-  assert.equal(modelCopy.attributes.get('aria-label'), 'Copy model answer');
+  assert.equal(userCopy.textContent, 'Copy request');
+  assert.equal(userCopy.attributes.get('aria-label'), 'Copy request');
+  assert.equal(modelCopy.textContent, 'Copy response');
+  assert.equal(modelCopy.attributes.get('aria-label'), 'Copy response');
+  const assistantHeading = descendants(fixture.get('messages'), (element) => (element.className || '').split(/\s+/).includes('chat-message-heading-assistant'))[0];
+  assert.ok(assistantHeading, 'the assistant heading has its own vertical layout');
+  assert.equal(assistantHeading.children[0].textContent, 'Answered by: text-model');
+  assert.equal(assistantHeading.children[1], modelCopy, 'the full answer control immediately follows its attribution');
   await userCopy.dispatch('click');
   await modelCopy.dispatch('click');
   assert.deepEqual(fixture.copied, [question, answer], 'clipboard contains the original Markdown, not rendered or labeled message text');
-  assert.doesNotMatch(fixture.copied[1], /Private chain|text-model|Copy model answer/);
+  assert.doesNotMatch(fixture.copied[1], /Private chain|text-model|Answered by:|Copy response/);
+});
+
+test('Copy feedback restores the original caption and accessibility labels after two seconds, including repeat clicks', async () => {
+  const fixture = browser();
+  fixture.queue(response('Answer'));
+  await fixture.submit('Question');
+  const buttons = messageCopyButtons(fixture);
+  for (const button of buttons) await button.dispatch('click');
+  fixture.advanceTime(1999);
+  for (const button of buttons) {
+    assert.equal(button.textContent, 'Copied');
+    assert.equal(button.attributes.get('aria-label'), 'Copied to clipboard.');
+  }
+  fixture.advanceTime(1);
+  for (const [index, caption] of ['Copy request', 'Copy response'].entries()) {
+    assert.equal(buttons[index].textContent, caption);
+    assert.equal(buttons[index].title, caption);
+    assert.equal(buttons[index].attributes.get('aria-label'), caption);
+  }
+  assert.equal(fixture.pendingTimers(), 0, 'finished feedback timers release their message references');
+
+  const answerCopy = buttons[1];
+  await answerCopy.dispatch('click');
+  fixture.advanceTime(1500);
+  await answerCopy.dispatch('click');
+  fixture.advanceTime(500);
+  assert.equal(answerCopy.textContent, 'Copied', 'the first copy cannot reset feedback for a later copy');
+  fixture.advanceTime(1499);
+  assert.equal(answerCopy.textContent, 'Copied');
+  fixture.advanceTime(1);
+  assert.equal(answerCopy.textContent, 'Copy response');
+  assert.equal(fixture.pendingTimers(), 0);
 });
 
 test('Copy keeps image-message text but never includes uploaded image data', async () => {
@@ -409,6 +470,10 @@ test('Copy confirms clipboard success and allows retry after denied access witho
   assert.equal(fixture.get('status').textContent, originalStatus);
   assert.equal(indicator.attributes.get('data-state'), 'ready', 'clipboard failure does not mark the model unavailable');
   assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
+  fixture.advanceTime(2000);
+  assert.equal(button.textContent, 'Copy response', 'failure feedback also expires without requiring a retry');
+  assert.equal(button.title, 'Copy response');
+  assert.equal(button.attributes.get('aria-label'), 'Copy response');
   await button.dispatch('click');
   assert.equal(button.textContent, 'Copied');
   assert.equal(button.disabled, false);
@@ -458,20 +523,28 @@ test('compacting and Reset discard old message Copy controls with the old transc
   await fixture.submit(question);
   const oldButtons = messageCopyButtons(fixture);
   assert.equal(oldButtons.length, 2);
+  await oldButtons[1].dispatch('click');
+  fixture.advanceTime(1999);
   fixture.queue(response('Retained goal: continue this project.'));
   await fixture.click('compact');
   assert.equal(messageCopyButtons(fixture).length, 0, 'the summary replaces the old visible message controls');
   assert.equal(summaryCards(fixture).length, 1);
+  const compactedText = fixture.get('messages').textContent;
+  fixture.advanceTime(1);
+  assert.equal(fixture.get('messages').textContent, compactedText, 'expired feedback on detached controls cannot redraw compacted messages');
+  assert.equal(fixture.pendingTimers(), 0);
   fixture.queue(response('Latest answer'));
   await fixture.submit('Continue');
   const latestButtons = messageCopyButtons(fixture);
   assert.equal(latestButtons.length, 2);
   assert.ok(latestButtons.every((button) => !oldButtons.includes(button)));
   await latestButtons[1].dispatch('click');
-  assert.deepEqual(fixture.copied, ['Latest answer']);
+  assert.deepEqual(fixture.copied, [answer, 'Latest answer']);
   await fixture.click('reset');
+  fixture.advanceTime(2000);
   assert.equal(messageCopyButtons(fixture).length, 0);
   assert.match(fixture.get('messages').textContent, /Start a conversation/);
+  assert.equal(fixture.pendingTimers(), 0, 'Reset does not leave long-lived feedback timers');
 });
 
 test('crossing 65% automatically summarizes existing context before sending the pending user message', async () => {
