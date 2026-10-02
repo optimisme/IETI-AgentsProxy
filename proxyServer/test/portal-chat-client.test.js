@@ -41,8 +41,15 @@ class Element {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(listener);
   }
-  dispatch(type) {
-    return Promise.all((this.listeners.get(type) || []).map((listener) => listener({ preventDefault() {} })));
+  dispatch(type, options = {}) {
+    const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...options };
+    this.lastEvent = event;
+    return Promise.all((this.listeners.get(type) || []).map((listener) => listener(event)));
+  }
+  requestSubmit() {
+    this.requestSubmitCount = (this.requestSubmitCount || 0) + 1;
+    this.lastSubmission = this.dispatch('submit');
+    return this.lastSubmission;
   }
 }
 
@@ -80,7 +87,7 @@ function response(content, { status = 200, reasoning = '' } = {}) {
 }
 
 function browser(overrides = {}) {
-  const ids = ['portal-chat-config', 'chat-model', 'chat-reset', 'chat-compact', 'chat-messages', 'chat-form', 'chat-input', 'chat-images', 'chat-attachments', 'chat-send', 'chat-stop', 'chat-status', 'chat-budget', 'chat-image-upload'];
+  const ids = ['portal-chat-config', 'chat-model', 'chat-reset', 'chat-compact', 'chat-messages', 'chat-form', 'chat-input', 'chat-images', 'chat-attachments', 'chat-send', 'chat-stop', 'chat-status', 'chat-budget', 'chat-image-upload', 'chat-state'];
   const elements = new Map(ids.map((id) => [id, new Element(id === 'chat-model' ? 'select' : 'div')]));
   const config = {
     models: [
@@ -93,7 +100,7 @@ function browser(overrides = {}) {
     ...overrides
   };
   elements.get('portal-chat-config').textContent = JSON.stringify(config);
-  elements.get('chat-model').value = config.models[0].id;
+  elements.get('chat-model').value = config.models[0]?.id || '';
   const replies = [];
   const calls = [];
   const sandbox = {
@@ -133,6 +140,110 @@ async function waitForCalls(fixture, count) {
   for (let attempt = 0; attempt < 20 && fixture.calls.length < count; attempt += 1) await Promise.resolve();
   assert.equal(fixture.calls.length, count);
 }
+
+function descendants(element, predicate) {
+  return element.children.flatMap((child) => [
+    ...(predicate(child) ? [child] : []),
+    ...descendants(child, predicate)
+  ]);
+}
+
+function imageCount(fixture) {
+  return descendants(fixture.get('messages'), (element) => element.tagName === 'img').length;
+}
+
+function summaryCards(fixture) {
+  return descendants(fixture.get('messages'), (element) => (element.className || '').split(/\s+/).includes('chat-summary'));
+}
+
+test('Enter sends through the form once while a busy or empty composer does not submit', async () => {
+  const fixture = browser();
+  await fixture.get('input').dispatch('keydown', { key: 'Enter' });
+  assert.equal(fixture.get('form').requestSubmitCount || 0, 0, 'an empty composer cannot submit');
+  const pending = deferred();
+  fixture.queue(pending.promise);
+  await fixture.draft('Send this with Enter');
+  await fixture.get('input').dispatch('keydown', { key: 'Enter' });
+  assert.equal(fixture.get('input').lastEvent.defaultPrevented, true, 'plain Enter does not insert a newline');
+  await waitForCalls(fixture, 1);
+  assert.equal(fixture.get('form').requestSubmitCount, 1);
+  assert.deepEqual(fixture.calls[0].body.messages, [{ role: 'user', content: 'Send this with Enter' }]);
+  await fixture.get('input').dispatch('keydown', { key: 'Enter' });
+  assert.equal(fixture.get('form').requestSubmitCount, 1, 'Enter cannot double-submit a running generation');
+  assert.equal(fixture.calls.length, 1);
+  pending.resolve(response('Answer to the Enter question.'));
+  await fixture.get('form').lastSubmission;
+  assert.match(fixture.get('messages').textContent, /Answer to the Enter question/);
+});
+
+test('Shift+Enter and IME composition keep native text entry without sending a message', async () => {
+  const fixture = browser();
+  await fixture.draft('Draft with a second line');
+  for (const event of [
+    { key: 'Enter', shiftKey: true },
+    { key: 'Enter', isComposing: true },
+    { key: 'Enter', keyCode: 229 },
+    { key: 'Escape' }
+  ]) {
+    await fixture.get('input').dispatch('keydown', event);
+    assert.equal(fixture.get('input').lastEvent.defaultPrevented, false, 'the browser retains its native editing behavior');
+    assert.equal(fixture.get('input').value, 'Draft with a second line');
+  }
+  assert.equal(fixture.get('form').requestSubmitCount || 0, 0);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('the composer indicator is green when ready, red while generating, and exposes provider errors', async () => {
+  const fixture = browser();
+  const indicator = fixture.get('state');
+  assert.equal(indicator.attributes.get('data-state'), 'ready');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
+  assert.match(indicator.title, /Ready/);
+  assert.equal(indicator.attributes.get('aria-label'), indicator.title);
+  assert.equal(fixture.get('status').classes.has('visually-hidden'), true, 'ready text does not occupy composer space');
+
+  const pending = deferred();
+  fixture.queue(pending.promise);
+  const sending = fixture.submit('Question while watching status');
+  await waitForCalls(fixture, 1);
+  assert.equal(indicator.attributes.get('data-state'), 'busy');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), true);
+  assert.match(indicator.title, /Generating response/);
+  assert.equal(indicator.attributes.get('aria-label'), indicator.title);
+  assert.equal(fixture.get('status').classes.has('visually-hidden'), true);
+  pending.resolve(response('Finished answer.'));
+  await sending;
+  assert.equal(indicator.attributes.get('data-state'), 'ready');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
+  assert.match(indicator.title, /Ready/);
+
+  fixture.queue(response('The provider is unavailable.', { status: 503 }));
+  await fixture.submit('Question that fails');
+  assert.equal(indicator.attributes.get('data-state'), 'error');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), true);
+  assert.match(indicator.title, /The provider is unavailable/);
+  assert.equal(indicator.attributes.get('aria-label'), indicator.title);
+  assert.equal(fixture.get('status').classes.has('visually-hidden'), false, 'actionable errors remain visible');
+  assert.equal(fixture.get('status').classes.has('chat-status-error'), true);
+  await fixture.click('reset');
+  assert.equal(indicator.attributes.get('data-state'), 'ready');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
+  assert.equal(fixture.get('status').classes.has('visually-hidden'), true);
+});
+
+test('a composer without active models shows a red unavailable indicator and cannot send with Enter', async () => {
+  const fixture = browser({ models: [] });
+  const indicator = fixture.get('state');
+  assert.equal(indicator.attributes.get('data-state'), 'unavailable');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), true);
+  assert.match(indicator.title, /No active models/);
+  assert.equal(indicator.attributes.get('aria-label'), indicator.title);
+  await fixture.draft('No model can handle this');
+  await fixture.get('input').dispatch('keydown', { key: 'Enter' });
+  assert.equal(fixture.get('send').disabled, true);
+  assert.equal(fixture.get('form').requestSubmitCount || 0, 0);
+  assert.equal(fixture.calls.length, 0);
+});
 
 test('Reset prevents a late response from restoring the conversation or finishing a new generation', async () => {
   const fixture = browser();
@@ -189,16 +300,33 @@ test('Compact forces a summary below 65% and can summarize an already compacted 
   assert.equal(fixture.calls[1].body.messages.length, 2);
   assert.equal(fixture.calls[1].body.summary, '');
   assert.equal(fixture.get('compact').disabled, false, 'the summary remains a conversation even when no recent messages are retained');
+  assert.equal(fixture.get('messages').children.length, 1, 'one summary replaces the old visible exchange');
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.match(summaryCards(fixture)[0].textContent, /Conversation summary/);
+  assert.match(fixture.get('messages').textContent, /Retained project goal: produce a bullet list\./);
+  assert.doesNotMatch(fixture.get('messages').textContent, /Keep these project goals|Detailed response/);
   fixture.queue(response('Bullet list.'));
   await fixture.click('compact');
   assert.equal(fixture.calls[2].body.compact, true);
   assert.deepEqual(fixture.calls[2].body.messages, []);
   assert.equal(fixture.calls[2].body.summary, 'Retained project goal: produce a bullet list.');
+  assert.equal(fixture.get('messages').children.length, 1, 'repeated compaction replaces the existing summary');
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.match(fixture.get('messages').textContent, /Bullet list\./);
+  assert.doesNotMatch(fixture.get('messages').textContent, /Retained project goal|Detailed response/);
+  const summaryNode = summaryCards(fixture)[0];
   fixture.queue(response('Continuation'));
   await fixture.submit('Continue');
   assert.equal(fixture.calls[3].body.summary, 'Bullet list.');
   assert.deepEqual(fixture.calls[3].body.messages, [{ role: 'user', content: 'Continue' }]);
-  assert.match(fixture.get('messages').textContent, /Detailed response/, 'compaction preserves the visible transcript');
+  assert.equal(fixture.get('messages').children.length, 3, 'the summary and new exchange stay visible');
+  assert.equal(summaryCards(fixture)[0], summaryNode, 'normal sends append new messages without redrawing the existing summary');
+  assert.doesNotMatch(fixture.get('messages').textContent, /Detailed response/);
+  await fixture.click('reset');
+  assert.doesNotMatch(fixture.get('messages').textContent, /Bullet list|Continuation/);
+  assert.match(fixture.get('messages').textContent, /Start a conversation/);
+  assert.equal(summaryCards(fixture).length, 0);
+  assert.equal(fixture.get('compact').disabled, true);
 });
 
 function smallBrowser() {
@@ -227,12 +355,48 @@ test('crossing 65% automatically summarizes existing context before sending the 
   assert.deepEqual(fixture.calls[2].body.messages, [{ role: 'user', content: pending.trim() }]);
   assert.equal(fixture.calls[2].headers['X-CSRF-Token'], 'fixture-csrf-token');
   assert.equal(fixture.calls[2].credentials, 'same-origin');
+  assert.equal(fixture.get('messages').children.length, 3, 'the summary replaces the old exchange before appending the new one');
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.match(fixture.get('messages').textContent, /Retained goal\./);
+  assert.match(fixture.get('messages').textContent, /Pending message/);
+  assert.match(fixture.get('messages').textContent, /Next answer/);
+  assert.doesNotMatch(fixture.get('messages').textContent, /uuuu|aaaa/);
+});
+
+test('automatic compaction replaces older exchanges while keeping the two most recent exchanges visible', async () => {
+  const fixture = browser();
+  const oldestQuestion = 'Old project instructions '.repeat(2500);
+  const oldestAnswer = 'Old answer '.repeat(400);
+  const recent = ['Recent question one '.repeat(20), 'Recent answer one '.repeat(20), 'Recent question two '.repeat(20), 'Recent answer two '.repeat(20)];
+  fixture.queue(response(oldestAnswer));
+  await fixture.submit(oldestQuestion);
+  fixture.queue(response(recent[1]));
+  await fixture.submit(recent[0]);
+  fixture.queue(response(recent[3]));
+  await fixture.submit(recent[2]);
+  fixture.queue(response('Summary of the oldest project instructions.'));
+  fixture.queue(response('Latest answer'));
+  const pending = 'Latest question '.repeat(400);
+  await fixture.submit(pending);
+  assert.equal(fixture.calls.length, 5);
+  assert.equal(fixture.calls[3].body.compact, true);
+  assert.deepEqual(fixture.calls[3].body.messages.map((message) => message.content), [oldestQuestion.trim(), oldestAnswer]);
+  assert.deepEqual(fixture.calls[4].body.messages.map((message) => message.content), [...recent.map((message, index) => index % 2 === 0 ? message.trim() : message), pending.trim()]);
+  assert.equal(fixture.get('messages').children.length, 7, 'one summary replaces the old exchange, with two retained and one new exchange');
+  assert.equal(summaryCards(fixture).length, 1);
+  const visible = fixture.get('messages').textContent;
+  assert.match(visible, /Summary of the oldest project instructions/);
+  assert.doesNotMatch(visible, /Old project instructions|Old answer/);
+  for (const message of recent) assert.ok(visible.includes(message.trim()));
+  assert.match(visible, /Latest question|Latest answer/);
 });
 
 test('failed automatic compaction preserves the original context and pending draft for retry', async () => {
   const fixture = smallBrowser();
   fixture.queue(response('a'.repeat(1200)));
   await fixture.submit('u'.repeat(2000));
+  const before = fixture.get('messages').textContent;
+  const beforeNodes = [...fixture.get('messages').children];
   const pending = 'Pending message '.repeat(6);
   fixture.queue(response('Summary provider unavailable.', { status: 503 }));
   await fixture.submit(pending);
@@ -240,6 +404,9 @@ test('failed automatic compaction preserves the original context and pending dra
   assert.equal(fixture.get('input').value, pending);
   assert.match(fixture.get('status').textContent, /Summary provider unavailable/);
   assert.doesNotMatch(fixture.get('messages').textContent, /Pending message/);
+  assert.equal(fixture.get('messages').textContent, before, 'a failed summary leaves the visible old exchange unchanged');
+  assert.deepEqual(fixture.get('messages').children, beforeNodes, 'a failed summary does not rebuild or replace the old DOM');
+  assert.equal(summaryCards(fixture).length, 0);
   fixture.queue(response('Retained goal.'));
   fixture.queue(response('Retry answer'));
   await fixture.submit();
@@ -260,19 +427,26 @@ test('an oversized historical pair is compacted through a fitting prefix without
   assert.deepEqual(fixture.calls[1].body.messages, [{ role: 'user', content: original }], 'only the fitting oldest prefix is sent for compaction');
   assert.equal(fixture.calls[2].body.summary, 'Retained original goal.');
   assert.deepEqual(fixture.calls[2].body.messages, [{ role: 'assistant', content: answer }, { role: 'user', content: 'Continue' }], 'the entire unsummarized answer remains in context');
-  assert.match(fixture.get('messages').textContent, /uuuu/);
+  assert.doesNotMatch(fixture.get('messages').textContent, /uuuu/, 'only the summarized prefix is removed from the visible transcript');
+  assert.match(fixture.get('messages').textContent, /Retained original goal/);
   assert.match(fixture.get('messages').textContent, /aaaa/);
+  assert.equal(fixture.get('messages').children.length, 4, 'the summary, unsummarized answer and latest exchange remain visible');
 });
 
 test('a non-reducing summary keeps the conversation and draft instead of replacing context', async () => {
   const fixture = browser();
   fixture.queue(response('Useful answer '.repeat(30)));
   await fixture.submit('Original user goal '.repeat(20));
+  const before = fixture.get('messages').textContent;
+  const beforeNodes = [...fixture.get('messages').children];
   await fixture.draft('Unsent draft');
   fixture.queue(response('An unnecessarily long summary '.repeat(200)));
   await fixture.click('compact');
   assert.equal(fixture.get('input').value, 'Unsent draft');
   assert.match(fixture.get('status').textContent, /did not free enough/);
+  assert.equal(fixture.get('messages').textContent, before);
+  assert.deepEqual(fixture.get('messages').children, beforeNodes, 'a non-reducing summary leaves the visible DOM unchanged');
+  assert.equal(summaryCards(fixture).length, 0);
   fixture.queue(response('Next response'));
   await fixture.submit();
   assert.equal(fixture.calls[2].body.summary, '');
@@ -324,12 +498,35 @@ test('changing to a model without vision clears pending uploads, while invalid i
   assert.equal(fixture.calls[0].body.messages[0].content, 'Text only');
 });
 
+test('manual compaction removes image nodes and replaces their exchange with a text summary', async () => {
+  const fixture = browser();
+  await fixture.select('vision-model');
+  await fixture.upload(new ImageFile(PNG));
+  fixture.queue(response('The picture shows the original design.'));
+  await fixture.submit('Describe this image.');
+  assert.equal(imageCount(fixture), 1);
+  fixture.queue(response('Retained visual detail: the original design is blue.'));
+  await fixture.click('compact');
+  assert.equal(fixture.calls[1].body.compact, true);
+  assert.equal(imageCount(fixture), 0, 'compacted images are no longer retained as visible DOM nodes');
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.equal(fixture.get('messages').children.length, 1);
+  assert.match(fixture.get('messages').textContent, /Retained visual detail/);
+  assert.doesNotMatch(fixture.get('messages').textContent, /Describe this image|The picture shows/);
+  await fixture.select('text-model');
+  fixture.queue(response('Text-only continuation.'));
+  await fixture.submit('Continue using the retained design.');
+  assert.equal(fixture.calls[2].body.summary, 'Retained visual detail: the original design is blue.');
+  assert.equal(fixture.calls[2].body.messages.length, 1, 'summarized images do not remain in model context');
+});
+
 test('historical image limits trigger compaction before the token threshold is reached', async () => {
   const fixture = browser({ imageLimits: { maxImages: 1, maxImageBytes: 4096, maxTotalImageBytes: 8192 } });
   await fixture.select('vision-model');
   await fixture.upload(new ImageFile(PNG));
   fixture.queue(response('First image description.'));
   await fixture.submit();
+  assert.equal(imageCount(fixture), 1);
   await fixture.upload(new ImageFile(PNG));
   fixture.queue(response('Retained first image.'));
   fixture.queue(response('Second image description.'));
@@ -340,6 +537,11 @@ test('historical image limits trigger compaction before the token threshold is r
   assert.equal(fixture.calls[2].body.summary, 'Retained first image.');
   assert.equal(fixture.calls[2].body.messages.length, 1, 'the new image request contains no historical image attachments');
   assert.equal(fixture.calls[2].body.messages[0].content[0].type, 'image_url');
+  assert.equal(imageCount(fixture), 1, 'the old image node is removed when its exchange is summarized');
+  assert.equal(fixture.get('messages').children.length, 3);
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.match(fixture.get('messages').textContent, /Retained first image|Second image description/);
+  assert.doesNotMatch(fixture.get('messages').textContent, /First image description/);
 });
 
 test('streaming handles split UTF-8 and SSE separators and retains assistant reasoning for later requests', async () => {

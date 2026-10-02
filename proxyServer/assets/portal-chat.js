@@ -121,6 +121,7 @@
   if (Object.values(ui).some((element) => !element)) return;
   const imageUpload = byId('chat-image-upload');
   const imageUploadButton = byId('chat-upload');
+  const statusIndicator = byId('chat-state');
   const models = Array.isArray(config.models) ? config.models : [];
   const imageTokens = finitePositive(config.imageTokens, DEFAULT_IMAGE_TOKENS);
   const ratio = Math.min(0.95, Math.max(0.1, finitePositive(config.autoCompactRatio, 0.65)));
@@ -137,6 +138,7 @@
   let attachments = [];
   let generation = 0;
   let busy = false;
+  let statusHasError = false;
   let uploadsInFlight = 0;
   let controller = null;
 
@@ -155,8 +157,22 @@
   );
 
   function status(text, isError = false) {
+    statusHasError = isError;
     ui.status.textContent = text;
     ui.status.classList.toggle('chat-status-error', isError);
+    ui.status.classList.toggle('visually-hidden', !isError);
+    updateStatusIndicator();
+  }
+
+  function updateStatusIndicator() {
+    if (!statusIndicator) return;
+    const unavailable = !selectedModel();
+    const state = unavailable ? 'unavailable' : statusHasError ? 'error' : busy ? 'busy' : 'ready';
+    const text = unavailable ? 'No active models are available.' : busy ? ui.status.textContent || 'Working…' : statusHasError ? ui.status.textContent : 'Ready.';
+    statusIndicator.classList.toggle('chat-status-indicator-red', state !== 'ready');
+    statusIndicator.setAttribute('data-state', state);
+    statusIndicator.title = text;
+    statusIndicator.setAttribute('aria-label', text);
   }
 
   function pendingMessage(text = ui.input.value, images = attachments) {
@@ -181,6 +197,7 @@
     ui.send.disabled = busy || uploadsInFlight > 0 || !model || unsupportedImages || !(ui.input.value.trim() || attachments.length);
     ui.stop.hidden = !busy;
     ui.stop.disabled = !busy;
+    updateStatusIndicator();
     const budget = getBudget(model, config);
     const hasPending = Boolean(ui.input.value.trim() || attachments.length);
     const estimate = projection(hasPending ? [...context, pendingMessage()] : context);
@@ -229,7 +246,7 @@
       label.className = 'chat-message-label';
       label.textContent = message.role === 'assistant' ? (message.model || 'Assistant') : message.role === 'user' ? 'You' : 'Chat';
       const body = document.createElement('div');
-      body.className = message.role === 'assistant' ? 'chat-markdown' : 'chat-user-content';
+      body.className = 'chat-markdown';
       article.append(label, body);
       if (message.role === 'assistant') {
         const details = document.createElement('details');
@@ -264,14 +281,26 @@
       message.reasoningDetails.hidden = !message.reasoning_content;
       message.reasoningNode.textContent = message.reasoning_content || '';
     } else {
-      message.body.textContent = text;
+      renderMarkdown(message.body, text);
     }
     if (follow) ui.messages.scrollTop = ui.messages.scrollHeight;
   }
 
   function renderTranscript() {
     ui.messages.replaceChildren();
-    if (!transcript.length) {
+    if (summary) {
+      const article = document.createElement('article');
+      article.className = 'chat-message chat-summary';
+      const label = document.createElement('div');
+      label.className = 'chat-message-label';
+      label.textContent = 'Conversation summary';
+      const body = document.createElement('div');
+      body.className = 'chat-markdown';
+      renderMarkdown(body, summary);
+      article.append(label, body);
+      ui.messages.append(article);
+    }
+    if (!transcript.length && !summary) {
       const empty = document.createElement('p');
       empty.className = 'chat-empty';
       empty.textContent = 'Start a conversation with one of your active models. Messages remain only in this page until you reset or reload it.';
@@ -370,6 +399,10 @@
     }
     summary = candidate;
     context = split.recent;
+    // Release summarized text, images and DOM nodes instead of retaining an
+    // ever-growing display history separate from the compacted model context.
+    transcript = context.slice();
+    renderTranscript();
     updateControls();
     return true;
   }
@@ -472,7 +505,9 @@
       renderAttachments();
       assistant = { role: 'assistant', content: '', reasoning_content: '', model: model.id };
       transcript.push(assistant);
-      renderTranscript();
+      if (!summary && transcript.length === 2) ui.messages.replaceChildren();
+      drawMessage(user);
+      drawMessage(assistant);
       sent = true;
       status('Generating response…');
       const requestContext = context.slice();
@@ -523,7 +558,7 @@
     try {
       const pending = ui.input.value.trim() || attachments.length ? pendingMessage() : null;
       await compactConversation(model, signal, operation, pending);
-      if (operation === generation) status('Conversation compacted. The transcript stays visible; future messages use the summary and recent exchanges.');
+      if (operation === generation) status('Earlier messages replaced by a summary. Recent messages stay visible.');
     } catch (error) {
       if (operation === generation) status(signal.aborted ? 'Compaction stopped. Your conversation is unchanged.' : error.message || 'Compaction failed. Your conversation is unchanged.', !signal.aborted);
     } finally {
@@ -566,6 +601,11 @@
     updateControls();
   });
   ui.input.addEventListener('input', updateControls);
+  ui.input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!ui.send.disabled) ui.form.requestSubmit();
+  });
   imageUploadButton?.addEventListener('click', () => {
     if (!ui.images.disabled) ui.images.click();
   });

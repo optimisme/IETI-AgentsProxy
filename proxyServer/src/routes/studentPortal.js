@@ -537,6 +537,7 @@ router.get('/portal/chat', requireApprovedStudentSession, (req, res) => {
                 <select id="chat-model"${models.length === 1 ? ' hidden' : ''}>${models.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.id)}</option>`).join('') || '<option value="">No active models</option>'}</select>
                 ${models.length === 1 ? `<span class="chat-model-name" title="${escapeHtml(models[0].id)}">${escapeHtml(models[0].id)}</span>` : ''}
               </div>
+              <span id="chat-state" class="chat-status-indicator" role="img" aria-label="Ready." title="Ready."></span>
               <button type="button" id="chat-stop" class="chat-send-button" aria-label="Stop response" title="Stop response" hidden>
                 <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
               </button>
@@ -546,7 +547,7 @@ router.get('/portal/chat', requireApprovedStudentSession, (req, res) => {
             </div>
           </div>
         </form>
-        <p id="chat-status" class="chat-status muted" role="status" aria-live="polite"></p>
+        <p id="chat-status" class="chat-status muted visually-hidden" role="status" aria-live="polite"></p>
         <p id="chat-budget" class="chat-budget muted"></p>
       </section>
       <script id="portal-chat-config" type="application/json">${json}</script>
