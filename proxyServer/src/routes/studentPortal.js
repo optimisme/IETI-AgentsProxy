@@ -109,37 +109,73 @@ function getClientScriptUrl(req, filename) {
 function getClientScriptCommand(req, filename) {
   const scriptUrl = getClientScriptUrl(req, filename);
   if (filename.endsWith('.sh')) {
-    const downloader = String.raw`
-      const url = new URL(process.argv[1]);
-      let connectTimer, requestTimer, complete = false;
-      const fail = () => {
-        if (complete) return;
-        complete = true;
-        clearTimeout(connectTimer); clearTimeout(requestTimer);
-        process.stderr.write("Could not download the IETI setup script. Check the server URL and try again.\n");
-        process.exitCode = 1; request.destroy();
-      };
-      const request = require(url.protocol === "https:" ? "node:https" : "node:http").get(url, { agent: false }, response => {
-        if (response.statusCode !== 200) { response.resume(); fail(); return; }
-        const chunks = []; let size = 0;
-        response.on("data", chunk => { size += chunk.length; if (size > 65536) fail(); else chunks.push(chunk); });
-        response.on("error", fail); response.on("aborted", fail);
-        response.on("end", () => {
-          if (complete) return;
-          complete = true;
-          clearTimeout(connectTimer); clearTimeout(requestTimer);
-          const child = require("node:child_process").spawn("bash", ["-c", Buffer.concat(chunks).toString("utf8")], { stdio: "inherit" });
-          child.on("error", () => { process.stderr.write("Could not start Bash.\n"); process.exitCode = 1; });
-          child.on("exit", code => { process.exitCode = code === null ? 1 : code; });
-        });
-      });
-      request.on("error", fail);
-      request.on("socket", socket => socket.once(url.protocol === "https:" ? "secureConnect" : "connect", () => clearTimeout(connectTimer)));
-      connectTimer = setTimeout(fail, 10000); requestTimer = setTimeout(fail, 30000);
-    `.trim().split('\n').map((line) => line.trim()).join(' ');
-    return `node -e ${shellQuote(downloader)} -- ${shellQuote(scriptUrl)}`;
+    const downloader = String.raw`import sys
+if sys.version_info < (3, 9):
+    sys.stderr.write("Error: Python 3.9 or newer is required.\n")
+    sys.exit(1)
+import http.client, queue, subprocess, threading, time, urllib.parse
+results = queue.Queue(1)
+connected = threading.Event()
+started = time.monotonic()
+def download():
+    connection = None
+    script = None
+    try:
+        url = urllib.parse.urlsplit(sys.argv[2])
+        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
+            raise ValueError("Invalid server URL")
+        transport = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+        connection = transport(url.hostname, url.port, timeout=10)
+        connection.connect()
+        connected.set()
+        connection.sock.settimeout(max(0.01, 30 - (time.monotonic() - started)))
+        target = urllib.parse.urlunsplit(("", "", url.path or "/", url.query, ""))
+        connection.request("GET", target, headers={"Accept": "text/plain"})
+        with connection.getresponse() as response:
+            if response.status != 200:
+                raise ValueError("Unexpected response")
+            body = response.read(65537)
+            if len(body) > 65536:
+                raise ValueError("Setup script is too large")
+            script = body.decode("utf-8")
+    except Exception:
+        pass
+    finally:
+        try:
+            if connection:
+                connection.close()
+        except Exception:
+            pass
+        results.put(script)
+        connected.set()
+def fail():
+    sys.stderr.write("Could not download the IETI setup script. Check the server URL and try again.\n")
+    sys.exit(1)
+worker = threading.Thread(target=download, daemon=True)
+try:
+    worker.start()
+    if not connected.wait(10):
+        fail()
+    try:
+        script = results.get(timeout=max(0, 30 - (time.monotonic() - started)))
+    except queue.Empty:
+        fail()
+    worker.join()
+    if script is None:
+        fail()
+    try:
+        code = subprocess.call(["bash", "-c", script])
+    except OSError:
+        sys.stderr.write("Could not start Bash.\n")
+        sys.exit(1)
+except KeyboardInterrupt:
+    sys.stderr.write("Setup cancelled.\n")
+    sys.exit(130)
+sys.exit(code if code >= 0 else 128 - code)
+`;
+    return `python3 -I -B -c ${shellQuote(`exec(${JSON.stringify(downloader)})`)} -- ${shellQuote(scriptUrl)}`;
   }
-  return `$p=Join-Path $env:TEMP 'ieti-set-agents-server.ps1'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item $p -Force`;
+  return `$p=Join-Path $env:TEMP ('ieti-set-agents-server-'+[Guid]::NewGuid().ToString('N')+'.ps1'); try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`;
 }
 
 function getModelEntries(models) {
@@ -557,7 +593,7 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <p class="muted">${escapeHtml(user.email)}</p>
       <div class="panel" style="margin-top:16px">
         <h2>Agent configuration</h2>
-        <p>Run the command for your operating system to install or update your global OpenCode configuration with your available models and capabilities. Confirm the server URL and enter your API key when requested. You can keep or replace a valid saved key, or uninstall an existing configuration. macOS/Linux requires Node.js; Windows uses built-in PowerShell. Existing project settings can override global settings.</p>
+        <p>Run the command for your operating system to install or update your global OpenCode configuration with your available models and capabilities. Confirm the server URL and enter your API key when requested. You can keep or replace a valid saved key, or uninstall an existing configuration. macOS/Linux requires Python 3.9+; Windows uses built-in PowerShell. Existing project settings can override global settings.</p>
         <label>macOS/Linux</label>
         <div class="command-row">
           <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>

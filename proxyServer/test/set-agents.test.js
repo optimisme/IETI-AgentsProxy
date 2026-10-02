@@ -9,7 +9,7 @@ const test = require('node:test');
 
 const run = promisify(execFile);
 const assets = path.join(__dirname, '..', 'assets');
-const python = spawnSync('python3', ['-c', 'import pty, sys; print(sys.executable)'], { encoding: 'utf8' }).stdout?.trim();
+const python = spawnSync('python3', ['-I', '-B', '-c', 'import pty, sys; print(sys.executable)'], { encoding: 'utf8' }).stdout?.trim();
 const catalog = {
   object: 'ieti.model_capabilities.list', schema_version: 1,
   data: [{ id: 'configured-model', context_window: 32768, max_output_tokens: 8192,
@@ -19,7 +19,24 @@ const catalog = {
 
 function bashGenerator() {
   const bash = fs.readFileSync(path.join(assets, 'set_agents_opencode.sh'), 'utf8');
-  return bash.match(/GLOBAL_SCRIPT="\$\(cat <<'NODE'\r?\n([\s\S]*?)\r?\nNODE\r?\n\)"/)[1];
+  return bash.match(/GLOBAL_SCRIPT <<'PYTHON' \|\| true\r?\n([\s\S]*?)\r?\nPYTHON/)[1];
+}
+
+function filesIn(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const filename = path.join(directory, entry.name);
+    return entry.isDirectory() ? filesIn(filename) : [filename];
+  });
+}
+
+function directoriesIn(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    if (!entry.isDirectory()) return [];
+    const filename = path.join(directory, entry.name);
+    return [filename, ...directoriesIn(filename)];
+  });
 }
 
 // The child owns a terminal so the installer follows its actual interactive flow.
@@ -78,7 +95,8 @@ async function fixture(t) {
   const cwd = path.join(root, 'project');
   const configRoot = path.join(root, 'config home');
   const scripts = path.join(root, 'downloads');
-  fs.mkdirSync(cwd); fs.mkdirSync(scripts);
+  const temporary = path.join(root, 'temporary-files');
+  fs.mkdirSync(cwd); fs.mkdirSync(scripts); fs.mkdirSync(temporary);
   const configPath = path.join(configRoot, 'opencode', 'opencode.json');
   const keyPath = path.join(configRoot, 'ieti-agents', 'agents_server_key');
   const state = { requests: [] };
@@ -93,13 +111,33 @@ async function fixture(t) {
   const baseURL = `http://127.0.0.1:${server.address().port}/v1`;
   const script = path.join(scripts, 'set_agents_opencode.sh');
   fs.writeFileSync(script, fs.readFileSync(path.join(assets, 'set_agents_opencode.sh'), 'utf8').replaceAll('__IETI_DEFAULT_BASE_URL__', baseURL));
-  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot };
+  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot, TMPDIR: temporary };
   delete env.PROXY_AGENTS_KEY; delete env.PROXY_AGENTS_BASE_URL; delete env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS;
   const write = (file, value) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof value === 'string' ? value : `${JSON.stringify(value)}\n`);
   };
-  const launch = answers => run(python, ['-c', terminalDriver, script, JSON.stringify(answers)], { cwd, env, timeout: 20000 });
+  const launch = async answers => {
+    const before = new Set(filesIn(root));
+    const beforeDirectories = new Set(directoriesIn(root));
+    try {
+      return await run(python, ['-I', '-B', '-c', terminalDriver, script, JSON.stringify(answers)], { cwd, env, timeout: 20000 });
+    } finally {
+      assert.deepEqual(fs.readdirSync(temporary), [], 'Cancelled and completed installs must remove temporary files.');
+      const allowed = new Set([configPath, `${configPath}c`, `${configPath}.bak`, `${configPath}c.bak`, keyPath]);
+      for (const file of filesIn(root)) {
+        assert.ok(before.has(file) || allowed.has(file), `Unexpected runtime file: ${path.relative(root, file)}`);
+        assert.doesNotMatch(path.relative(root, file), /(?:^|\/)(?:__pycache__|\.venv)(?:\/|$)|\.tmp\./);
+      }
+      const configuredDirectories = new Set([configRoot, path.dirname(configPath), path.dirname(keyPath)]);
+      for (const directory of directoriesIn(root)) {
+        if (beforeDirectories.has(directory)) continue;
+        assert.ok(configuredDirectories.has(directory), `Unexpected runtime folder: ${path.relative(root, directory)}`);
+        assert.ok(filesIn(directory).length > 0, `Empty setup folder was left behind: ${path.relative(root, directory)}`);
+      }
+      assert.equal(fs.readdirSync(cwd).some(name => name === '__pycache__' || name === '.venv'), false);
+    }
+  };
   return { root, cwd, script, configPath, keyPath, state, baseURL, env, write, launch };
 }
 
@@ -222,10 +260,20 @@ test('PowerShell uses built-in APIs, secure key prompts, unattended actions, and
   assert.doesNotMatch(script, /\$mergeScript|node:fs|require\(|Get-Command\s+(?:node|python3?|curl|chmod)\b|&\s+(?:node|python3?|curl|chmod)\b/i);
 });
 
-test('Bash uses built-in Node modules without requiring Python or curl', () => {
+test('Bash uses Python standard library without Node or package dependencies', async () => {
   const script = fs.readFileSync(path.join(assets, 'set_agents_opencode.sh'), 'utf8');
-  assert.match(script, /command -v node/);
-  assert.doesNotMatch(script, /command -v\s+(?:python3?|curl)\b|\$\(curl\b|\n\s*(?:python3?|curl)\b/);
+  assert.match(script, /command -v python3/);
+  assert.match(script, /python3 -I -B -c/);
+  assert.doesNotMatch(script, /command -v\s+(?:node|curl|jq|pip3?)\b|\$\((?:node|curl|jq|pip3?)\b|\n\s*(?:node|curl|jq|pip3?)\b/);
+  const imported = await run(python, ['-I', '-B', '-c', [
+    'import ast, json, sys',
+    'tree = ast.parse(sys.argv[1], feature_version=(3, 9))',
+    'modules = {alias.name.split(".")[0] for item in ast.walk(tree) if isinstance(item, ast.Import) for alias in item.names}',
+    'modules.update(item.module.split(".")[0] for item in ast.walk(tree) if isinstance(item, ast.ImportFrom) and item.module)',
+    'stdlib = getattr(sys, "stdlib_module_names", {"argparse", "atexit", "base64", "collections", "concurrent", "contextlib", "errno", "hashlib", "http", "json", "math", "os", "pathlib", "queue", "re", "secrets", "select", "shutil", "signal", "socket", "ssl", "stat", "sys", "tempfile", "threading", "time", "urllib", "uuid"})',
+    'print(json.dumps(sorted(modules - stdlib - set(sys.builtin_module_names))))'
+  ].join('\n'), bashGenerator()]);
+  assert.deepEqual(JSON.parse(imported.stdout), [], 'The installer must only import Python standard library modules.');
 });
 
 test('configuration edits made while the user confirms setup are preserved', async t => {
@@ -244,10 +292,10 @@ test('configuration edits made while the user confirms setup are preserved', asy
     fs.writeFileSync(keyPath, 'ieti_sk_saved\n');
     fs.writeFileSync(candidatePath, 'ieti_sk_replacement\n');
     fs.writeFileSync(catalogPath, JSON.stringify(catalog));
-    await run(process.execPath, ['-e', program, '--', 'prepare', configPath, catalogPath, preparedPath, 'https://proxy.example.test/v1', keyPath, 'update']);
+    await run(python, ['-I', '-B', '-c', program, 'prepare', configPath, catalogPath, preparedPath, 'https://proxy.example.test/v1', keyPath, 'update']);
     const edited = '{"permission":{"bash":"deny"},"newSetting":"keep"}\n';
     fs.writeFileSync(configPath, edited);
-    await assert.rejects(run(process.execPath, ['-e', program, '--', 'stage', configPath, preparedPath, keyPath, candidatePath, manifestPath, 'update']), error => {
+    await assert.rejects(run(python, ['-I', '-B', '-c', program, 'stage', configPath, preparedPath, keyPath, candidatePath, manifestPath, 'update']), error => {
       assert.match(error.stdout + error.stderr, /changed during|changed since|modified/i);
       return true;
     });
@@ -273,10 +321,10 @@ test('a saved key changed during validation is preserved instead of overwritten'
   fs.writeFileSync(keyPath, 'ieti_sk_saved\n');
   fs.writeFileSync(candidatePath, 'ieti_sk_replacement\n');
   fs.writeFileSync(catalogPath, JSON.stringify(catalog));
-  await run(process.execPath, ['-e', program, '--', 'snapshot-key', keyPath, `${preparedPath}.key-source`]);
+  await run(python, ['-I', '-B', '-c', program, 'snapshot-key', keyPath, `${preparedPath}.key-source`]);
   fs.writeFileSync(keyPath, 'ieti_sk_concurrent_change\n');
-  await run(process.execPath, ['-e', program, '--', 'prepare', configPath, catalogPath, preparedPath, 'https://proxy.example.test/v1', keyPath, 'update']);
-  await assert.rejects(run(process.execPath, ['-e', program, '--', 'stage', configPath, preparedPath, keyPath, candidatePath, manifestPath, 'update']), error => {
+  await run(python, ['-I', '-B', '-c', program, 'prepare', configPath, catalogPath, preparedPath, 'https://proxy.example.test/v1', keyPath, 'update']);
+  await assert.rejects(run(python, ['-I', '-B', '-c', program, 'stage', configPath, preparedPath, keyPath, candidatePath, manifestPath, 'update']), error => {
     assert.match(error.stdout + error.stderr, /changed during|changed since|modified/i);
     return true;
   });

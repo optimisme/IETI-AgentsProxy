@@ -12,7 +12,43 @@ const requestedPowerShell = process.env.POWERSHELL_BIN || 'pwsh';
 const powershellProbe = spawnSync(requestedPowerShell, ['-NoProfile', '-Command', '[System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName'], { encoding: 'utf8' });
 const hasPowerShell = powershellProbe.status === 0;
 const powershell = hasPowerShell ? powershellProbe.stdout.trim() : requestedPowerShell;
+const python = spawnSync('python3', ['-I', '-B', '-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' }).stdout?.trim();
 const assets = path.join(__dirname, '..', 'assets');
+
+function filesIn(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const filename = path.join(directory, entry.name);
+    return entry.isDirectory() ? filesIn(filename) : [filename];
+  });
+}
+
+function directoriesIn(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    if (!entry.isDirectory()) return [];
+    const filename = path.join(directory, entry.name);
+    return [filename, ...directoriesIn(filename)];
+  });
+}
+
+function assertNoRuntimeFiles(f, before, beforeDirectories) {
+  assert.deepEqual(fs.readdirSync(f.temporary), [], 'Installer temporary files must be removed before exit.');
+  const allowed = new Set([f.configPath, `${f.configPath}c`, `${f.configPath}.bak`, `${f.configPath}c.bak`, f.keyPath]);
+  for (const file of filesIn(f.root)) {
+    assert.ok(before.has(file) || allowed.has(file), `Unexpected runtime file: ${path.relative(f.root, file)}`);
+    assert.doesNotMatch(path.relative(f.root, file), /(?:^|\/)(?:__pycache__|\.venv)(?:\/|$)|\.tmp\./);
+  }
+  const configuredDirectories = new Set([f.configRoot, path.dirname(f.configPath), path.dirname(f.keyPath)]);
+  for (const directory of directoriesIn(f.root)) {
+    if (beforeDirectories.has(directory)) continue;
+    assert.ok(configuredDirectories.has(directory), `Unexpected runtime folder: ${path.relative(f.root, directory)}`);
+    assert.ok(filesIn(directory).length > 0, `Empty setup folder was left behind: ${path.relative(f.root, directory)}`);
+  }
+  for (const directory of [f.cwd, f.scripts, f.configRoot]) {
+    if (fs.existsSync(directory)) assert.equal(fs.readdirSync(directory).some(name => name === '__pycache__' || name === '.venv'), false);
+  }
+}
 
 function capabilities(models = [{}]) {
   return {
@@ -54,21 +90,54 @@ test('ps1: installs using PowerShell built-ins with no external helper commands 
   assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
 });
 
+test('sh: installs with Python and system utilities while Node and package tools are absent from PATH', async t => {
+  const f = await fixture(t, 'sh');
+  const bin = path.join(f.root, 'isolated-bin');
+  fs.mkdirSync(bin);
+  fs.symlinkSync(python, path.join(bin, 'python3'));
+  for (const command of ['bash', 'cat', 'chmod', 'dirname', 'mktemp', 'rm']) {
+    const source = spawnSync('/bin/bash', ['-c', 'command -v "$1"', '--', command], { encoding: 'utf8' }).stdout.trim();
+    assert.ok(source, `The test host provides ${command}.`);
+    fs.symlinkSync(source, path.join(bin, command));
+  }
+  f.env.PATH = bin;
+  f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+  f.env.PYTHONPATH = f.cwd;
+  const shadowSource = 'raise RuntimeError("shadow module loaded")\n';
+  for (const module of ['json', 'http']) f.write(path.join(f.cwd, `${module}.py`), shadowSource);
+  for (const command of ['node', 'curl', 'jq', 'pip', 'pip3']) {
+    assert.notEqual(spawnSync('/bin/bash', ['-c', 'command -v "$1"', '--', command], { env: f.env }).status, 0);
+  }
+  await f.launch();
+  assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
+  assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
+  assert.deepEqual(f.state.requests, [{ path: '/course/v1/model-capabilities', authorization: 'Bearer ieti_sk_replacement' }]);
+  for (const module of ['json', 'http']) assert.equal(fs.readFileSync(path.join(f.cwd, `${module}.py`), 'utf8'), shadowSource);
+});
+
 async function fixture(t, platform) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-opencode-global-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const cwd = path.join(root, 'project');
   const scripts = path.join(root, 'downloaded scripts');
   const configRoot = path.join(root, 'config home');
-  fs.mkdirSync(cwd); fs.mkdirSync(scripts);
+  const temporary = path.join(root, 'temporary-files');
+  fs.mkdirSync(cwd); fs.mkdirSync(scripts); fs.mkdirSync(temporary);
   const script = path.join(scripts, `set_agents_opencode.${platform}`);
   fs.copyFileSync(path.join(assets, path.basename(script)), script);
   const configPath = path.join(configRoot, 'opencode', 'opencode.json');
   const keyPath = path.join(configRoot, 'ieti-agents', 'agents_server_key');
-  const state = { catalog: capabilities(), status: 200, requests: [], acceptedKeys: new Set(['ieti_sk_saved', 'ieti_sk_replacement']), hang: false };
+  const state = { catalog: capabilities(), status: 200, requests: [], acceptedKeys: new Set(['ieti_sk_saved', 'ieti_sk_replacement']), hang: false, trickle: false };
   const server = http.createServer((req, res) => {
     state.requests.push({ path: req.url, authorization: req.headers.authorization });
     if (state.hang) return;
+    if (state.trickle) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '1000000', Connection: 'keep-alive' });
+      res.write('{');
+      const timer = setInterval(() => res.write(' '), 100);
+      res.once('close', () => clearInterval(timer));
+      return;
+    }
     const suppliedKey = String(req.headers.authorization || '').replace(/^Bearer /, '');
     const status = state.status !== 200 ? state.status : state.acceptedKeys.has(suppliedKey) ? 200 : 401;
     const messages = { 401: 'Invalid API key.', 403: 'Account disabled.', 429: 'Too many requests.', 503: 'Provider temporarily unavailable.' };
@@ -79,18 +148,38 @@ async function fixture(t, platform) {
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const baseURL = `http://127.0.0.1:${server.address().port}/course/v1`;
   fs.writeFileSync(script, fs.readFileSync(script, 'utf8').replaceAll('__IETI_DEFAULT_BASE_URL__', baseURL));
-  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot, PROXY_AGENTS_BASE_URL: `${baseURL}/` };
+  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot, TMPDIR: temporary, PROXY_AGENTS_BASE_URL: `${baseURL}/` };
   delete env.PROXY_AGENTS_KEY;
   delete env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS;
+  if (platform === 'ps1') {
+    // The PowerShell host creates its own startup cache even for an empty run.
+    // Establish that baseline before checking files created by the installer.
+    env.POWERSHELL_TELEMETRY_OPTOUT = '1';
+    env.POWERSHELL_UPDATECHECK = 'Off';
+    await run(powershell, ['-NoProfile', '-Command', 'exit 0'], { cwd, env, timeout: 15000 });
+    assert.equal(fs.existsSync(configPath), false);
+    assert.equal(fs.existsSync(keyPath), false);
+    assert.deepEqual(fs.readdirSync(temporary), []);
+  }
   const write = (file, value) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`);
   };
-  const launch = (action = 'sync') => platform === 'sh'
-    ? run('/bin/bash', [script, ...(action === 'uninstall' ? ['--uninstall'] : action === 'sync' ? ['--sync-only'] : [])], { cwd, env, timeout: 15000 })
-    : run(powershell, ['-NoProfile', '-File', script, ...(action === 'uninstall' ? ['-Uninstall'] : action === 'sync' ? ['-SyncOnly'] : [])], { cwd, env, timeout: 15000 });
+  const launch = async (action = 'sync') => {
+    const before = new Set(filesIn(root));
+    const beforeDirectories = new Set(directoriesIn(root));
+    const hostCache = new Map(filesIn(path.join(root, '.cache', 'powershell')).map(file => [file, fs.readFileSync(file)]));
+    try {
+      return platform === 'sh'
+        ? await run('/bin/bash', [script, ...(action === 'uninstall' ? ['--uninstall'] : action === 'sync' ? ['--sync-only'] : [])], { cwd, env, timeout: 15000 })
+        : await run(powershell, ['-NoProfile', '-File', script, ...(action === 'uninstall' ? ['-Uninstall'] : action === 'sync' ? ['-SyncOnly'] : [])], { cwd, env, timeout: 15000 });
+    } finally {
+      assertNoRuntimeFiles({ root, temporary, cwd, scripts, configRoot, configPath, keyPath }, before, beforeDirectories);
+      for (const [file, contents] of hostCache) assert.deepEqual(fs.readFileSync(file), contents, 'Installer must preserve existing PowerShell host cache files.');
+    }
+  };
   const read = (file = configPath) => JSON.parse(fs.readFileSync(file, 'utf8'));
-  return { root, cwd, scripts, script, configRoot, configPath, keyPath, state, baseURL, env, write, read, launch };
+  return { root, cwd, scripts, script, temporary, configRoot, configPath, keyPath, state, baseURL, env, write, read, launch };
 }
 
 async function expectFailure(f, pattern) {
@@ -246,6 +335,21 @@ for (const platform of ['sh', 'ps1']) {
     });
     f.env.PROXY_AGENTS_BASE_URL = `http://127.0.0.1:${unusedPort}/v1`;
     await expectFailure(f, /[Cc]onnect|[Nn]etwork|[Uu]navailable/);
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+  });
+
+  test(`${platform}: total request timeout stops a continuously trickling response and preserves previous files`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = '{"untouched":true}\n';
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS = '1';
+    f.state.trickle = true;
+    const started = Date.now();
+    await expectFailure(f, /[Tt]imeout|[Tt]imed out/);
+    // Include interpreter startup and cleanup time without turning host load
+    // into a failure; a missing total deadline reaches the 15-second guard.
+    assert.ok(Date.now() - started < 4000, 'A total request deadline must stop a persistent response that sends bytes before each socket timeout.');
     assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
     assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
   });
