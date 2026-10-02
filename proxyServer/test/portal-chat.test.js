@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
@@ -178,6 +179,31 @@ test('Chat uses portal sessions without API keys and forwards a fixed Markdown w
   assert.equal(limited.body.error.code, 'hourly_call_quota_exceeded');
   assert.equal(upstreamCalls.length, 1, 'successful Chat requests share the hourly call quota');
   assertNoPersistedConversation();
+});
+
+test('Chat versions its assets and revalidates them so reloads receive updated controls', async () => {
+  const { agent, page } = await chatSession();
+  assert.equal(page.headers['cache-control'], 'no-store');
+  const assets = [
+    ['portal-chat.js', 'portal-chat.js'],
+    ['portal-chat.css', 'portal-chat.css'],
+    ['marked.umd.js', 'vendor/marked.umd.js'],
+    ['purify.min.js', 'vendor/purify.min.js']
+  ];
+  for (const [name, file] of assets) {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'assets', file), 'utf8');
+    const version = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+    const url = `/portal/chat/assets/${name}?v=${version}`;
+    assert.ok(page.text.includes(`"${url}"`), `${name} has a content version in the Chat page`);
+    const response = await agent.get(url).expect(200);
+    assert.equal(response.headers['cache-control'], 'private, no-cache');
+    assert.equal(response.text, source);
+    if (name === 'portal-chat.js') {
+      assert.match(response.text, /function createCopyButton/);
+      await agent.get(url).set('If-None-Match', response.headers.etag).expect(304).expect('Cache-Control', 'private, no-cache');
+      await request(app).get(url).expect(302);
+    }
+  }
 });
 
 test('Chat blocks anonymous, pending, unassigned, disabled and revoked sessions before upstream requests', async () => {

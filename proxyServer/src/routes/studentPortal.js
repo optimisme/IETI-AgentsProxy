@@ -48,6 +48,16 @@ const {
 const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
 const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..', 'assets');
+const chatAssets = new Map([
+  ['portal-chat.js', 'portal-chat.js'],
+  ['portal-chat.css', 'portal-chat.css'],
+  ['marked.umd.js', 'vendor/marked.umd.js'],
+  ['purify.min.js', 'vendor/purify.min.js']
+]);
+const chatAssetUrls = new Map([...chatAssets].map(([name, file]) => {
+  const version = crypto.createHash('sha256').update(fs.readFileSync(path.join(CLIENT_SCRIPT_DIRECTORY, file))).digest('hex').slice(0, 16);
+  return [name, `/portal/chat/assets/${name}?v=${version}`];
+}));
 
 function getRequestBaseUrl(req) {
   return requestBaseUrl(req, getSetting('public_base_url', ''));
@@ -510,7 +520,7 @@ router.get('/portal/chat', requireApprovedStudentSession, (req, res) => {
   render(req, res, {
     title: 'Chat',
     content: `
-      <link rel="stylesheet" href="/portal/chat/assets/portal-chat.css">
+      <link rel="stylesheet" href="${chatAssetUrls.get('portal-chat.css')}">
       <h1>Chat</h1>
       <section class="panel chat-panel">
         <div id="chat-messages" class="chat-messages" aria-label="Conversation"></div>
@@ -551,22 +561,17 @@ router.get('/portal/chat', requireApprovedStudentSession, (req, res) => {
         <p id="chat-budget" class="chat-budget muted"></p>
       </section>
       <script id="portal-chat-config" type="application/json">${json}</script>
-      <script src="/portal/chat/assets/marked.umd.js" defer></script>
-      <script src="/portal/chat/assets/purify.min.js" defer></script>
-      <script src="/portal/chat/assets/portal-chat.js" defer></script>
+      <script src="${chatAssetUrls.get('marked.umd.js')}" defer></script>
+      <script src="${chatAssetUrls.get('purify.min.js')}" defer></script>
+      <script src="${chatAssetUrls.get('portal-chat.js')}" defer></script>
     `
   });
 });
 
-const chatAssets = new Map([
-  ['portal-chat.js', 'portal-chat.js'],
-  ['portal-chat.css', 'portal-chat.css'],
-  ['marked.umd.js', 'vendor/marked.umd.js'],
-  ['purify.min.js', 'vendor/purify.min.js']
-]);
 router.get('/portal/chat/assets/:filename', requireApprovedStudentSession, (req, res) => {
   const asset = chatAssets.get(req.params.filename);
   if (!asset) return res.status(404).send('Not found');
+  res.set('Cache-Control', 'private, no-cache');
   res.sendFile(path.join(CLIENT_SCRIPT_DIRECTORY, asset));
 });
 
