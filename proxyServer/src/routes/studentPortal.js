@@ -533,8 +533,8 @@ router.get('/portal', requireStudentSession, (req, res) => {
           <li>Install OpenCode Terminal or Desktop from <a href="https://opencode.ai/download" target="_blank" rel="noopener noreferrer">https://opencode.ai/download</a>.</li>
           <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
           <li>Run the next command for your operating system to install or update your global OpenCode configuration.</li>
-          <li>Run OpenCode (desktop or terminal).</li>
-          <li>Optionally configure other harnesses manually using your <a href="#active-models-heading">Active Models</a> parameters.</li>
+          <li>Run or restart OpenCode (desktop or terminal).</li>
+          <li>Optionally configure other harnesses manually using your Active Models parameters.</li>
         </ol>
         <label>macOS/Linux</label>
         <div class="command-row">

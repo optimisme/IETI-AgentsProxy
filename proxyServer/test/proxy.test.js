@@ -2074,12 +2074,13 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.equal((instructions.match(/<li>/g) || []).length, 5);
   assert.match(instructions, /href="https:\/\/opencode\.ai\/download"/);
   assert.match(instructions, /href="\/portal\/settings"/);
-  assert.match(instructions, /href="#active-models-heading"/);
+  assert.doesNotMatch(instructions, /href="#active-models-heading"/);
   assert.match(instructions, /Install OpenCode Terminal or Desktop/);
   assert.match(instructions, /API key/);
   assert.match(instructions, /install or update your global OpenCode configuration/);
-  assert.match(instructions, /Run OpenCode/);
+  assert.match(instructions, /Run or restart OpenCode \(desktop or terminal\)/);
   assert.match(instructions, /other harnesses manually/);
+  assert.match(instructions, /Active Models parameters/);
   assert.doesNotMatch(portal.text, /Agent configuration|macOS\/Linux requires|Existing project settings can override/);
   assert.match(portal.text, /powershell\.exe/);
   assert.match(portal.text, /--connect-timeout 10/);
