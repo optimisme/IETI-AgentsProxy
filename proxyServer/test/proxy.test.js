@@ -1086,11 +1086,15 @@ test('admin users list paginates search results', async () => {
   assert.match(first.text, /status-enabled/);
   assert.match(first.text, /status-disabled/);
   assert.doesNotMatch(first.text, /<th>Usage<\/th>/);
-  assert.equal((first.text.match(new RegExp(`${marker}-\\d+@example\\.test`, 'g')) || []).length, 25);
+  const firstRows = first.text.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+  assert.ok(firstRows, 'The first page renders user rows.');
+  assert.equal((firstRows.match(new RegExp(`${marker}-\\d+@example\\.test`, 'g')) || []).length, 25);
 
   const second = await agent.get(`/admin/users?q=${encodeURIComponent(marker)}&status=all&page=2`).expect(200);
   assert.match(second.text, /Page 2 of 2\. 30 users\./);
-  assert.equal((second.text.match(new RegExp(`${marker}-\\d+@example\\.test`, 'g')) || []).length, 5);
+  const secondRows = second.text.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+  assert.ok(secondRows, 'The second page renders user rows.');
+  assert.equal((secondRows.match(new RegExp(`${marker}-\\d+@example\\.test`, 'g')) || []).length, 5);
 });
 
 test('admin groups do not expose description and usage section is removed', async () => {
@@ -2558,12 +2562,16 @@ test('admin registration filter defaults to approved/enabled and preserves filte
     assert.match(response.text, /2 users\.<\/p>/);
     assert.match(response.text, /value="approved-enabled" selected>approved\/enabled/);
     assert.doesNotMatch(response.text, /class="status-disabled"/);
-    for (const index of [26, 27]) assert.ok(response.text.includes(`${marker}-${index}@example.test`));
+    const rows = response.text.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+    assert.ok(rows, 'The approved/enabled filter renders user rows.');
+    for (const index of [26, 27]) assert.ok(rows.includes(`${marker}-${index}@example.test`));
   }
   for (const [status, indexes] of [['pending', [28, 29]], ['rejected', [30, 31]]]) {
     const response = await agent.get(`/admin/users?${query}&status=${status}`).expect(200);
     assert.match(response.text, /2 users\.<\/p>/);
-    for (const index of indexes) assert.ok(response.text.includes(`${marker}-${index}@example.test`));
+    const rows = response.text.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+    assert.ok(rows, `The ${status} filter renders user rows.`);
+    for (const index of indexes) assert.ok(rows.includes(`${marker}-${index}@example.test`));
   }
   const all = await agent.get(`/admin/users?${query}&status=all`).expect(200);
   assert.match(all.text, /Page 1 of 2\. 32 users\./);

@@ -914,8 +914,14 @@ router.get('/admin/users', requireAdmin, (req, res) => {
       ${page < totalPages ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, page: page + 1 })}">Next</a>` : '<span class="muted">Next</span>'}
     </nav>
   ` : `<p class="muted">${totalUsers} user${totalUsers === 1 ? '' : 's'}.</p>`;
+  const emailAddresses = getDb().prepare('SELECT email FROM users ORDER BY email COLLATE NOCASE').all()
+    .map(({ email }) => email.trim()).filter(Boolean);
   const content = `
-    <p><a class="button" href="/admin/users/new">Create user</a></p>
+    <p class="actions">
+      <a class="button" href="/admin/users/new">Create user</a>
+      <button type="button" class="secondary" data-copy-user-emails="${escapeHtml(emailAddresses.join(', '))}" data-email-count="${emailAddresses.length}" title="Copy all users' email addresses, including users outside the current filters"${emailAddresses.length ? '' : ' disabled'}>Copy all emails</button>
+      <span id="copy-user-emails-status" class="muted" role="status" aria-live="polite"></span>
+    </p>
     <form method="get" action="/admin/users" class="panel search-panel">
       <label>Search users</label><input name="q" value="${escapeHtml(search)}" placeholder="Name, email, id, or date">
       <label>Filter by group</label><select name="group_id">
@@ -929,6 +935,39 @@ router.get('/admin/users', requireAdmin, (req, res) => {
     </form>
     <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Group</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="muted">No users found.</td></tr>'}</tbody></table>
     ${pagination}
+    <script>
+      (() => {
+        const button = document.querySelector('[data-copy-user-emails]');
+        const status = document.getElementById('copy-user-emails-status');
+        const copyText = async (text) => {
+          if (navigator.clipboard?.writeText) {
+            try { await navigator.clipboard.writeText(text); return; } catch { /* Try the browser fallback. */ }
+          }
+          const area = document.createElement('textarea');
+          area.value = text;
+          area.setAttribute('readonly', '');
+          area.style.position = 'fixed';
+          area.style.opacity = '0';
+          document.body.appendChild(area);
+          try {
+            area.select();
+            if (!document.execCommand('copy')) throw new Error('Copy failed');
+          } finally { area.remove(); }
+        };
+        button?.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await copyText(button.dataset.copyUserEmails);
+            status.textContent = 'Copied ' + button.dataset.emailCount + ' email addresses.';
+          } catch {
+            status.textContent = 'Copy failed. Please allow clipboard access and try again.';
+          } finally {
+            button.disabled = Number(button.dataset.emailCount) === 0;
+            button.focus();
+          }
+        });
+      })();
+    </script>
   `;
   render(req, res, 'users', { title: 'Users', content, flash: flash(req.query.created ? 'User created.' : req.query.deleted ? 'User deleted.' : '') });
 });
