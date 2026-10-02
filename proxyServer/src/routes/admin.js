@@ -23,6 +23,7 @@ const {
 const {
   cleanupUsageLogs,
   dashboardSummary,
+  dailyUsage,
   recentUsage,
   getUsageCleanupRetentionDays,
   getUsageCleanupStatus,
@@ -1108,6 +1109,7 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
   const user = getDb().prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).send('User not found');
   const usage = getUsageTotals(user.id);
+  const usageByDay = dailyUsage(15, new Date(), user.id);
   const group = getUserGroup(user.id);
   const usagePageSize = 25;
   const totalUsage = countUsage(user.id);
@@ -1199,6 +1201,8 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
           <div class="metric">Group provider<strong>${group?.provider_names ? escapeHtml(group.provider_names) : 'none'}</strong>${group?.provider_slugs?.length ? `<span class="muted">${escapeHtml(group.provider_slugs.join(', '))}</span>` : ''}</div>
         </div>
         <div style="margin-top:16px">${usageStatus(user, group, usage)}</div>
+        <div class="dashboard-section">${dailyUsageCard(usageByDay)}</div>
+        <script src="/admin/assets/dashboard-usage.js" defer></script>
         <h3>Recent usage/errors</h3>
         ${usageTable(recentUsage(usagePageSize, user.id, (usagePage - 1) * usagePageSize))}
         ${paginationControls({
