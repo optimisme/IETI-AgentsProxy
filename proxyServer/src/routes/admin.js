@@ -1923,7 +1923,7 @@ function topUsersCard(rows) {
     <section class="panel dashboard-card" aria-labelledby="active-users-heading">
       <div class="dashboard-card-heading">
         <h2 id="active-users-heading">Most active users</h2>
-        <p class="muted">Top 10 by successful calls · Last 15 days · UTC</p>
+        <p class="muted">Top 10 by completed or stopped calls · Last 15 days · UTC</p>
       </div>
       ${rows.length ? `<div class="table-scroll"><table class="dashboard-users-table">
         <thead><tr><th scope="col">User</th><th scope="col" class="numeric">Calls</th><th scope="col" class="numeric">Tokens</th></tr></thead>
@@ -1933,7 +1933,7 @@ function topUsersCard(rows) {
             <td class="numeric">${formatUsageNumber(row.calls)}</td>
             <td class="numeric">${formatUsageNumber(row.tokens)}</td>
           </tr>`).join('')}</tbody>
-      </table></div>` : '<p class="muted">No successful calls from current users in the last 15 days.</p>'}
+      </table></div>` : '<p class="muted">No completed or stopped calls from current users in the last 15 days.</p>'}
     </section>
   `;
 }

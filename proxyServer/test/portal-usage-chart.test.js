@@ -86,11 +86,12 @@ function chartRows(html) {
   return JSON.parse(attribute[1].replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
 }
 
-test('portal chart shows only the signed-in student’s successful calls and ignores query user ids', async () => {
+test('portal chart shows only the signed-in student’s completed or stopped calls and ignores query user ids', async () => {
   const owner = student();
   const other = student();
   usage(owner.id, day(-1), 11);
-  usage(owner.id, day(), 17);
+  usage(owner.id, day(), 17, 'cancelled');
+  usage(owner.id, day(), 0, 'cancelled');
   usage(owner.id, day(), 8000, 'error');
   usage(owner.id, day(-15), 6000);
   usage(other.id, day(), 9000);

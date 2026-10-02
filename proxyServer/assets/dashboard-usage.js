@@ -48,7 +48,7 @@
         return;
       }
       const row = rows[active];
-      const detail = `${row.date} UTC · ${number.format(row.tokens)} tokens · ${number.format(row.calls)} successful calls`;
+      const detail = `${row.date} UTC · ${number.format(row.tokens)} tokens · ${number.format(row.calls)} completed or stopped calls`;
       tooltip.textContent = detail;
       tooltip.hidden = false;
       canvas.setAttribute('aria-label', detail);

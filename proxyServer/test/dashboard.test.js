@@ -59,7 +59,8 @@ test('dashboard renders all three cards with global calls and safely escaped use
     (user_id, model, provider_slug, total_tokens, status, error_message, created_at)
     VALUES (?, ?, 'test-provider', ?, ?, ?, CURRENT_TIMESTAMP)`);
   insert.run(first, 'first-success', 100, 'success', null);
-  insert.run(second, 'second-success', 50, 'success', null);
+  insert.run(second, 'second-stopped', 50, 'cancelled', null);
+  insert.run(first, 'cancelled-before-provider', 0, 'cancelled', 'Client disconnected.');
   insert.run(first, 'failed-model', 999, 'error', '<img src=x onerror=alert(1)>');
   insert.run(second, 'timeout-model', 999, 'timeout', 'Provider request timed out.');
   insert.run(null, 'anonymous-success', 25, 'success', null);
@@ -73,7 +74,7 @@ test('dashboard renders all three cards with global calls and safely escaped use
   assert.match(page.text, /<canvas tabindex="0"/);
   assert.match(page.text, /View daily usage table/);
   assert.match(page.text, /<strong>175<\/strong> tokens/);
-  assert.match(page.text, /<strong>3<\/strong> successful calls/);
+  assert.match(page.text, /<strong>3<\/strong> completed or stopped calls/);
   assert.match(page.text, /<script src="\/admin\/assets\/dashboard-usage.js" defer><\/script>/);
   assert.ok(page.text.includes(escapeHtml(name)));
   assert.ok(page.text.includes(escapeHtml(email)));
@@ -82,13 +83,18 @@ test('dashboard renders all three cards with global calls and safely escaped use
   assert.match(page.text, new RegExp(`href="/admin/users/${first}"`));
 
   const recent = page.text.match(/<section[^>]+aria-labelledby="recent-calls-heading">([\s\S]*?)<\/section>/)[1];
-  for (const model of ['first-success', 'second-success', 'failed-model', 'timeout-model', 'anonymous-success']) {
+  for (const model of ['first-success', 'second-stopped', 'cancelled-before-provider', 'failed-model', 'timeout-model', 'anonymous-success']) {
     assert.ok(recent.includes(model));
   }
   assert.ok(recent.includes(escapeHtml(email)));
   assert.match(recent, /second@example\.test/);
   assert.match(recent, /Deleted user/);
   assert.ok(recent.indexOf('anonymous-success') < recent.indexOf('first-success'));
+
+  const errors = page.text.match(/<section[^>]+aria-labelledby="recent-errors-heading">([\s\S]*?)<\/section>/)[1];
+  assert.ok(errors.includes('failed-model'));
+  assert.ok(errors.includes('timeout-model'));
+  assert.doesNotMatch(errors, /second-stopped|cancelled-before-provider/);
 
   const encoded = page.text.match(/data-usage="([^"]+)"/)[1];
   const rows = JSON.parse(encoded.replaceAll('&quot;', '"'));
@@ -102,7 +108,7 @@ test('empty dashboard remains usable and chart asset requires admin authenticati
   await request(app).get('/admin/assets/dashboard-usage.js').set('Accept', 'application/json').expect(401);
   const agent = await admin();
   const page = await agent.get('/admin').expect(200);
-  assert.match(page.text, /No successful calls from current users in the last 15 days\./);
+  assert.match(page.text, /No completed or stopped calls from current users in the last 15 days\./);
   assert.match(page.text, /<strong>0<\/strong> tokens/);
   assert.match(page.text, /No records\./);
   const script = await agent.get('/admin/assets/dashboard-usage.js').expect(200);
@@ -110,7 +116,7 @@ test('empty dashboard remains usable and chart asset requires admin authenticati
   assert.doesNotThrow(() => new Function(script.text));
 });
 
-test('admin user detail charts only the selected user’s successful calls after quota cards', async () => {
+test('admin user detail charts only the selected user’s completed or stopped calls after quota cards', async () => {
   const selected = db.prepare("INSERT INTO users (name, email) VALUES ('Selected Student', 'selected@example.test')").run().lastInsertRowid;
   const other = db.prepare("INSERT INTO users (name, email) VALUES ('Other Student', 'other@example.test')").run().lastInsertRowid;
   const insert = db.prepare(`
@@ -119,7 +125,8 @@ test('admin user detail charts only the selected user’s successful calls after
   `);
   insert.run(selected, 'selected-first-day', 11, 'success', `${day(-14)} 00:00:00`);
   insert.run(selected, 'selected-yesterday', 17, 'success', `${day(-1)} 23:59:59`);
-  insert.run(selected, 'selected-today', 23, 'success', `${day()} 12:00:00`);
+  insert.run(selected, 'selected-stopped', 23, 'cancelled', `${day()} 12:00:00`);
+  insert.run(selected, 'selected-cancelled-before-provider', 0, 'cancelled', `${day()} 12:00:00`);
   insert.run(selected, 'selected-failure', 7000, 'error', `${day()} 12:00:00`);
   insert.run(selected, 'selected-before-window', 6000, 'success', `${day(-15)} 23:59:59`);
   insert.run(selected, 'selected-after-window', 5000, 'success', `${day(1)} 00:00:00`);
@@ -163,7 +170,7 @@ test('admin user detail fills fifteen empty days without including another user�
   assert.equal(rows[14].date, day());
   assert.ok(rows.every((row) => row.calls === 0 && row.tokens === 0));
   assert.match(page.text, /<strong>0<\/strong> tokens/);
-  assert.match(page.text, /<strong>0<\/strong> successful calls/);
+  assert.match(page.text, /<strong>0<\/strong> completed or stopped calls/);
   assert.match(page.text, /View daily usage table/);
   assert.doesNotMatch(page.text, /123456/);
 });

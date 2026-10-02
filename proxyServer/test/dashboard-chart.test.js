@@ -76,17 +76,17 @@ test('daily chart renders at display density and resizes without invalid geometr
   assert.equal(view.canvas.height, 560);
 });
 
-test('keyboard inspection exposes UTC dates and successful usage, then hides on blur', () => {
+test('keyboard inspection exposes UTC dates and charged usage, then hides on blur', () => {
   const view = chart(rows);
   view.events.focus();
   view.flush();
   assert.equal(view.tooltip.hidden, false);
-  assert.match(view.tooltip.textContent, /2026-09-30 UTC.*14.?000 tokens.*15 successful calls/);
+  assert.match(view.tooltip.textContent, /2026-09-30 UTC.*14.?000 tokens.*15 completed or stopped calls/);
   assert.equal(view.attributes['aria-label'], view.tooltip.textContent);
   assert.equal(view.key('ArrowLeft'), true);
   assert.match(view.tooltip.textContent, /2026-09-29 UTC/);
   view.key('Home');
-  assert.match(view.tooltip.textContent, /2026-09-16 UTC.*0 tokens.*1 successful calls/);
+  assert.match(view.tooltip.textContent, /2026-09-16 UTC.*0 tokens.*1 completed or stopped calls/);
   view.key('ArrowLeft');
   assert.match(view.tooltip.textContent, /2026-09-16 UTC/);
   view.key('End');
@@ -103,7 +103,7 @@ test('pointer inspection stays within the plot and hides on leave', () => {
   view.events.pointermove({ clientX: 300, clientY: 150 });
   view.flush();
   assert.equal(view.tooltip.hidden, false);
-  assert.match(view.tooltip.textContent, /UTC.*tokens.*successful calls/);
+  assert.match(view.tooltip.textContent, /UTC.*tokens.*completed or stopped calls/);
   assert.ok(Number.parseFloat(view.tooltip.style.left) >= 4);
   assert.ok(Number.parseFloat(view.tooltip.style.top) >= 4);
   view.events.pointerleave();
@@ -120,7 +120,7 @@ test('zero usage renders a usable chart and unavailable canvas preserves the fal
   assert.ok(view.draws.every((draw) => draw.arguments.every((value) => typeof value !== 'number' || Number.isFinite(value))));
   view.events.focus();
   view.flush();
-  assert.match(view.tooltip.textContent, /0 tokens.*0 successful calls/);
+  assert.match(view.tooltip.textContent, /0 tokens.*0 completed or stopped calls/);
 
   assert.deepEqual(Object.keys(chart(rows, { contextAvailable: false }).events), []);
   assert.deepEqual(Object.keys(chart('invalid JSON').events), []);

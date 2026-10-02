@@ -251,6 +251,16 @@ El rol d'usuari (`student` o `teacher`) es tria des de l'administracio en crear 
 
 Si Google recrea un compte institucional amb el mateix correu i un `sub` diferent, la peticio apareix a **OAuth reviews**. L'administrador pot conservar tot el compte i substituir-ne la identitat, reiniciar-lo com un usuari pendent nou, o rebutjar la peticio. El reinici elimina claus, configuracio, converses i missatges; els registres d'us queden anonimitzats.
 
+## Chat del portal
+
+La seccio **Chat**, entre Dashboard i Settings, utilitza la sessio de l'usuari i nomes els seus models actius, amb les mateixes quotes, limitacio de peticions i registre d'us que l'API. No cal introduir una clau API.
+
+- Una unica conversa temporal en memoria de la pagina. **Reset** cancel·la les peticions i elimina la conversa, el resum i les imatges; recarregar la pagina tambe inicia una conversa nova. No es guarden missatges al navegador ni a SQLite.
+- **Compact** resumeix la conversa a peticio de l'usuari. La compactacio automatica s'activa abans d'enviar un missatge quan la projeccio arriba al **65% del pressupost d'entrada**, reservant espai per a la resposta i les instruccions. La projeccio de tokens es aproximada; els resums conserven els missatges recents i nomes substitueixen el context anterior si tenen exit i alliberen espai. Cada resum consumeix una peticio i tokens de la quota.
+- Els models amb visio permeten adjuntar PNG, JPEG o WebP amb els limits de quantitat i mida del servidor. Les imatges es processen en memoria, sense crear fitxers al servidor.
+- Les respostes mostren Markdown amb taules i blocs de codi. Marked i DOMPurify es distribueixen localment a `assets/vendor/`, amb les seves llicencies; no cal cap framework, CDN ni servei addicional.
+- Les instruccions fixes expliquen que es una interfície web amb Markdown i sense eines, terminal, fitxers ni navegacio. Es mantenen en compactar. **Stop** o Reset cancel·len la generacio; les peticions que ja han consumit recursos es compten a les quotes i estadistiques.
+
 ## Configuracio global d'OpenCode
 
 El portal ofereix `set_agents_opencode.sh` (Linux/macOS) i `set_agents_opencode.ps1` (Windows). Configuren el proveidor `ieti-agents` globalment per a l'usuari actual, sense crear fitxers al projecte ni iniciar OpenCode.

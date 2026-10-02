@@ -2,6 +2,7 @@ const express = require('express');
 const { commonCapabilities } = require('../utils/modelCapabilities');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { getDb } = require('../db');
 const { generateStudentKey } = require('../services/keyService');
 const {
@@ -31,6 +32,10 @@ const {
 const config = require('../config');
 const { renderTemplate } = require('../utils/templates');
 const { REASONING_EFFORTS } = require('../utils/reasoning');
+const { apiError } = require('../utils/errors');
+const { studentRateLimit } = require('../middleware/rateLimit');
+const { handleChatCompletion } = require('../services/chatCompletionService');
+const { chatLimits, preparePortalChatPayload } = require('../utils/portalChat');
 const { dailyUsageCard } = require('../utils/usageCards');
 const {
   escapeHtml,
@@ -278,6 +283,7 @@ function render(req, res, { title = 'User Portal', content = '', message = '' })
     <header>
       <strong>IETI Agents</strong>
       ${isLoggedIn ? '<a href="/">Dashboard</a>' : ''}
+      ${isApprovedStudent ? '<a href="/portal/chat">Chat</a>' : ''}
       ${isApprovedStudent ? '<a href="/portal/settings">Settings</a>' : ''}
       ${isAdmin ? '<a href="/admin">Admin</a>' : ''}
       ${logout}
@@ -301,25 +307,32 @@ function setStudentSession(req, userId, passwordChangedAt) {
   req.session.studentAuthVersion = Number(user?.auth_version || 0);
 }
 
+function rejectStudentSession(req, res, redirect, code, message, status = 401) {
+  if (req.method === 'POST' && req.path === '/portal/chat/completions') {
+    return res.status(status).json({ error: { code, type: code, message } });
+  }
+  return res.redirect(redirect);
+}
+
 function requireStudentSession(req, res, next) {
   const userId = req.session?.studentUserId;
-  if (!userId) return res.redirect('/');
+  if (!userId) return rejectStudentSession(req, res, '/', 'session_required', 'Sign in to use Chat.');
   const user = getDb().prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!user || !user.enabled) {
     req.session.studentUserId = null;
-    return res.redirect('/?error=disabled');
+    return rejectStudentSession(req, res, '/?error=disabled', 'user_disabled', 'This account is disabled.', 403);
   }
   if (user.registration_status === 'rejected') {
-    return req.session.destroy(() => res.redirect('/?error=disabled'));
+    return req.session.destroy(() => rejectStudentSession(req, res, '/?error=disabled', 'account_rejected', 'This account is not approved.', 403));
   }
   if ((req.session.studentPasswordChangedAt ?? null) !== (user.password_changed_at ?? null)) {
-    return req.session.destroy(() => res.redirect('/?error=session_expired'));
+    return req.session.destroy(() => rejectStudentSession(req, res, '/?error=session_expired', 'session_expired', 'Your session expired. Sign in again.'));
   }
   const authVersion = Number(user.auth_version || 0);
   if (req.session.studentAuthVersion === undefined) {
     req.session.studentAuthVersion = authVersion;
   } else if (Number(req.session.studentAuthVersion) !== authVersion) {
-    return req.session.destroy(() => res.redirect('/?error=session_expired'));
+    return req.session.destroy(() => rejectStudentSession(req, res, '/?error=session_expired', 'session_expired', 'Your session expired. Sign in again.'));
   }
   req.portalUser = user;
   next();
@@ -327,7 +340,9 @@ function requireStudentSession(req, res, next) {
 
 function requireApprovedStudentSession(req, res, next) {
   requireStudentSession(req, res, () => {
-    if (req.portalUser.registration_status !== 'approved' || !getUserGroup(req.portalUser.id)) return res.redirect('/portal');
+    if (req.portalUser.registration_status !== 'approved' || !getUserGroup(req.portalUser.id)) {
+      return rejectStudentSession(req, res, '/portal', 'account_unavailable', 'An approved account and assigned group are required.', 403);
+    }
     next();
   });
 }
@@ -479,6 +494,100 @@ router.post('/invite/:token', (req, res) => {
     setStudentSession(req, user.id, passwordChangedAt);
     res.redirect('/portal');
   });
+});
+
+router.get('/portal/chat', requireApprovedStudentSession, (req, res) => {
+  req.session.portalChatCsrfToken ||= crypto.randomBytes(32).toString('hex');
+  const models = getActiveModelsForUser(req.portalUser);
+  const chatConfig = {
+    models: models.map(({ id, limit, capabilities }) => ({ id, limit, capabilities })),
+    csrfToken: req.session.portalChatCsrfToken,
+    streaming: config.enableStreaming,
+    ...chatLimits()
+  };
+  const json = JSON.stringify(chatConfig).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026');
+  res.set('Cache-Control', 'no-store');
+  render(req, res, {
+    title: 'Chat',
+    content: `
+      <link rel="stylesheet" href="/portal/chat/assets/portal-chat.css">
+      <h1>Chat</h1>
+      <section class="panel chat-panel">
+        <div id="chat-messages" class="chat-messages" aria-label="Conversation"></div>
+        <form id="chat-form" class="chat-form">
+          <label for="chat-input" class="visually-hidden">Message</label>
+          <textarea id="chat-input" rows="4" placeholder="Write a message…"></textarea>
+          <div id="chat-attachments" class="chat-attachments"></div>
+          <div class="chat-composer-actions">
+            <div class="chat-composer-controls">
+              <div id="chat-image-upload" class="chat-image-upload">
+                <input id="chat-images" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+                <button id="chat-upload" type="button" class="chat-icon-button" aria-label="Upload images" title="Upload images">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                </button>
+              </div>
+              <div class="chat-toolbar-actions">
+                <button type="button" id="chat-reset" class="secondary">Reset</button>
+                <button type="button" id="chat-compact" class="secondary">Compact</button>
+              </div>
+            </div>
+            <div class="chat-send-actions">
+              <div class="chat-composer-model">
+                <label for="chat-model" class="visually-hidden">Model</label>
+                <select id="chat-model"${models.length === 1 ? ' hidden' : ''}>${models.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.id)}</option>`).join('') || '<option value="">No active models</option>'}</select>
+                ${models.length === 1 ? `<span class="chat-model-name" title="${escapeHtml(models[0].id)}">${escapeHtml(models[0].id)}</span>` : ''}
+              </div>
+              <button type="button" id="chat-stop" class="chat-send-button" aria-label="Stop response" title="Stop response" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
+              </button>
+              <button type="submit" id="chat-send" class="chat-send-button" aria-label="Send message" title="Send message">
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-7 7 7-7 7 7"></path></svg>
+              </button>
+            </div>
+          </div>
+        </form>
+        <p id="chat-status" class="chat-status muted" role="status" aria-live="polite"></p>
+        <p id="chat-budget" class="chat-budget muted"></p>
+      </section>
+      <script id="portal-chat-config" type="application/json">${json}</script>
+      <script src="/portal/chat/assets/marked.umd.js" defer></script>
+      <script src="/portal/chat/assets/purify.min.js" defer></script>
+      <script src="/portal/chat/assets/portal-chat.js" defer></script>
+    `
+  });
+});
+
+const chatAssets = new Map([
+  ['portal-chat.js', 'portal-chat.js'],
+  ['portal-chat.css', 'portal-chat.css'],
+  ['marked.umd.js', 'vendor/marked.umd.js'],
+  ['purify.min.js', 'vendor/purify.min.js']
+]);
+router.get('/portal/chat/assets/:filename', requireApprovedStudentSession, (req, res) => {
+  const asset = chatAssets.get(req.params.filename);
+  if (!asset) return res.status(404).send('Not found');
+  res.sendFile(path.join(CLIENT_SCRIPT_DIRECTORY, asset));
+});
+
+router.post('/portal/chat/completions', requireApprovedStudentSession, (req, res, next) => {
+  try {
+    const expected = req.session.portalChatCsrfToken;
+    const supplied = req.get('X-CSRF-Token') || '';
+    const expectedBytes = Buffer.from(expected || '');
+    const suppliedBytes = Buffer.from(supplied);
+    const origin = req.get('Origin');
+    const websiteOrigin = new URL(getWebsiteBaseUrl(req)).origin;
+    if (!expected || suppliedBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(expectedBytes, suppliedBytes) ||
+        req.get('Sec-Fetch-Site') === 'cross-site' || (origin && origin !== websiteOrigin)) {
+      throw apiError(403, 'csrf_invalid', 'Refresh the Chat page and try again.');
+    }
+    if (getSetting('maintenance_mode', 'false') === 'true') throw apiError(503, 'maintenance_mode', 'Server is in maintenance mode.');
+    req.student = req.portalUser;
+    req.body = preparePortalChatPayload(req.body, getActiveModelsForUser(req.portalUser));
+    studentRateLimit(req, res, (error) => error ? next(error) : handleChatCompletion(req, res, next));
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get('/portal/assets/dashboard-usage.js', requireApprovedStudentSession, (_req, res) => {

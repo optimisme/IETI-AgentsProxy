@@ -10,7 +10,7 @@ function startOfTodaySql() {
 }
 
 function startOfHourSql() {
-  return "datetime('now', 'start of hour')";
+  return "strftime('%Y-%m-%d %H:00:00', 'now')";
 }
 
 function getUsageTotals(userId) {
@@ -18,13 +18,15 @@ function getUsageTotals(userId) {
   const today = db.prepare(`
     SELECT COUNT(*) AS calls, COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
-    WHERE user_id = ? AND status = 'success' AND created_at >= ${startOfTodaySql()}
+    WHERE user_id = ? AND (status = 'success' OR (status = 'cancelled' AND total_tokens > 0))
+      AND created_at >= ${startOfTodaySql()}
   `).get(userId);
 
   const hour = db.prepare(`
     SELECT COUNT(*) AS calls, COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
-    WHERE user_id = ? AND status = 'success' AND created_at >= ${startOfHourSql()}
+    WHERE user_id = ? AND (status = 'success' OR (status = 'cancelled' AND total_tokens > 0))
+      AND created_at >= ${startOfHourSql()}
   `).get(userId);
 
   return {
@@ -44,7 +46,7 @@ function recordUsage({ userId, model, providerSlug = null, inputTokens = 0, outp
       (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `).run(userId, model || 'unknown', providerSlug, inputTokens, outputTokens, safeTotal, wasStreaming ? 1 : 0, status, errorMessage);
 
-  if (userId && status === 'success') {
+  if (userId && (status === 'success' || (status === 'cancelled' && safeTotal > 0))) {
     getDb().prepare('UPDATE users SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
   }
 }
@@ -70,7 +72,8 @@ function dailyUsage(days = 15, now = new Date(), userId = null) {
     SELECT substr(created_at, 1, 10) AS date, COUNT(*) AS calls,
       COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
-    WHERE status = 'success' AND created_at >= ? AND created_at < ?
+    WHERE (status = 'success' OR (status = 'cancelled' AND total_tokens > 0))
+      AND created_at >= ? AND created_at < ?
       ${userFilter}
     GROUP BY substr(created_at, 1, 10)
   `).all(...parameters);
@@ -90,7 +93,7 @@ function topActiveUsers(days = 15, limit = 10, now = new Date()) {
       COALESCE(SUM(usage_logs.total_tokens), 0) AS tokens
     FROM usage_logs
     JOIN users ON users.id = usage_logs.user_id
-    WHERE usage_logs.status = 'success'
+    WHERE (usage_logs.status = 'success' OR (usage_logs.status = 'cancelled' AND usage_logs.total_tokens > 0))
       AND usage_logs.created_at >= ? AND usage_logs.created_at < ?
     GROUP BY users.id
     ORDER BY calls DESC, tokens DESC, users.id ASC
@@ -112,7 +115,7 @@ function dashboardSummary(now = new Date()) {
     SELECT usage_logs.*, users.email
     FROM usage_logs
     LEFT JOIN users ON users.id = usage_logs.user_id
-    WHERE usage_logs.status != 'success'
+    WHERE usage_logs.status NOT IN ('success', 'cancelled')
     ORDER BY usage_logs.created_at DESC, usage_logs.id DESC
     LIMIT 10
   `).all();

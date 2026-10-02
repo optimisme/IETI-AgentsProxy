@@ -36,12 +36,13 @@ function usage(userId, createdAt, tokens = 7, status = 'success') {
   `).run(userId, tokens, status, createdAt).lastInsertRowid);
 }
 
-test('daily usage includes exactly 15 UTC calendar days, fills gaps and counts successful calls only', () => {
+test('daily usage includes exactly 15 UTC calendar days, fills gaps and counts completed calls and charged cancellations', () => {
   const student = user('Alice');
   usage(student, '2026-09-17 23:59:59', 10000);
   usage(student, '2026-09-18 00:00:00', 11);
   usage(student, '2026-09-19 12:00:00', 5000, 'error');
-  usage(student, '2026-10-01 23:59:59', 13);
+  usage(student, '2026-10-01 23:59:59', 13, 'cancelled');
+  usage(student, '2026-10-02 12:00:00', 0, 'cancelled');
   usage(student, '2026-10-02 00:00:00', 17);
   usage(student, '2026-10-02 23:59:59', 19);
   usage(student, '2026-10-03 00:00:00', 10000);
@@ -70,14 +71,15 @@ test('empty usage and UTC boundaries produce complete buckets across a leap day'
   assert.deepEqual(summary.recentCalls, []);
 });
 
-test('student daily usage isolates successful calls within UTC boundaries from other and anonymous users', () => {
+test('student daily usage isolates completed calls and charged cancellations within UTC boundaries from other and anonymous users', () => {
   const alice = user('Alice');
   const bob = user('Bob');
   const removed = user('Removed');
   usage(alice, '2026-09-17 23:59:59', 10000);
   usage(alice, '2026-09-18 00:00:00', 11);
   usage(alice, '2026-10-01 23:59:59', 13);
-  usage(alice, '2026-10-02 00:00:00', 17);
+  usage(alice, '2026-10-02 00:00:00', 17, 'cancelled');
+  usage(alice, '2026-10-02 12:00:00', 0, 'cancelled');
   usage(alice, '2026-10-02 23:59:59', 19);
   usage(alice, '2026-10-02 12:00:00', 10000, 'error');
   usage(alice, '2026-10-03 00:00:00', 10000);
@@ -123,7 +125,7 @@ test('new, nonexistent, zero and deleted student ids receive zero-filled daily b
   }
 });
 
-test('active users rank by successful calls, tokens and user id with the same date window and limit', () => {
+test('active users rank by completed calls and charged cancellations, tokens and user id with the same date window and limit', () => {
   const alice = user('Alice');
   const bob = user('Bob', 0);
   const carol = user('Carol');
@@ -132,7 +134,8 @@ test('active users rank by successful calls, tokens and user id with the same da
   usage(alice, '2026-09-18 00:00:00', 10);
   usage(alice, '2026-10-02 23:59:59', 10);
   usage(bob, '2026-10-02 12:00:00', 20);
-  usage(bob, '2026-10-02 13:00:00', 20);
+  usage(bob, '2026-10-02 13:00:00', 20, 'cancelled');
+  usage(bob, '2026-10-02 12:00:00', 0, 'cancelled');
   usage(carol, '2026-10-02 12:00:00', 20);
   usage(carol, '2026-10-02 13:00:00', 20);
   usage(dan, '2026-10-02 12:00:00', 1000);

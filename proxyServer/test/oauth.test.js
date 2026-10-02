@@ -169,7 +169,7 @@ test('OAuth links an existing verified email without duplication and invalidates
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(student.id);
   assert.equal(user.password_hash, originalPassword);
   assert.equal(user.invite_token_nonce, null);
-  await agent.get('/portal').expect(200).expect(/Agent configuration/);
+  await agent.get('/portal').expect(200).expect(/OpenCode configuration/);
 });
 
 test('OAuth links and logs in an approved teacher account', async () => {
@@ -185,7 +185,7 @@ test('OAuth links and logs in an approved teacher account', async () => {
   const user = db.prepare('SELECT role FROM users WHERE id = ?').get(teacher.id);
   assert.equal(user.role, 'teacher');
   assert.equal(db.prepare('SELECT user_id FROM user_identities WHERE provider = ? AND subject = ?').get('google', profile.subject).user_id, teacher.id);
-  await agent.get('/portal').expect(200).expect(/Agent configuration/);
+  await agent.get('/portal').expect(200).expect(/OpenCode configuration/);
 });
 
 test('OAuth auto-registration creates a restricted pending user that becomes active after group assignment', async () => {
@@ -205,7 +205,7 @@ test('OAuth auto-registration creates a restricted pending user that becomes act
   assert.match(pendingPage.text, /Account awaiting approval/);
   assert.match(pendingPage.text, /administrator must assign your account to a course group/);
   assert.match(pendingPage.text, new RegExp(profile.email.replace('.', '\\.')));
-  assert.doesNotMatch(pendingPage.text, /Agent configuration/);
+  assert.doesNotMatch(pendingPage.text, /OpenCode configuration/);
   assert.doesNotMatch(pendingPage.text, /href="\/portal\/settings"/);
   await agent.post('/portal/key/regenerate').expect(302).expect('Location', '/portal');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM user_api_keys WHERE user_id = ?').get(user.id).count, 0);
@@ -228,7 +228,7 @@ test('OAuth auto-registration creates a restricted pending user that becomes act
   const approved = db.prepare('SELECT registration_status, role FROM users WHERE id = ?').get(user.id);
   assert.equal(approved.registration_status, 'approved');
   assert.equal(approved.role, 'teacher');
-  await agent.get('/portal').expect(200).expect(/Agent configuration/);
+  await agent.get('/portal').expect(200).expect(/OpenCode configuration/);
 });
 
 test('a recreated Google subject creates a review and preserve keeps the account configuration', async () => {
