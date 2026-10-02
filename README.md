@@ -255,7 +255,7 @@ Si Google recrea un compte institucional amb el mateix correu i un `sub` diferen
 
 El portal ofereix `set_agents_opencode.sh` (Linux/macOS) i `set_agents_opencode.ps1` (Windows). Configuren el proveidor `ieti-agents` globalment per a l'usuari actual, sense crear fitxers al projecte ni iniciar OpenCode.
 
-- **Linux/macOS:** Bash i Python 3.9 o superior (`python3`), nomes amb la biblioteca estandard. Python tambe descarrega l'script des del portal; no necessita Node.js, npm, pip ni curl.
+- **Linux/macOS:** Bash i Python 3.9 o superior (`python3`), nomes amb la biblioteca estandard. La comanda del portal utilitza curl per descarregar l'script i Bash l'executa nomes si la descarrega te exit, sense crear fitxers temporals. L'instal·lador utilitza Python; no necessita Node.js, npm ni pip.
 - **Windows:** PowerShell 5.1 o superior, amb HTTP i JSON natius de PowerShell/.NET; no necessita cap runtime ni paquet addicional.
 
 Python s'executa directament, sense crear cap entorn virtual ni cache de bytecode. Els fitxers temporals de validacio i preparacio s'eliminen en acabar, tambe en cas d'error o cancel·lacio; nomes es conserven la configuracio global, la clau i les copies `.bak` de la configuracio.

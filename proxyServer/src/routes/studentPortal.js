@@ -109,71 +109,7 @@ function getClientScriptUrl(req, filename) {
 function getClientScriptCommand(req, filename) {
   const scriptUrl = getClientScriptUrl(req, filename);
   if (filename.endsWith('.sh')) {
-    const downloader = String.raw`import sys
-if sys.version_info < (3, 9):
-    sys.stderr.write("Error: Python 3.9 or newer is required.\n")
-    sys.exit(1)
-import http.client, queue, subprocess, threading, time, urllib.parse
-results = queue.Queue(1)
-connected = threading.Event()
-started = time.monotonic()
-def download():
-    connection = None
-    script = None
-    try:
-        url = urllib.parse.urlsplit(sys.argv[2])
-        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
-            raise ValueError("Invalid server URL")
-        transport = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
-        connection = transport(url.hostname, url.port, timeout=10)
-        connection.connect()
-        connected.set()
-        connection.sock.settimeout(max(0.01, 30 - (time.monotonic() - started)))
-        target = urllib.parse.urlunsplit(("", "", url.path or "/", url.query, ""))
-        connection.request("GET", target, headers={"Accept": "text/plain"})
-        with connection.getresponse() as response:
-            if response.status != 200:
-                raise ValueError("Unexpected response")
-            body = response.read(65537)
-            if len(body) > 65536:
-                raise ValueError("Setup script is too large")
-            script = body.decode("utf-8")
-    except Exception:
-        pass
-    finally:
-        try:
-            if connection:
-                connection.close()
-        except Exception:
-            pass
-        results.put(script)
-        connected.set()
-def fail():
-    sys.stderr.write("Could not download the IETI setup script. Check the server URL and try again.\n")
-    sys.exit(1)
-worker = threading.Thread(target=download, daemon=True)
-try:
-    worker.start()
-    if not connected.wait(10):
-        fail()
-    try:
-        script = results.get(timeout=max(0, 30 - (time.monotonic() - started)))
-    except queue.Empty:
-        fail()
-    worker.join()
-    if script is None:
-        fail()
-    try:
-        code = subprocess.call(["bash", "-c", script])
-    except OSError:
-        sys.stderr.write("Could not start Bash.\n")
-        sys.exit(1)
-except KeyboardInterrupt:
-    sys.stderr.write("Setup cancelled.\n")
-    sys.exit(130)
-sys.exit(code if code >= 0 else 128 - code)
-`;
-    return `python3 -I -B -c ${shellQuote(`exec(${JSON.stringify(downloader)})`)} -- ${shellQuote(scriptUrl)}`;
+    return `ieti_setup=$(curl -fsSL --connect-timeout 10 --max-time 30 --max-redirs 3 --max-filesize 65536 ${shellQuote(scriptUrl)}) && bash -c "$ieti_setup"`;
   }
   return `$p=Join-Path $env:TEMP ('ieti-set-agents-server-'+[Guid]::NewGuid().ToString('N')+'.ps1'); try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`;
 }
@@ -592,8 +528,14 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <h1>${escapeHtml(user.name)}</h1>
       <p class="muted">${escapeHtml(user.email)}</p>
       <div class="panel" style="margin-top:16px">
-        <h2>Agent configuration</h2>
-        <p>Run the command for your operating system to install or update your global OpenCode configuration with your available models and capabilities. Confirm the server URL and enter your API key when requested. You can keep or replace a valid saved key, or uninstall an existing configuration. macOS/Linux requires Python 3.9+; Windows uses built-in PowerShell. Existing project settings can override global settings.</p>
+        <h2>OpenCode configuration</h2>
+        <ol>
+          <li>Install OpenCode Terminal or Desktop from <a href="https://opencode.ai/download" target="_blank" rel="noopener noreferrer">https://opencode.ai/download</a>.</li>
+          <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
+          <li>Run the next command for your operating system to install or update your global OpenCode configuration.</li>
+          <li>Run OpenCode (desktop or terminal).</li>
+          <li>Optionally configure other harnesses manually using your <a href="#active-models-heading">Active Models</a> parameters.</li>
+        </ol>
         <label>macOS/Linux</label>
         <div class="command-row">
           <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>

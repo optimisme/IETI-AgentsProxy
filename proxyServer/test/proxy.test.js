@@ -1944,7 +1944,7 @@ test('active streams can outlive the request handshake timeout', async () => {
   }
 });
 
-test('portal shell setup downloads with Python and runs Bash only after a successful response', async (t) => {
+test('portal shell setup downloads with curl and runs Bash only after a successful response', async (t) => {
   const student = createStudent();
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
@@ -1952,11 +1952,14 @@ test('portal shell setup downloads with Python and runs Bash only after a succes
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   fs.writeFileSync(path.join(project, 'http.py'), 'raise RuntimeError("Project modules must not run")\n');
   let status = 200;
-  let body = "printf 'downloaded-setup-ran\\n'\nexit 7\n";
+  let redirectSucceeds = false;
+  let body = "IFS= read -r answer\nprintf 'downloaded-setup-ran: %s\\n' \"$answer\"\nexit 7\n";
   const urls = [];
   const server = http.createServer((req, res) => {
     urls.push(req.url);
-    res.writeHead(status, { 'Content-Type': 'text/plain', Location: '/redirected' });
+    res.writeHead(redirectSucceeds && req.url === '/redirected' ? 200 : status, {
+      'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body), Location: '/redirected'
+    });
     res.end(body);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -1968,39 +1971,55 @@ test('portal shell setup downloads with Python and runs Bash only after a succes
   assert.ok(encodedCommand);
   const command = encodedCommand.replaceAll('&quot;', '"').replaceAll('&#39;', "'")
     .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
-  assert.match(command, /^python3 -I -B -c /);
+  assert.match(command, /^ieti_setup=\$\(curl -fsSL /);
+  assert.match(command, /--connect-timeout 10/);
+  assert.match(command, /--max-time 30/);
+  assert.match(command, /--max-redirs 3/);
+  assert.match(command, /--max-filesize 65536/);
+  assert.match(command, /bash -c "\$ieti_setup"/);
+  assert.doesNotMatch(command, /python3|http\.client|subprocess|tempfile/);
   const runCommand = () => new Promise((resolve) => {
-    execFile('/bin/bash', ['-c', command], { timeout: 5000, cwd: project, env: { ...process.env, PYTHONPATH: project, PYTHONPYCACHEPREFIX: project, TMPDIR: project } }, (error, stdout, stderr) => {
+    const child = execFile('/bin/bash', ['-c', command], { timeout: 5000, cwd: project, env: { ...process.env, TMPDIR: project } }, (error, stdout, stderr) => {
       resolve({ code: error?.code || 0, stdout, stderr });
     });
+    child.stdin.end('terminal-input\n');
   });
   const successfulDownload = await runCommand();
   assert.equal(successfulDownload.code, 7);
-  assert.match(successfulDownload.stdout, /downloaded-setup-ran/);
+  assert.match(successfulDownload.stdout, /downloaded-setup-ran: terminal-input/);
   assert.equal(successfulDownload.stderr, '');
   for (const failedStatus of [503, 302]) {
     status = failedStatus;
+    const requestsBeforeFailure = urls.length;
     const failedDownload = await runCommand();
-    assert.equal(failedDownload.code, 1);
+    assert.notEqual(failedDownload.code, 0);
     assert.doesNotMatch(failedDownload.stdout, /downloaded-setup-ran/);
-    assert.match(failedDownload.stderr, /Could not download the IETI setup script/);
+    assert.ok(failedDownload.stderr.trim());
+    if (failedStatus === 302) assert.equal(urls.length - requestsBeforeFailure, 4, 'Redirect loops are bounded to three redirects');
   }
+  redirectSucceeds = true;
+  const redirectedDownload = await runCommand();
+  assert.equal(redirectedDownload.code, 7);
+  assert.match(redirectedDownload.stdout, /downloaded-setup-ran: terminal-input/);
+  assert.equal(redirectedDownload.stderr, '');
   status = 200;
   body += '#'.repeat(65536);
   const oversizedDownload = await runCommand();
-  assert.equal(oversizedDownload.code, 1);
+  assert.notEqual(oversizedDownload.code, 0);
   assert.doesNotMatch(oversizedDownload.stdout, /downloaded-setup-ran/);
-  assert.match(oversizedDownload.stderr, /Could not download the IETI setup script/);
-  assert.equal(urls.length, 4);
+  assert.match(oversizedDownload.stderr, /curl: \(63\)/);
+  assert.equal(urls.length, 9);
   for (const url of urls) {
     const parsed = new URL(url, 'http://download.test');
-    assert.equal(parsed.pathname, '/downloads/set_agents_opencode.sh');
-    assert.equal(parsed.searchParams.get('default_base_url'), defaultBaseUrl);
+    if (parsed.pathname !== '/redirected') {
+      assert.equal(parsed.pathname, '/downloads/set_agents_opencode.sh');
+      assert.equal(parsed.searchParams.get('default_base_url'), defaultBaseUrl);
+    }
   }
   await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
   const offlineDownload = await runCommand();
-  assert.equal(offlineDownload.code, 1);
-  assert.match(offlineDownload.stderr, /Could not download the IETI setup script/);
+  assert.notEqual(offlineDownload.code, 0);
+  assert.match(offlineDownload.stderr, /curl: \(7\)/);
   assert.doesNotMatch(offlineDownload.stdout + offlineDownload.stderr, /Traceback|downloaded-setup-ran/);
   assert.deepEqual(fs.readdirSync(project), ['http.py'], 'Downloader must not leave temporary files, environments, or Python caches');
 });
@@ -2045,17 +2064,29 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .set('X-Forwarded-Proto', 'https')
     .expect(200)
     .expect(/Tokens today/)
-    .expect(/Agent configuration/)
+    .expect(/OpenCode configuration/)
     .expect(/global OpenCode configuration/)
     .expect(/set_agents_opencode\.sh/)
     .expect(/set_agents_opencode\.ps1/);
-  assert.match(portal.text, /python3 -I -B -c/);
-  assert.match(portal.text, /macOS\/Linux requires Python 3\.9\+/);
+  assert.match(portal.text, /ieti_setup=\$\(curl -fsSL/);
+  const instructions = portal.text.match(/<h2>OpenCode configuration<\/h2>\s*(<ol>[\s\S]*?<\/ol>)/)?.[1];
+  assert.ok(instructions, 'OpenCode setup instructions must be a numbered list');
+  assert.equal((instructions.match(/<li>/g) || []).length, 5);
+  assert.match(instructions, /href="https:\/\/opencode\.ai\/download"/);
+  assert.match(instructions, /href="\/portal\/settings"/);
+  assert.match(instructions, /href="#active-models-heading"/);
+  assert.match(instructions, /Install OpenCode Terminal or Desktop/);
+  assert.match(instructions, /API key/);
+  assert.match(instructions, /install or update your global OpenCode configuration/);
+  assert.match(instructions, /Run OpenCode/);
+  assert.match(instructions, /other harnesses manually/);
+  assert.doesNotMatch(portal.text, /Agent configuration|macOS\/Linux requires|Existing project settings can override/);
   assert.match(portal.text, /powershell\.exe/);
-  assert.match(portal.text, /connected\.wait\(10\)/);
-  assert.match(portal.text, /30 - \(time\.monotonic\(\) - started\)/);
-  assert.match(portal.text, /subprocess\.call/);
-  assert.doesNotMatch(portal.text, /curl -fsSL|node -e|node:child_process|pip install/);
+  assert.match(portal.text, /--connect-timeout 10/);
+  assert.match(portal.text, /--max-time 30/);
+  assert.match(portal.text, /--max-redirs 3/);
+  assert.match(portal.text, /--max-filesize 65536/);
+  assert.doesNotMatch(portal.text, /python3 -I -B -c|http\.client|subprocess\.call|node -e|node:child_process|pip install/);
   assert.match(portal.text, /Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop/);
   assert.match(portal.text, /\[Guid\]::NewGuid\(\)/);
   assert.match(portal.text, /finally \{ Remove-Item -LiteralPath \$p -Force -ErrorAction SilentlyContinue \}/);
@@ -2064,7 +2095,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.match(portal.text, /class="command-scroll"/);
   assert.equal((portal.text.match(/data-copy-target=/g) || []).length, 2);
   assert.equal((portal.text.match(/data-copy-value=/g) || []).length, 2);
-  assert.match(portal.text, /data-copy-target="ieti-shell-command" data-copy-value="python3 -I -B -c/);
+  assert.match(portal.text, /data-copy-target="ieti-shell-command" data-copy-value="ieti_setup=\$\(curl/);
   assert.match(portal.text, /data-copy-target="ieti-powershell-command" data-copy-value="\$p=Join-Path/);
   assert.match(portal.text, /ieti-shell-command/);
   assert.match(portal.text, /ieti-powershell-command/);
