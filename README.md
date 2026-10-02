@@ -251,155 +251,59 @@ El rol d'usuari (`student` o `teacher`) es tria des de l'administracio en crear 
 
 Si Google recrea un compte institucional amb el mateix correu i un `sub` diferent, la peticio apareix a **OAuth reviews**. L'administrador pot conservar tot el compte i substituir-ne la identitat, reiniciar-lo com un usuari pendent nou, o rebutjar la peticio. El reinici elimina claus, configuracio, converses i missatges; els registres d'us queden anonimitzats.
 
-## Configuracio global d'OpenCode i Atomic Agent
+## Configuracio global d'OpenCode
 
-El portal ofereix `set_agents.sh` (Linux/macOS) i `set_agents.ps1` (Windows). Detecten les ordres `opencode` i `atomic-agent` al `PATH` i configuren nomes els clients instal·lats. No instal·len ni inicien els clients, i no creen fitxers al projecte actual.
+El portal ofereix `set_agents_opencode.sh` (Linux/macOS) i `set_agents_opencode.ps1` (Windows). Configuren el proveidor `ieti-agents` globalment per a l'usuari actual, sense crear fitxers al projecte ni iniciar OpenCode.
 
-- **Windows:** PowerShell 5.1 o superior, amb HTTP i JSON natius de PowerShell/.NET. No necessita Python, Node.js, npm ni Bun.
-- **Linux/macOS:** Bash i Python 3.9+ (`python3`, o `python` si correspon a aquesta versio). Nomes usa la biblioteca estandard; no necessita `pip`, Node.js, npm ni Bun. Python no esta garantit a tots els sistemes: si falta, l'script mostra com instal·lar-lo. La comanda de descarrega del portal utilitza `curl`.
+- **Linux/macOS:** Bash i Node.js, sense paquets npm addicionals; Node tambe descarrega l'script des del portal.
+- **Windows:** PowerShell 5.1 o superior, amb HTTP i JSON natius de PowerShell/.NET; no necessita cap runtime ni paquet addicional.
 
 ```bash
-./proxyServer/assets/set_agents.sh
-# Override opcional de la URL; accepta l'arrel o /v1:
-PROXY_AGENTS_BASE_URL=https://agents.ieti.site ./proxyServer/assets/set_agents.sh
+./proxyServer/assets/set_agents_opencode.sh
 ```
 
 ```powershell
-.\proxyServer\assets\set_agents.ps1
-# Override opcional de la URL:
-$env:PROXY_AGENTS_BASE_URL = 'https://agents.ieti.site'
-.\proxyServer\assets\set_agents.ps1
+.\proxyServer\assets\set_agents_opencode.ps1
 ```
 
-La primera execucio demana la URL si no existeix a la configuracio global i demana la clau amb entrada oculta. Les execucions posteriors reutilitzen la URL i la clau. `PROXY_AGENTS_BASE_URL` i `PROXY_AGENTS_KEY` permeten substituir aquests valors per a una execucio; `--sync-only` (Bash) o `-SyncOnly` (PowerShell) impedeixen preguntes interactives. No poseu claus a les URL.
+L'script descarregat des del portal incorpora la URL publica del servidor. En instal·lar o actualitzar, mostra aquesta URL per confirmar-la: Enter l'accepta i un altre valor la substitueix. `PROXY_AGENTS_BASE_URL` permet proporcionar una URL alternativa; s'accepta tant l'arrel del servidor com una URL acabada en `/v1`.
+
+Si ja existeix una configuracio IETI o la seva clau global, l'script ofereix **Update** (per defecte) o **Uninstall**. L'actualitzacio valida la clau desada amb `GET /v1/model-capabilities`. Si falta o es invalida, en demana una amb entrada oculta. Si funciona, ofereix **Keep** (per defecte) o **Replace**. Una clau substituta es valida abans de desar-la.
+
+La peticio de validacio te un limit de 30 segons; Bash i PowerShell modern limiten tambe la connexio a 10 segons. PowerShell 5.1 aplica el limit total de 30 segons. Un error de xarxa, timeout, limit de peticions, compte deshabilitat, autenticacio, cataleg o JSON conserva la configuracio i la clau anteriors. Un error temporal del servidor no es tracta com una clau invalida. Les dades nomes s'escriuen despres de validar la resposta i preparar tots els canvis.
 
 | Fitxer global | Contingut |
 |---|---|
 | `~/.config/opencode/opencode.json` | Proveidor `ieti-agents`, models, limits, modalitats i variants de raonament |
 | `~/.config/ieti-agents/agents_server_key` | Clau reutilitzable; OpenCode la referencia amb una ruta absoluta |
-| `~/.atomic-agent/config.json` | Proveidor `openai-compatible` i `userModels` amb context, visio, eines, raonament i parametres de sortida |
-| `~/.atomic-agent/.env` | `IETI_AGENTS_API_KEY`, referenciada amb `apiKeyEnvVar` |
 
-A Windows, `~` correspon a la carpeta de l'usuari. Es respecten `XDG_CONFIG_HOME` i `ATOMIC_AGENT_STATE_DIR`. Si existeix `opencode.jsonc`, s'actualitza aquest fitxer; els comentaris es conserven a la copia `.bak`, i la configuracio actualitzada s'escriu com a JSON. Si existeixen alhora `opencode.json` i `opencode.jsonc`, cal consolidar-los abans per evitar que la fusio d'OpenCode recuperi models antics.
+A Windows, `~` correspon a `%USERPROFILE%`. Es respecta `XDG_CONFIG_HOME` quan esta definit. Si existeix `opencode.jsonc`, s'actualitza aquest fitxer; els comentaris es conserven a la copia `.bak`, i la configuracio actualitzada s'escriu com a JSON. Si existeixen alhora `opencode.json` i `opencode.jsonc`, cal consolidar-los abans.
 
-Abans de canviar cap configuracio, es valida `GET /v1/model-capabilities` amb la clau de l'usuari i es comproven tots els models i fitxers. Un error de xarxa, autenticacio, cataleg o JSON conserva la configuracio existent. Els fitxers canviats de configuracio i `.env` tenen una copia `.bak`; les claus i els fitxers generats tenen permisos restrictius (`0600` a Unix, ACL de l'usuari a Windows). Es conserven altres proveidors, MCPs, preferencies i secrets. Els models d'IETI es substitueixen pel cataleg actual i desapareixen els que l'usuari ja no te assignats.
+Es conserven altres proveidors, MCPs, plugins, permisos i opcions personalitzades. Els models d'IETI es substitueixen pel cataleg actual. Es conserva el model seleccionat d'un altre proveidor; un model IETI que ja no esta disponible es substitueix per un del cataleg. Els fitxers de configuracio canviats tenen una copia `.bak`; les claus i els fitxers generats tenen permisos restrictius (`0600` a Unix, ACL de l'usuari a Windows).
 
-Atomic Agent utilitza `userModels[].params.max_tokens` per al limit de sortida de cada model, `parallel_tool_calls` per al suport d'eines paral·leles i el `reasoning_effort` per defecte quan esta publicat. El format de raonament es detecta automaticament quan el model en suporta. El cataleg no declara cache de prompts ni preus, per tant no s'inventen aquestes capacitats. Les variants interactives de raonament s'exporten a OpenCode; Atomic Agent rep el valor per defecte. [Format d'Atomic Agent](https://atomicagent.io/docs/features/models/#declaring-models-yourself).
-
-Es conserva el model/proveidor seleccionat si encara es valid; quan falta, se'n selecciona un del cataleg. Si un altre proveidor ja es actiu, IETI s'afegeix sense substituir-lo. Reinicieu els clients despres d'executar l'script. Les configuracions locals d'OpenCode continuen tenint prioritat sobre la global: un `opencode.json` creat per l'script antic pot requerir retirar-ne manualment el proveidor IETI per utilitzar la configuracio global. Reexecuteu l'script quan canviin els models o capacitats del grup; no es una sincronitzacio automatica en segon pla.
-
-### Scripts antics per projecte
-
-Els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` continuen disponibles per compatibilitat i conserven el seu comportament local i la dependencia de Node.js. El portal ara ofereix els nous scripts globals. La seccio seguent documenta el flux antic.
-
-## Us amb OpenCode
-
-En el flux antic per projecte, la comanda descarrega `set_agents_opencode.sh` o `set_agents_opencode.ps1` des del mateix servidor i executa l'script en el directori actual. L'script:
-
-- detecta automaticament el domini i port publicats pel portal i els utilitza com a URL per defecte;
-- reutilitza la URL de `provider.ieti-agents.options.baseURL` si ja existeix a `opencode.json` i nomes la demana si no la pot trobar;
-- demana la clau API nomes la primera vegada, si no existeix `.secrets/agents_server_key`;
-- crea `.secrets/agents_server_key` amb permisos restrictius i reutilitza la clau existent en execucions posteriors, sense tornar-la a demanar;
-- consulta `GET /v1/model-capabilities` amb la clau autenticada per obtenir els models i les seves capacitats;
-- genera o actualitza automaticament el proveidor `ieti-agents` i els models visibles a l'`opencode.json` local;
-- valida la connexio abans de modificar la configuracio i no desa la clau en cap variable d'entorn;
-- no inicia ni obre OpenCode.
-
-La comanda antiga per projecte a macOS/Linux té aquesta forma:
+La desinstal·lacio funciona sense connexio al servidor. Elimina nomes el proveidor IETI, les seleccions `model` i `small_model` que l'utilitzen i la seva clau global; conserva la resta de la configuracio d'OpenCode. Tambe es pot executar directament:
 
 ```bash
-bash -c "$(curl -fsSL 'https://your-public-domain.example/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fyour-public-domain.example%2Fv1')"
+./proxyServer/assets/set_agents_opencode.sh --uninstall
 ```
 
-El valor de `default_base_url` s'injecta automaticament en generar la comanda. També es pot indicar manualment per a una execució no interactiva:
+```powershell
+.\proxyServer\assets\set_agents_opencode.ps1 -Uninstall
+```
+
+`--sync-only` (Bash) o `-SyncOnly` (PowerShell) impedeixen preguntes interactives i reutilitzen la clau desada. `PROXY_AGENTS_KEY` permet proporcionar una clau nova per a una execucio sense preguntes; no s'ha de posar la clau a la URL ni desar-la al repositori.
 
 ```bash
-PROXY_AGENTS_BASE_URL=https://agents.ieti.site/v1 ./set_agents_opencode.sh
+PROXY_AGENTS_BASE_URL=https://agents.ieti.site/v1 ./proxyServer/assets/set_agents_opencode.sh --sync-only
 ```
 
-Exemple de configuracio generada:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "ieti-agents": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "IETI Agents",
-      "options": {
-        "baseURL": "https://your-public-domain.example/v1",
-        "apiKey": "{file:.secrets/agents_server_key}",
-        "timeout": 900000,
-        "chunkTimeout": 600000
-      },
-      "models": {
-        "deepseek-chat": {
-          "limit": {
-            "context": 90000,
-            "output": 8192
-          },
-          "tool_call": true,
-          "reasoning": true,
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          }
-        }
-      }
-    }
-  },
-  "model": "ieti-agents/deepseek-chat"
-}
-```
+Les configuracions locals d'OpenCode tenen prioritat sobre la global: un `opencode.json` creat per una versio anterior de l'script pot requerir retirar-ne manualment el proveidor IETI per utilitzar la configuracio global. Reinicieu OpenCode despres dels canvis i reexecuteu l'script quan canviin els models o capacitats del grup.
 
 `GET /v1/model-capabilities` publica, amb autenticacio Bearer, el cataleg dinamic de models virtuals assignat a l'usuari. El contracte IETI inclou `schema_version`, limits de context i sortida, modalitats, eines i raonament; es manté separat de l'endpoint OpenAI estandard `GET /v1/models`. Cada model pot publicar també `reasoning_efforts`, `default_reasoning_effort` i `supports_chat_template_kwargs`.
 
-Els nivells de raonament es configuren per mapping des de l'administracio. Si no se'n selecciona cap, el client no envia `reasoning_effort` i es conserva el comportament per defecte del proveidor. Si el model no admet raonament, OpenCode no mostra variants. Si n'admet, el llançador crea variants nomes per als nivells publicats i desactiva explicitament els nivells generics no compatibles.
+Els nivells de raonament es configuren per mapping des de l'administracio. Si no se'n selecciona cap, el client no envia `reasoning_effort` i es conserva el comportament per defecte del proveidor. Si el model no admet raonament, OpenCode no mostra variants. Si n'admet, l'script crea variants per als nivells publicats i desactiva explicitament els nivells generics no compatibles.
 
 El proxy accepta `reasoning_effort` a Chat Completions i `reasoning.effort` a Responses. Per als servidors vLLM que ho necessitin es pot habilitar el pas restringit de `chat_template_kwargs`; nomes s'accepten `enable_thinking`, `preserve_thinking` i `reasoning_effort`. Un nivell o override no declarat pel mapping es rebutja abans de contactar el proveidor.
-
-L'script substitueix exclusivament els models de `provider.ieti-agents` pels models disponibles per a aquella clau. Conserva la resta de l'`opencode.json`, inclosos altres proveidors, MCPs, plugins, permisos i opcions personalitzades. Sempre acaba despres d'actualitzar la configuracio; per iniciar OpenCode, executa'l per separat.
-
-```bash
-./set_agents_opencode.sh
-```
-
-La URL de l'API es pot injectar com a valor per defecte en descarregar l'script. L'usuari encara pot substituir-la quan l'executa.
-
-A Windows, `set_agents_opencode.ps1` ofereix el mateix flux des de PowerShell i comparteix `.secrets/agents_server_key` i `opencode.json` amb la versio Bash. Encara que el fitxer `.ps1` es descarregui temporalment a `%TEMP%`, les dades es llegeixen i s'escriuen en el directori actual; per tant, una clau existent es reutilitza correctament:
-
-```powershell
-.\set_agents_opencode.ps1
-```
-
-Les dues versions nomes configuren el proveidor `ieti-agents`; no obren ni executen el binari d'OpenCode.
-
-### BuildLite
-
-El portal també ofereix una comanda separada per instal·lar el BuildLite harness. La comanda descarrega `buildlite_harness.zip` a la carpeta actual, extreu el seu contingut directament a l'arrel del projecte —mantenint `.agents/` i `AGENTS.md` fora d'una carpeta contenidora— i crea l'enllaç que necessita OpenCode:
-
-- macOS/Linux: enllaç simbòlic `.opencode -> .agents`;
-- Windows: junction de directoris amb `mklink /J .opencode .agents`.
-
-Els scripts són `set_harness_buildlite.sh` i `set_harness_buildlite.ps1`. El portal mostra la comanda corresponent per a cada sistema operatiu.
-
-Amb `build_lite` seleccionat, el subagent `task_router` classifica cada petició amb el context mínim necessari. Retorna quatre línies amb el mode, l'objectiu, el destí i les restriccions; no utilitza eines. El coordinador segueix un dels dos camins:
-
-- `IMPLEMENT`: canvis demanats al codi, la configuració o els tests. Manté el flux de planificació, edició, revisió i validació documentada.
-- `GENERAL`: explicacions, recerca, diagnòstic sense canvis, revisió, planificació i redacció. Respon directament o consulta especialistes quan cal; els canvis de text demanats passen a l'editor sense activar tot el flux de programació.
-
-Per exemple, «explica aquest error» o «com el corregiries?» segueixen `GENERAL`; «corregeix aquest error» o «implementa la proposta anterior» segueixen `IMPLEMENT`. Una pregunta d'estat no activa noves edicions ni elimina la feina pendent. Si la classificació no és clara, el coordinador segueix `GENERAL` i demana aclariments només quan són necessaris. La resposta general no inclou un resum artificial de fitxers modificats o tests.
-
-El harness prioritza context petit a cada pas i més comprovacions, encara que calguin més crides:
-
-- `state_keeper` desa les tasques amb edicions a `.agents/state/<task-id>.md`: objectiu, restriccions, criteris d'acceptació, decisions, feina pendent, resultats i comptadors de recuperació. Només pot llegir i editar aquests fitxers d'estat. Els resums de represa inclouen com a màxim quatre elements rellevants; la resta es conserva al fitxer. Les consultes sense edicions no creen estat tret que l'usuari ho demani.
-- Cada criteri té un identificador estable i un màxim de tres rondes de recuperació després de l'intent inicial: obtenir evidència precisa, reduir o replantejar el canvi, i revisar independentment les hipòtesis. Dividir una tasca o reprendre-la no reinicia el pressupost. Dues delegacions consecutives sense progrés també aturen el treball; repetir un resum o canviar un nom no compta com a progrés.
-- La revisió local és provisional. Abans de completar la implementació es revisen tots els criteris i les connexions entre els fitxers modificats, en lots petits. Els resultats de tests es registren separadament de la inspecció del codi. Una correcció invalida les comprovacions afectades.
-- Els resums conserven referències exactes: fitxer i símbol/línies, URL i secció, o imatge i regió. Si falta context o una referència és obsoleta, l'especialista torna a consultar la font.
-
-Per limitar bucles, `build_lite` té un màxim de 60 passos per invocació i només pot delegar als especialistes enumerats, que també tenen límits finits i no poden delegar. Els comptadors de recuperació i de manca de progrés són regles dels prompts, no un comptador executable independent. En arribar a un límit, el coordinador desa el punt de represa i informa del bloqueig o de la feina pendent; no es reinicia automàticament per esquivar-lo. L'arxiu distribuït no conté estat de tasques.
-
-L'instal·lador conserva les instruccions existents a `AGENTS.md` i hi afegeix un bloc delimitat per `<!-- buildlite:start -->` i `<!-- buildlite:end -->`. Les reinstal·lacions actualitzen només aquest bloc. Si `.opencode` entra en conflicte amb una carpeta o un enllaç existent, s'atura abans de modificar les instruccions o els agents del projecte.
 
 Cada usuari pot tenir diverses claus API actives. Des de `Settings`, **Add API key** obre el popup de creacio, on l'usuari copia la clau i defineix un nom unic per al seu compte. El boto **Add key** nomes s'activa quan el nom no esta buit i no existeix encara, sense distingir majuscules i minuscules. Les claus es mostren emmascarades a la llista i es poden eliminar individualment; tant l'alta com la baixa tornen a `Settings` i el popup de la clau nova no apareix al dashboard.
 

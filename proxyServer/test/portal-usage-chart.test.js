@@ -107,9 +107,13 @@ test('portal chart shows only the signed-in student’s successful calls and ign
   assert.equal(rows.reduce((total, row) => total + row.tokens, 0), 28);
   assert.match(response.text, /<code>portal-chart-model<\/code>/);
   const modelsPosition = response.text.indexOf('<h2 id="active-models-heading">Active models</h2>');
+  const quotaPositions = ['Calls today', 'Tokens today', 'Calls this hour', 'Tokens this hour']
+    .map((label) => response.text.indexOf(`<strong>${label}</strong>`));
   const chartPosition = response.text.indexOf('id="daily-usage-heading"');
   const recentPosition = response.text.indexOf('<h2>Recent usage</h2>');
   assert.ok(modelsPosition >= 0 && modelsPosition < chartPosition && chartPosition < recentPosition);
+  assert.ok(quotaPositions.every((position) => modelsPosition < position && position < chartPosition));
+  assert.equal((response.text.match(/class="quota-grid"/g) || []).length, 1);
   assert.match(response.text, /<script src="\/portal\/assets\/dashboard-usage\.js" defer><\/script>/);
   assert.match(response.text, /Last 15 days, including today · UTC/);
 

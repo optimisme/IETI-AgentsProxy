@@ -3,11 +3,16 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const { execFile, spawnSync } = require('node:child_process');
 const { promisify } = require('node:util');
 const test = require('node:test');
 
-const execFileAsync = promisify(execFile);
+const run = promisify(execFile);
+const requestedPowerShell = process.env.POWERSHELL_BIN || 'pwsh';
+const powershellProbe = spawnSync(requestedPowerShell, ['-NoProfile', '-Command', '[System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName'], { encoding: 'utf8' });
+const hasPowerShell = powershellProbe.status === 0;
+const powershell = hasPowerShell ? powershellProbe.stdout.trim() : requestedPowerShell;
+const assets = path.join(__dirname, '..', 'assets');
 
 function capabilities(models = [{}]) {
   return {
@@ -16,8 +21,8 @@ function capabilities(models = [{}]) {
     data: models.map((model, index) => ({
       id: model.id || `model-${index + 1}`,
       name: model.name,
-      context_window: model.context || 32768,
-      max_output_tokens: model.output || 8192,
+      context_window: model.context ?? 32768,
+      max_output_tokens: model.output ?? 8192,
       capabilities: {
         text: model.text ?? true,
         image: model.image ?? false,
@@ -36,290 +41,324 @@ function capabilities(models = [{}]) {
   };
 }
 
-async function startCapabilitiesServer(t, apiKey, models) {
+test('ps1: installs using PowerShell built-ins with no external helper commands on PATH', {
+  skip: !hasPowerShell && 'PowerShell is unavailable; set POWERSHELL_BIN to exercise native Windows-compatible flow.'
+}, async t => {
+  const f = await fixture(t, 'ps1');
+  const emptyBin = path.join(f.root, 'empty-bin');
+  fs.mkdirSync(emptyBin);
+  f.env.PATH = emptyBin;
+  f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+  await f.launch();
+  assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
+  assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
+});
+
+async function fixture(t, platform) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-opencode-global-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, 'project');
+  const scripts = path.join(root, 'downloaded scripts');
+  const configRoot = path.join(root, 'config home');
+  fs.mkdirSync(cwd); fs.mkdirSync(scripts);
+  const script = path.join(scripts, `set_agents_opencode.${platform}`);
+  fs.copyFileSync(path.join(assets, path.basename(script)), script);
+  const configPath = path.join(configRoot, 'opencode', 'opencode.json');
+  const keyPath = path.join(configRoot, 'ieti-agents', 'agents_server_key');
+  const state = { catalog: capabilities(), status: 200, requests: [], acceptedKeys: new Set(['ieti_sk_saved', 'ieti_sk_replacement']), hang: false };
   const server = http.createServer((req, res) => {
-    if (req.url !== '/v1/model-capabilities' || req.headers.authorization !== `Bearer ${apiKey}`) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: 'Invalid API key.' } }));
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(capabilities(models)));
+    state.requests.push({ path: req.url, authorization: req.headers.authorization });
+    if (state.hang) return;
+    const suppliedKey = String(req.headers.authorization || '').replace(/^Bearer /, '');
+    const status = state.status !== 200 ? state.status : state.acceptedKeys.has(suppliedKey) ? 200 : 401;
+    const messages = { 401: 'Invalid API key.', 403: 'Account disabled.', 429: 'Too many requests.', 503: 'Provider temporarily unavailable.' };
+    res.writeHead(status, { 'Content-Type': 'application/json', ...(status === 302 ? { Location: '/elsewhere' } : {}) });
+    res.end(JSON.stringify(status === 200 ? state.catalog : { error: { message: messages[status] || 'Rejected request.' } }));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  return server.address();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const baseURL = `http://127.0.0.1:${server.address().port}/course/v1`;
+  fs.writeFileSync(script, fs.readFileSync(script, 'utf8').replaceAll('__IETI_DEFAULT_BASE_URL__', baseURL));
+  const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot, PROXY_AGENTS_BASE_URL: `${baseURL}/` };
+  delete env.PROXY_AGENTS_KEY;
+  delete env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS;
+  const write = (file, value) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`);
+  };
+  const launch = (action = 'sync') => platform === 'sh'
+    ? run('/bin/bash', [script, ...(action === 'uninstall' ? ['--uninstall'] : action === 'sync' ? ['--sync-only'] : [])], { cwd, env, timeout: 15000 })
+    : run(powershell, ['-NoProfile', '-File', script, ...(action === 'uninstall' ? ['-Uninstall'] : action === 'sync' ? ['-SyncOnly'] : [])], { cwd, env, timeout: 15000 });
+  const read = (file = configPath) => JSON.parse(fs.readFileSync(file, 'utf8'));
+  return { root, cwd, scripts, script, configRoot, configPath, keyPath, state, baseURL, env, write, read, launch };
 }
 
-function createLauncherDirectory(t, prefix) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const script = path.join(directory, 'set_agents_opencode.sh');
-  const keyDirectory = path.join(directory, '.secrets');
-  const keyPath = path.join(keyDirectory, 'agents_server_key');
-  fs.mkdirSync(keyDirectory, { mode: 0o700 });
-  fs.writeFileSync(keyPath, 'ieti_sk_default\n', { mode: 0o600 });
-  fs.copyFileSync(path.join(__dirname, '..', 'assets', 'set_agents_opencode.sh'), script);
-  fs.chmodSync(script, 0o755);
-  return { directory, script, configPath: path.join(directory, 'opencode.json'), keyPath };
+async function expectFailure(f, pattern) {
+  await assert.rejects(f.launch(), error => {
+    assert.match(`${error.stdout}\n${error.stderr}`, pattern);
+    assert.doesNotMatch(`${error.stdout}\n${error.stderr}`, /ieti_sk_(saved|replacement|invalid)/);
+    return true;
+  });
 }
 
-test('set_agents_opencode updates only the IETI provider models and preserves the rest of opencode.json', async (t) => {
-  const { directory, script, configPath, keyPath } = createLauncherDirectory(t, 'ieti-set-agents-server-');
-  fs.writeFileSync(configPath, `${JSON.stringify({
-    $schema: 'https://opencode.ai/config.json',
-    provider: {
-      existing: { npm: '@ai-sdk/openai-compatible', models: { keep: {} } },
-      'ieti-agents': {
-        custom_property: 'keep-me',
-        options: { customOption: 'keep-me', baseURL: 'https://old.example/v1' },
-        models: { 'removed-model': { name: 'Remove me' } }
-      }
-    },
-    model: 'ieti-agents/removed-model',
-    permission: { bash: 'ask' },
-    mcp: { local: { type: 'local', command: ['example-mcp'] } }
-  }, null, 2)}\n`);
+for (const platform of ['sh', 'ps1']) {
+  const skip = platform === 'ps1' && !hasPowerShell && 'PowerShell is unavailable; set POWERSHELL_BIN to exercise native Windows-compatible flow.';
 
-  const address = await startCapabilitiesServer(t, 'ieti_sk_test_valid', [{
-    id: 'unsloth/Qwen3.8-27B-NVFP4', name: 'Qwen3.8-27B NVFP4', context: 32768, output: 8192,
-    image: true, tools: true, reasoning: true, parallelTools: true,
-    reasoningEfforts: ['low', 'medium', 'xhigh'], defaultReasoningEffort: 'low',
-    chatTemplateKwargs: true
-  }]);
-  fs.writeFileSync(keyPath, 'ieti_sk_test_valid\n');
+  test(`${platform}: updates global model capabilities while preserving unrelated settings and the saved key`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = {
+      $schema: 'https://opencode.ai/config.json',
+      provider: {
+        other: { npm: '@ai-sdk/openai-compatible', models: { keep: {} } },
+        'ieti-agents': {
+          custom_property: 'keep-me',
+          options: { customOption: 'keep-me', baseURL: 'https://old.example/v1' },
+          models: { obsolete: { name: 'Remove me' } }
+        }
+      },
+      model: 'ieti-agents/obsolete',
+      permission: { bash: 'ask' },
+      mcp: { local: { type: 'local', command: ['example-mcp'] }, customDate: '2026-10-02T01:02:03+05:00' }
+    };
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    const localConfig = '{"local":"untouched"}\n';
+    f.write(path.join(f.cwd, 'opencode.json'), localConfig);
+    f.write(path.join(f.scripts, 'opencode.json'), localConfig);
+    f.state.catalog = capabilities([{
+      id: 'vision/reasoner', context: 131072, output: 8192, image: true, tools: true, reasoning: true,
+      parallelTools: true, reasoningEfforts: ['low', 'medium', 'xhigh'], defaultReasoningEffort: 'low'
+    }]);
 
-  const result = await execFileAsync('bash', [script, '--sync-only'], {
-    env: { ...process.env, PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1` }
-  });
-  assert.match(result.stdout, /IETI API key validated/);
-  assert.doesNotMatch(result.stdout, /Paste your IETI Agents API key/);
-
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.deepEqual(config.provider.existing.models, { keep: {} });
-  assert.deepEqual(config.permission, { bash: 'ask' });
-  assert.deepEqual(config.mcp, { local: { type: 'local', command: ['example-mcp'] } });
-  assert.equal(config.model, 'ieti-agents/unsloth/Qwen3.8-27B-NVFP4');
-  assert.equal(config.provider['ieti-agents'].custom_property, 'keep-me');
-  assert.equal(config.provider['ieti-agents'].options.customOption, 'keep-me');
-  assert.equal(config.provider['ieti-agents'].options.apiKey, '{file:.secrets/agents_server_key}');
-  assert.deepEqual(Object.keys(config.provider['ieti-agents'].models), ['unsloth/Qwen3.8-27B-NVFP4']);
-  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].limit.context, 32768);
-  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].limit.output, 8192);
-  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].tool_call, true);
-  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].reasoning, true);
-  assert.deepEqual(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].interleaved, { field: 'reasoning_content' });
-  assert.equal(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].options.reasoningEffort, 'low');
-  assert.deepEqual(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].variants, {
-    none: { disabled: true },
-    minimal: { disabled: true },
-    low: { reasoningEffort: 'low' },
-    medium: { reasoningEffort: 'medium' },
-    high: { disabled: true },
-    xhigh: { reasoningEffort: 'xhigh' },
-    max: { disabled: true }
-  });
-  assert.deepEqual(config.provider['ieti-agents'].models['unsloth/Qwen3.8-27B-NVFP4'].modalities.input, ['text', 'image']);
-  assert.equal(fs.existsSync(path.join(directory, '.opencode', 'ieti-models.json')), false);
-});
-
-test('set_agents_opencode reuses the provider base URL from opencode.json', async (t) => {
-  const { directory, script, configPath, keyPath } = createLauncherDirectory(t, 'ieti-set-agents-server-config-url-');
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', [{ id: 'config-url-model' }]);
-  const baseURL = `http://127.0.0.1:${address.port}/v1`;
-  fs.writeFileSync(configPath, `${JSON.stringify({
-    provider: { 'ieti-agents': { options: { baseURL } } }
-  }, null, 2)}\n`);
-
-  const result = await execFileAsync('bash', [script, '--sync-only'], {
-    env: { ...process.env, PROXY_AGENTS_BASE_URL: '' }
-  });
-
-  assert.match(result.stdout, /IETI API key validated/);
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.equal(config.provider['ieti-agents'].options.baseURL, baseURL);
-  assert.equal(fs.existsSync(path.join(directory, 'settings.env')), false);
-});
-
-test('set_agents_opencode stores the base URL in opencode.json without creating settings.env', async (t) => {
-  const { script, configPath, directory, keyPath } = createLauncherDirectory(t, 'ieti-set-agents-server-first-run-');
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', [{
-    id: 'first-model', context: 64000, output: 4000, tools: true
-  }]);
-
-  const result = await execFileAsync('bash', [script, '--sync-only'], {
-    env: {
-      ...process.env,
-      PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1`
-    }
-  });
-
-  assert.doesNotMatch(result.stdout, /settings\.env/);
-  assert.equal(fs.existsSync(path.join(directory, 'settings.env')), false);
-  assert.equal(fs.readFileSync(keyPath, 'utf8'), 'ieti_sk_default\n');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.equal(config.model, 'ieti-agents/first-model');
-  assert.deepEqual(Object.keys(config.provider['ieti-agents'].models), ['first-model']);
-});
-
-test('set_agents_opencode leaves an existing settings.env untouched', async (t) => {
-  const { script, directory } = createLauncherDirectory(t, 'ieti-set-agents-server-incomplete-settings-');
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', [{ id: 'completed-model' }]);
-  const settingsPath = path.join(directory, 'settings.env');
-  const originalSettings = 'OPENAI_API_KEY=keep-this-value\nPROXY_AGENTS_KEY=ieti_sk_legacy\n';
-  fs.writeFileSync(settingsPath, originalSettings);
-
-  const result = await execFileAsync('bash', [script, '--sync-only'], {
-    env: {
-      ...process.env,
-      PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1`
-    }
-  });
-
-  assert.doesNotMatch(result.stdout, /settings\.env/);
-  assert.equal(fs.readFileSync(settingsPath, 'utf8'), originalSettings);
-});
-
-test('set_agents_opencode rejects an invalid key without changing opencode.json', async (t) => {
-  const { script, configPath, keyPath } = createLauncherDirectory(t, 'ieti-set-agents-server-invalid-');
-  fs.writeFileSync(configPath, '{"untouched":true}\n');
-  const server = http.createServer((_req, res) => {
-    res.writeHead(401, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: 'Invalid API key.' } }));
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  const address = server.address();
-  fs.writeFileSync(keyPath, 'ieti_sk_invalid\n');
-
-  await assert.rejects(
-    execFileAsync('bash', [script, '--sync-only'], {
-      env: { ...process.env, PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1` }
-    }),
-    (error) => {
-      assert.match(error.stdout, /HTTP 401.*Invalid API key/);
-      return true;
-    }
-  );
-  assert.equal(fs.readFileSync(configPath, 'utf8'), '{"untouched":true}\n');
-});
-
-test('set_agents_opencode rejects an invalid first-run base URL without creating settings.env', async (t) => {
-  const { script, directory } = createLauncherDirectory(t, 'ieti-set-agents-server-invalid-url-');
-  await assert.rejects(
-    execFileAsync('bash', [script, '--sync-only'], {
-      env: {
-        ...process.env,
-        PROXY_AGENTS_BASE_URL: 'not-a-url',
-      }
-    }),
-    (error) => {
-      assert.match(error.stdout, /PROXY_AGENTS_BASE_URL must be a valid HTTP\(S\) base URL/);
-      return true;
-    }
-  );
-  assert.equal(fs.existsSync(path.join(directory, 'settings.env')), false);
-});
-
-test('set_agents_opencode only updates configuration and never starts OpenCode', async (t) => {
-  const { directory, script } = createLauncherDirectory(t, 'ieti-set-agents-server-no-launch-');
-  const binDirectory = path.join(directory, 'bin');
-  const capturePath = path.join(directory, 'unexpected-opencode-launch');
-  fs.mkdirSync(binDirectory);
-  fs.writeFileSync(
-    path.join(binDirectory, 'opencode'),
-    '#!/bin/sh\ntouch "$CAPTURE_PATH"\n'
-  );
-  fs.chmodSync(path.join(binDirectory, 'opencode'), 0o755);
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', [{ id: 'configured-model' }]);
-  await execFileAsync('bash', [script], {
-    env: {
-      ...process.env,
-      PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
-      PATH: `${binDirectory}:${process.env.PATH}`,
-      CAPTURE_PATH: capturePath
-    }
-  });
-
-  assert.equal(fs.existsSync(capturePath), false);
-});
-
-test('set_agents_opencode does not open OpenCode by default', async (t) => {
-  const { directory, script } = createLauncherDirectory(t, 'ieti-set-agents-server-no-desktop-');
-  const desktopPath = path.join(directory, 'fake-opencode-desktop');
-  const capturePath = path.join(directory, 'desktop-invocations');
-  fs.writeFileSync(desktopPath, '#!/bin/sh\nprintf "<%s>\\n" "$*" >> "$CAPTURE_PATH"\n');
-  fs.chmodSync(desktopPath, 0o755);
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', [{ id: 'desktop-model' }]);
-  await execFileAsync('bash', [script], {
-    env: {
-      ...process.env,
-      PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
-      CAPTURE_PATH: capturePath,
-      OPENCODE_DESKTOP_BIN: desktopPath
-    }
-  });
-
-  assert.equal(fs.existsSync(capturePath), false);
-});
-
-test('set_agents_opencode does not read settings.env as executable input', async (t) => {
-  const { directory, script } = createLauncherDirectory(t, 'ieti-set-agents-server-safe-settings-');
-  const marker = path.join(directory, 'must-not-exist');
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', [{ id: 'safe-model' }]);
-  fs.writeFileSync(path.join(directory, 'settings.env'), [
-    `PROXY_AGENTS_BASE_URL=http://127.0.0.1:${address.port}/v1`,
-    `UNSAFE_VALUE=$(touch ${marker})`,
-    ''
-  ].join('\n'));
-
-  await execFileAsync('bash', [script, '--sync-only'], {
-    env: { ...process.env, PROXY_AGENTS_BASE_URL: `http://127.0.0.1:${address.port}/v1` }
-  });
-  assert.equal(fs.existsSync(marker), false);
-});
-
-test('Bash and PowerShell generators agree and remove stale reasoning settings when capabilities change', async (t) => {
-  const { directory, script, configPath } = createLauncherDirectory(t, 'ieti-reasoning-sync-');
-  const models = [{ id: 'thinking-model', reasoning: true, reasoningEfforts: ['low', 'high'] }];
-  const address = await startCapabilitiesServer(t, 'ieti_sk_default', models);
-  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-  const psScript = fs.readFileSync(path.join(__dirname, '..', 'assets', 'set_agents_opencode.ps1'), 'utf8');
-  const mergeScript = psScript.match(/\$mergeScript = @'\r?\n([\s\S]*?)\r?\n'@/)[1];
-  const catalogPath = path.join(directory, 'capabilities.json');
-  const psConfigPath = path.join(directory, 'powershell-config.json');
-  const psOutputPath = path.join(directory, 'powershell-output.json');
-  for (const reasoning of [true, false]) {
-    models[0].reasoning = reasoning;
-    fs.writeFileSync(catalogPath, JSON.stringify(capabilities(models)));
-    await execFileAsync('bash', [script, '--sync-only'], {
-      env: { ...process.env, PROXY_AGENTS_BASE_URL: baseUrl }
+    const output = await f.launch();
+    assert.match(output.stdout, /IETI API key validated/);
+    assert.doesNotMatch(output.stdout + output.stderr, /ieti_sk_saved/);
+    assert.deepEqual(f.state.requests, [{ path: '/course/v1/model-capabilities', authorization: 'Bearer ieti_sk_saved' }]);
+    const config = f.read();
+    assert.deepEqual(config.provider.other, original.provider.other);
+    assert.deepEqual(config.permission, original.permission);
+    assert.deepEqual(config.mcp, original.mcp);
+    assert.equal(config.mcp.customDate, '2026-10-02T01:02:03+05:00');
+    assert.equal(config.model, 'ieti-agents/vision/reasoner');
+    const provider = config.provider['ieti-agents'];
+    assert.equal(provider.custom_property, 'keep-me');
+    assert.equal(provider.options.customOption, 'keep-me');
+    assert.equal(provider.options.baseURL, f.baseURL);
+    assert.equal(provider.options.apiKey, `{file:${f.keyPath.replaceAll('\\', '/')}}`);
+    assert.deepEqual(Object.keys(provider.models), ['vision/reasoner']);
+    assert.deepEqual(provider.models['vision/reasoner'].limit, { context: 131072, output: 8192 });
+    assert.equal(provider.models['vision/reasoner'].tool_call, true);
+    assert.deepEqual(provider.models['vision/reasoner'].interleaved, { field: 'reasoning_content' });
+    assert.equal(provider.models['vision/reasoner'].options.reasoningEffort, 'low');
+    assert.deepEqual(provider.models['vision/reasoner'].modalities.input, ['text', 'image']);
+    assert.deepEqual(provider.models['vision/reasoner'].variants, {
+      none: { disabled: true }, minimal: { disabled: true }, low: { reasoningEffort: 'low' },
+      medium: { reasoningEffort: 'medium' }, high: { disabled: true }, xhigh: { reasoningEffort: 'xhigh' }, max: { disabled: true }
     });
-    await execFileAsync(process.execPath, ['-e', mergeScript, psConfigPath, catalogPath, psOutputPath, baseUrl]);
-    const bashConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const psConfig = JSON.parse(fs.readFileSync(psOutputPath, 'utf8'));
-    assert.deepEqual(psConfig, bashConfig);
-    const model = psConfig.provider['ieti-agents'].models['thinking-model'];
-    assert.equal(model.reasoning, reasoning);
-    assert.deepEqual(model.interleaved, reasoning ? { field: 'reasoning_content' } : undefined);
-    if (!reasoning) assert.deepEqual(model.variants, {});
-    fs.copyFileSync(psOutputPath, psConfigPath);
-  }
-});
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+    if (process.platform !== 'win32') assert.equal(fs.statSync(f.keyPath).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(path.join(f.cwd, 'opencode.json'), 'utf8'), localConfig);
+    assert.equal(fs.readFileSync(path.join(f.scripts, 'opencode.json'), 'utf8'), localConfig);
+    assert.equal(fs.existsSync(path.join(f.cwd, '.secrets')), false);
+    assert.equal(fs.existsSync(path.join(f.scripts, '.secrets')), false);
 
-test('PowerShell configuration script uses the key file and never opens OpenCode', () => {
-  const script = fs.readFileSync(path.join(__dirname, '..', 'assets', 'set_agents_opencode.ps1'), 'utf8');
-  assert.match(script, /\$WorkingDirectory = \(Get-Location\)\.Path/);
-  assert.match(script, /Join-Path \$WorkingDirectory '\.secrets'/);
-  assert.match(script, /agents_server_key/);
-  assert.match(script, /if \(-not \(Test-Path -LiteralPath \$KeyFile\)\)/);
-  assert.match(script, /Read-Host 'Paste your IETI Agents API key'/);
-  assert.match(script, /apiKey: '\{file:\.secrets\/agents_server_key\}'/);
-  assert.match(script, /config\.provider\['ieti-agents'\]/);
-  assert.match(script, /canonicalReasoningEfforts/);
-  assert.match(script, /reasoningEffort: defaultReasoningEffort/);
-  assert.match(script, /Read-ConfigBaseUrl/);
-  assert.doesNotMatch(script, /SettingsFile|Read-SettingValue|settings\.env/);
-  assert.doesNotMatch(script, /EnvironmentVariable\([^)]*PROXY_AGENTS_KEY|apiKey: '\{env:PROXY_AGENTS_KEY\}'|OpenCodeArguments|opencode:\/\/|Get-Command opencode|OpenCode desktop/);
-  assert.doesNotMatch(script, /OPENCODE_MODELS_PATH|ieti-models\.json|models\.dev/);
-});
+    delete f.env.PROXY_AGENTS_BASE_URL;
+    f.state.catalog = capabilities([{ id: 'text', tools: false }]);
+    await f.launch();
+    assert.equal(f.read().model, 'ieti-agents/text');
+    assert.deepEqual(Object.keys(f.read().provider['ieti-agents'].models), ['text']);
+    assert.equal(f.read().provider['ieti-agents'].models.text.interleaved, undefined);
+    assert.deepEqual(f.read().provider['ieti-agents'].models.text.variants, {});
+  });
+
+  test(`${platform}: first install stores a validated supplied key globally and keeps another provider as default`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    f.write(f.configPath, { model: 'other/keep', provider: { other: { models: { keep: {} } } } });
+    f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+    const output = await f.launch();
+    assert.doesNotMatch(output.stdout + output.stderr, /ieti_sk_replacement/);
+    assert.equal(f.read().model, 'other/keep');
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
+    assert.equal(fs.existsSync(path.join(f.cwd, 'opencode.json')), false);
+    assert.equal(fs.existsSync(path.join(f.scripts, 'opencode.json')), false);
+  });
+
+  test(`${platform}: valid environment replacement is validated before replacing a saved key`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    f.write(f.configPath, { permission: { bash: 'ask' } }); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+    await f.launch();
+    assert.deepEqual(f.state.requests, [{ path: '/course/v1/model-capabilities', authorization: 'Bearer ieti_sk_replacement' }]);
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
+    assert.deepEqual(f.read().permission, { bash: 'ask' });
+  });
+
+  test(`${platform}: refreshing the same model clears obsolete reasoning and tool capabilities`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.state.catalog = capabilities([{ id: 'changing-model', reasoning: true, reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low' }]);
+    await f.launch();
+    assert.deepEqual(f.read().provider['ieti-agents'].models['changing-model'].interleaved, { field: 'reasoning_content' });
+    f.state.catalog = capabilities([{ id: 'changing-model', reasoning: false, tools: false }]);
+    await f.launch();
+    const model = f.read().provider['ieti-agents'].models['changing-model'];
+    assert.equal(model.interleaved, undefined);
+    assert.equal(model.options, undefined);
+    assert.deepEqual(model.variants, {});
+    assert.equal(model.tool_call, false);
+    assert.equal(model.reasoning, false);
+  });
+
+  test(`${platform}: failed replacement auth preserves original config and key bytes`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = '{"model":"other/keep","untouched":true}\n';
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.env.PROXY_AGENTS_KEY = 'ieti_sk_invalid';
+    await expectFailure(f, /HTTP 401|[Ii]nvalid API key/);
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+  });
+
+  test(`${platform}: account, rate and server errors preserve config without treating them as invalid keys`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = '{"untouched":true}\n';
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    for (const [status, pattern] of [[403, /HTTP 403|[Dd]isabled|[Ff]orbidden/], [429, /HTTP 429|[Rr]ate|[Tt]oo many/], [503, /HTTP 503|[Uu]navailable|[Ss]erver/]]) {
+      f.state.status = status;
+      await expectFailure(f, pattern);
+      assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
+      assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+    }
+    assert.equal(f.state.requests.length, 3);
+  });
+
+  test(`${platform}: request timeout and network failure preserve previous files`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = '{"untouched":true}\n';
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS = '1';
+    f.state.hang = true;
+    await expectFailure(f, /[Tt]imeout|[Tt]imed out/);
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+    const unusedPort = await new Promise(resolve => {
+      const unused = http.createServer();
+      unused.listen(0, '127.0.0.1', () => { const port = unused.address().port; unused.close(() => resolve(port)); });
+    });
+    f.env.PROXY_AGENTS_BASE_URL = `http://127.0.0.1:${unusedPort}/v1`;
+    await expectFailure(f, /[Cc]onnect|[Nn]etwork|[Uu]navailable/);
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
+    assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+  });
+
+  test(`${platform}: invalid model catalogs do not commit replacement keys or configuration`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = '{"untouched":true}\n';
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+    for (const catalog of [capabilities([]), capabilities([{ context: -1 }]), { ...capabilities(), schema_version: 2 }]) {
+      f.state.catalog = catalog;
+      await expectFailure(f, /models|metadata|catalog|capabilities/i);
+      assert.equal(fs.readFileSync(f.configPath, 'utf8'), original);
+      assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_saved\n');
+    }
+  });
+
+  test(`${platform}: supports an existing JSONC file without creating a competing JSON configuration`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const jsonc = `${f.configPath}c`;
+    f.write(jsonc, '{ // comment\n"mcp": {"url": "https://example.test/a,//b",}, "model": "ieti-agents/gone",\n}');
+    f.write(f.keyPath, 'ieti_sk_saved\n');
+    await f.launch();
+    assert.equal(f.read(jsonc).mcp.url, 'https://example.test/a,//b');
+    assert.equal(f.read(jsonc).model, 'ieti-agents/model-1');
+    assert.equal(fs.existsSync(f.configPath), false);
+    assert.equal(f.read(jsonc).provider['ieti-agents'].options.apiKey, `{file:${f.keyPath.replaceAll('\\', '/')}}`);
+  });
+
+  test(`${platform}: rejects ambiguous or malformed existing configuration before mutation`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+    f.write(f.configPath, '{"json":true}\n'); f.write(`${f.configPath}c`, '{"jsonc":true}\n');
+    await expectFailure(f, /both|conflict|multiple|ambiguous/i);
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), '{"json":true}\n');
+    assert.equal(fs.readFileSync(`${f.configPath}c`, 'utf8'), '{"jsonc":true}\n');
+    assert.equal(fs.existsSync(f.keyPath), false);
+    fs.rmSync(`${f.configPath}c`);
+    f.write(f.configPath, '{ broken');
+    await expectFailure(f, /[Cc]annot|[Ii]nvalid|JSON|[Pp]ars/);
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), '{ broken');
+    assert.equal(fs.existsSync(f.keyPath), false);
+  });
+
+  test(`${platform}: offline uninstall removes only IETI provider and model references`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = {
+      provider: { 'ieti-agents': { models: { old: {} } }, other: { models: { keep: {} } } },
+      model: 'ieti-agents/old', small_model: 'other/keep',
+      enabled_providers: ['other', 'ieti-agents'], disabled_providers: ['ieti-agents', 'unused'],
+      agent: { custom: { model: 'ieti-agents/old', temperature: 0.4 }, other: { model: 'other/keep' } },
+      permission: { bash: 'ask' }
+    };
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.write(path.join(f.configRoot, 'ieti-agents', 'keep.txt'), 'keep');
+    f.env.PROXY_AGENTS_BASE_URL = 'unavailable-and-invalid';
+    await f.launch('uninstall');
+    const config = f.read();
+    assert.deepEqual(config.provider, { other: original.provider.other });
+    assert.equal(config.model, undefined);
+    assert.equal(config.small_model, 'other/keep');
+    assert.deepEqual(config.enabled_providers, ['other']);
+    assert.deepEqual(config.disabled_providers, ['unused']);
+    assert.deepEqual(config.agent.custom, { temperature: 0.4 });
+    assert.deepEqual(config.agent.other, original.agent.other);
+    assert.deepEqual(config.permission, original.permission);
+    assert.equal(fs.existsSync(f.keyPath), false);
+    assert.equal(fs.readFileSync(path.join(f.configRoot, 'ieti-agents', 'keep.txt'), 'utf8'), 'keep');
+    assert.deepEqual(f.state.requests, []);
+    const bytes = fs.readFileSync(f.configPath, 'utf8');
+    await f.launch('uninstall');
+    assert.equal(fs.readFileSync(f.configPath, 'utf8'), bytes);
+  });
+
+  test(`${platform}: embedded script URL survives download substitution`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const script = fs.readFileSync(path.join(assets, path.basename(f.script)), 'utf8').replaceAll('__IETI_DEFAULT_BASE_URL__', `${f.baseURL}/`);
+    f.write(f.script, script); f.write(f.keyPath, 'ieti_sk_saved\n');
+    delete f.env.PROXY_AGENTS_BASE_URL;
+    await f.launch();
+    assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
+    assert.deepEqual(f.state.requests, [{ path: '/course/v1/model-capabilities', authorization: 'Bearer ieti_sk_saved' }]);
+  });
+
+  test(`${platform}: invalid URL or missing key leaves a fresh installation untouched`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    f.env.PROXY_AGENTS_BASE_URL = 'not-a-url';
+    f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
+    await expectFailure(f, /HTTP\(S\)|invalid.*URL/i);
+    assert.equal(fs.existsSync(f.configPath), false);
+    assert.equal(fs.existsSync(f.keyPath), false);
+    f.env.PROXY_AGENTS_BASE_URL = f.baseURL;
+    delete f.env.PROXY_AGENTS_KEY;
+    await expectFailure(f, /key|interactive/i);
+    assert.equal(fs.existsSync(f.configPath), false);
+    assert.equal(fs.existsSync(f.keyPath), false);
+    assert.deepEqual(f.state.requests, []);
+  });
+
+  test(`${platform}: only updates global configuration and never launches a client or executes settings.env`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const bin = path.join(f.root, 'bin');
+    const marker = path.join(f.root, 'must-not-exist');
+    fs.mkdirSync(bin);
+    f.write(path.join(bin, 'opencode'), '#!/bin/sh\ntouch "$CAPTURE_PATH"\n');
+    fs.chmodSync(path.join(bin, 'opencode'), 0o755);
+    f.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+    f.env.CAPTURE_PATH = marker;
+    f.env.OPENCODE_DESKTOP_BIN = path.join(bin, 'opencode');
+    f.write(path.join(f.cwd, 'settings.env'), `UNSAFE_VALUE=$(touch '${marker}')\n`);
+    f.write(path.join(f.scripts, 'settings.env'), `UNSAFE_VALUE=$(touch '${marker}')\n`);
+    f.write(f.keyPath, 'ieti_sk_saved\n');
+    await f.launch('default');
+    assert.equal(fs.existsSync(marker), false);
+  });
+}

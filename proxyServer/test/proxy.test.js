@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { execFile, execFileSync } = require('node:child_process');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
@@ -1942,6 +1943,62 @@ test('active streams can outlive the request handshake timeout', async () => {
   }
 });
 
+test('portal shell setup downloads with Node and runs Bash only after a successful response', async (t) => {
+  const student = createStudent();
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  let status = 200;
+  const server = http.createServer((_req, res) => {
+    res.writeHead(status, { 'Content-Type': 'text/plain' });
+    res.end("printf 'downloaded-setup-ran\\n'\nexit 7\n");
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  const portal = await agent.get('/portal').set('Host', `127.0.0.1:${server.address().port}`).expect(200);
+  const encodedCommand = portal.text.match(/data-copy-target="ieti-shell-command" data-copy-value="([^"]+)"/)?.[1];
+  assert.ok(encodedCommand);
+  const command = encodedCommand.replaceAll('&quot;', '"').replaceAll('&#39;', "'")
+    .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+  assert.match(command, /^node -e /);
+  const runCommand = () => new Promise((resolve) => {
+    execFile('/bin/bash', ['-c', command], { timeout: 5000 }, (error, stdout, stderr) => {
+      resolve({ code: error?.code || 0, stdout, stderr });
+    });
+  });
+  const successfulDownload = await runCommand();
+  assert.equal(successfulDownload.code, 7);
+  assert.match(successfulDownload.stdout, /downloaded-setup-ran/);
+  assert.equal(successfulDownload.stderr, '');
+  status = 503;
+  const failedDownload = await runCommand();
+  assert.equal(failedDownload.code, 1);
+  assert.doesNotMatch(failedDownload.stdout, /downloaded-setup-ran/);
+  assert.match(failedDownload.stderr, /Could not download the IETI setup script/);
+});
+
+test('configuration downloads preserve embedded URLs as inert script data', async () => {
+  const defaultBaseUrl = "https://download.example.test/course'-$&-$(true)/v1";
+  const query = `?default_base_url=${encodeURIComponent(defaultBaseUrl)}`;
+  const shellScript = await request(app).get(`/downloads/set_agents_opencode.sh${query}`).expect(200);
+  const shellAssignment = shellScript.text.match(/^DEFAULT_BASE_URL=.*$/m)?.[0];
+  assert.ok(shellAssignment);
+  const embeddedShellUrl = execFileSync('/bin/bash', ['-c', `${shellAssignment}\nprintf '%s' "$DEFAULT_BASE_URL"`], { encoding: 'utf8' });
+  assert.equal(embeddedShellUrl, defaultBaseUrl);
+
+  const powerShellScript = await request(app).get(`/downloads/set_agents_opencode.ps1${query}`).expect(200);
+  const powerShellLiteral = powerShellScript.text.match(/^\$DefaultBaseUrl = '(.*)'$/m)?.[1];
+  assert.ok(powerShellLiteral);
+  assert.equal(powerShellLiteral.replaceAll("''", "'"), defaultBaseUrl);
+
+  const invalidUrlScript = await request(app)
+    .get('/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fuser%3Apassword%40invalid.example.test%2Fv1')
+    .set('Host', 'course.example.test:8443')
+    .set('X-Forwarded-Proto', 'https')
+    .expect(200);
+  assert.match(invalidUrlScript.text, /DEFAULT_BASE_URL="https:\/\/course\.example\.test:8443\/v1"/);
+  assert.doesNotMatch(invalidUrlScript.text, /invalid\.example\.test/);
+});
+
 test('student portal shows setup commands and serves configuration scripts', async () => {
   const student = createStudent();
   const agent = request.agent(app);
@@ -1960,27 +2017,26 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .expect(200)
     .expect(/Tokens today/)
     .expect(/Agent configuration/)
-    .expect(/BuildLite Configuration/)
-    .expect(/set_harness_buildlite\.sh/)
-    .expect(/set_harness_buildlite\.ps1/)
-    .expect(/set_agents\.sh/)
-    .expect(/set_agents\.ps1/);
-  assert.match(portal.text, /bash -c/);
+    .expect(/global OpenCode configuration/)
+    .expect(/set_agents_opencode\.sh/)
+    .expect(/set_agents_opencode\.ps1/);
+  assert.match(portal.text, /node -e/);
   assert.match(portal.text, /powershell\.exe/);
+  assert.match(portal.text, /setTimeout\(fail, 10000\)/);
+  assert.match(portal.text, /setTimeout\(fail, 30000\)/);
+  assert.match(portal.text, /node:child_process/);
+  assert.doesNotMatch(portal.text, /curl -fsSL/);
+  assert.match(portal.text, /Invoke-WebRequest -UseBasicParsing -TimeoutSec 30/);
   assert.match(portal.text, /https%3A%2F%2Fcourse\.example\.test%3A8443%2Fv1/);
-  assert.match(portal.text, /https:\/\/course\.example\.test:8443\/downloads\/set_agents\.sh/);
+  assert.match(portal.text, /https:\/\/course\.example\.test:8443\/downloads\/set_agents_opencode\.sh/);
   assert.match(portal.text, /class="command-scroll"/);
-  assert.equal((portal.text.match(/data-copy-target=/g) || []).length, 4);
-  assert.equal((portal.text.match(/data-copy-value=/g) || []).length, 4);
-  assert.match(portal.text, /data-copy-target="ieti-shell-command" data-copy-value="bash -c/);
+  assert.equal((portal.text.match(/data-copy-target=/g) || []).length, 2);
+  assert.equal((portal.text.match(/data-copy-value=/g) || []).length, 2);
+  assert.match(portal.text, /data-copy-target="ieti-shell-command" data-copy-value="node -e/);
   assert.match(portal.text, /data-copy-target="ieti-powershell-command" data-copy-value="\$p=Join-Path/);
   assert.match(portal.text, /ieti-shell-command/);
   assert.match(portal.text, /ieti-powershell-command/);
-  assert.match(portal.text, /buildlite-shell-command/);
-  assert.match(portal.text, /buildlite-powershell-command/);
-  assert.match(portal.text, /downloads\/set_harness_buildlite\.sh/);
-  assert.match(portal.text, /downloads\/set_harness_buildlite\.ps1/);
-  assert.match(portal.text, /mklink \/J \.opencode \.agents/);
+  assert.doesNotMatch(portal.text, /BuildLite|buildlite|set_harness/);
   assert.match(portal.text, /navigator\.clipboard/);
   assert.match(portal.text, /<h2 id="active-models-heading">Active models<\/h2>/);
   assert.match(portal.text, /<details class="active-model">/);
@@ -1999,57 +2055,34 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.doesNotMatch(portal.text, /env_key/);
   assert.doesNotMatch(portal.text, /chunkTimeout/);
 
-  for (const extension of ['sh', 'ps1']) {
-    const script = await request(app).get(`/downloads/set_agents.${extension}?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1`).expect(200);
-    assert.match(script.headers['content-type'], /text\/plain/);
-    assert.ok(script.headers['content-disposition'].includes(`set_agents.${extension}`));
-    assert.ok(script.text.includes('https://download.example.test/v1'));
-    assert.ok(script.text.includes('model-capabilities'));
-    assert.ok(script.text.includes('userModels'));
-    assert.doesNotMatch(script.text, /__IETI_DEFAULT_BASE_URL__/);
-  }
-
   const shellScript = await request(app).get('/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
   assert.match(shellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.sh"/);
   assert.match(shellScript.headers['content-type'], /text\/plain/);
   assert.match(shellScript.text, /^#!\/usr\/bin\/env bash/);
-  assert.match(shellScript.text, /\.secrets/);
+  assert.match(shellScript.text, /ieti-agents/);
   assert.match(shellScript.text, /agents_server_key/);
   assert.match(shellScript.text, /DEFAULT_BASE_URL="https:\/\/download\.example\.test\/v1"/);
-  assert.match(shellScript.text, /apiKey: '\{file:\.secrets\/agents_server_key\}'/);
+  assert.match(shellScript.text, /model-capabilities/);
+  assert.doesNotMatch(shellScript.text, /__IETI_DEFAULT_BASE_URL__/);
   assert.doesNotMatch(shellScript.text, /export PROXY_AGENTS_KEY|apiKey: '\{env:PROXY_AGENTS_KEY\}'|opencode:\/\/|OPENCODE_MODELS_PATH|ieti-models\.json|command -v opencode/);
 
   const powerShellScript = await request(app).get('/downloads/set_agents_opencode.ps1?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
   assert.match(powerShellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.ps1"/);
   assert.match(powerShellScript.headers['content-type'], /text\/plain/);
   assert.match(powerShellScript.text, /\$ErrorActionPreference = 'Stop'/);
-  assert.match(powerShellScript.text, /\.secrets/);
+  assert.match(powerShellScript.text, /ieti-agents/);
   assert.match(powerShellScript.text, /agents_server_key/);
   assert.match(powerShellScript.text, /\$DefaultBaseUrl = 'https:\/\/download\.example\.test\/v1'/);
-  assert.match(powerShellScript.text, /apiKey: '\{file:\.secrets\/agents_server_key\}'/);
+  assert.match(powerShellScript.text, /model-capabilities/);
+  assert.doesNotMatch(powerShellScript.text, /__IETI_DEFAULT_BASE_URL__/);
   assert.doesNotMatch(powerShellScript.text, /EnvironmentVariable\([^)]*PROXY_AGENTS_KEY|apiKey: '\{env:PROXY_AGENTS_KEY\}'|opencode:\/\/|OPENCODE_MODELS_PATH|ieti-models\.json|Get-Command opencode/);
 
-  const buildLiteShellScript = await request(app).get('/downloads/set_harness_buildlite.sh').expect(200);
-  assert.match(buildLiteShellScript.headers['content-disposition'], /attachment; filename="set_harness_buildlite\.sh"/);
-  assert.match(buildLiteShellScript.headers['content-type'], /text\/plain/);
-  assert.match(buildLiteShellScript.text, /^#!\/usr\/bin\/env bash/);
-  assert.match(buildLiteShellScript.text, /buildlite_harness\.zip/);
-  assert.match(buildLiteShellScript.text, /cp -a "\$SOURCE_DIRECTORY\/\." "\$WORKING_DIRECTORY\//);
-  assert.match(buildLiteShellScript.text, /ln -s \.agents/);
-  assert.doesNotMatch(buildLiteShellScript.text, /__IETI_BUILD_LITE_ZIP_URL__/);
-
-  const buildLitePowerShellScript = await request(app).get('/downloads/set_harness_buildlite.ps1').expect(200);
-  assert.match(buildLitePowerShellScript.headers['content-disposition'], /attachment; filename="set_harness_buildlite\.ps1"/);
-  assert.match(buildLitePowerShellScript.headers['content-type'], /text\/plain/);
-  assert.match(buildLitePowerShellScript.text, /Expand-Archive/);
-  assert.match(buildLitePowerShellScript.text, /Copy-Item -LiteralPath \$Item\.FullName/);
-  assert.match(buildLitePowerShellScript.text, /mklink \/J/);
-  assert.doesNotMatch(buildLitePowerShellScript.text, /__IETI_BUILD_LITE_ZIP_URL__/);
-
-  const buildLiteArchive = await request(app).get('/downloads/buildlite_harness.zip').expect(200);
-  assert.match(buildLiteArchive.headers['content-disposition'], /attachment; filename="buildlite_harness\.zip"/);
-  assert.match(buildLiteArchive.headers['content-type'], /application\/zip/);
-  assert.ok(Number(buildLiteArchive.headers['content-length']) > 1000);
+  for (const removedDownload of [
+    'set_agents.sh', 'set_agents.ps1',
+    'set_harness_buildlite.sh', 'set_harness_buildlite.ps1', 'buildlite_harness.zip'
+  ]) {
+    await request(app).get(`/downloads/${removedDownload}`).expect(404);
+  }
 
   await request(app).get('/portal/set_agents_opencode.sh').expect(404);
   await request(app).get('/portal/set_agents_opencode.ps1').expect(404);

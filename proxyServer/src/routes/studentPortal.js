@@ -43,7 +43,6 @@ const {
 const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
 const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..', 'assets');
-const BUILD_LITE_ARCHIVE_FILE = path.join(CLIENT_SCRIPT_DIRECTORY, 'buildlite_harness.zip');
 
 function getRequestBaseUrl(req) {
   return requestBaseUrl(req, getSetting('public_base_url', ''));
@@ -110,17 +109,37 @@ function getClientScriptUrl(req, filename) {
 function getClientScriptCommand(req, filename) {
   const scriptUrl = getClientScriptUrl(req, filename);
   if (filename.endsWith('.sh')) {
-    return `bash -c "$(curl -fsSL ${shellQuote(scriptUrl)})"`;
+    const downloader = String.raw`
+      const url = new URL(process.argv[1]);
+      let connectTimer, requestTimer, complete = false;
+      const fail = () => {
+        if (complete) return;
+        complete = true;
+        clearTimeout(connectTimer); clearTimeout(requestTimer);
+        process.stderr.write("Could not download the IETI setup script. Check the server URL and try again.\n");
+        process.exitCode = 1; request.destroy();
+      };
+      const request = require(url.protocol === "https:" ? "node:https" : "node:http").get(url, { agent: false }, response => {
+        if (response.statusCode !== 200) { response.resume(); fail(); return; }
+        const chunks = []; let size = 0;
+        response.on("data", chunk => { size += chunk.length; if (size > 65536) fail(); else chunks.push(chunk); });
+        response.on("error", fail); response.on("aborted", fail);
+        response.on("end", () => {
+          if (complete) return;
+          complete = true;
+          clearTimeout(connectTimer); clearTimeout(requestTimer);
+          const child = require("node:child_process").spawn("bash", ["-c", Buffer.concat(chunks).toString("utf8")], { stdio: "inherit" });
+          child.on("error", () => { process.stderr.write("Could not start Bash.\n"); process.exitCode = 1; });
+          child.on("exit", code => { process.exitCode = code === null ? 1 : code; });
+        });
+      });
+      request.on("error", fail);
+      request.on("socket", socket => socket.once(url.protocol === "https:" ? "secureConnect" : "connect", () => clearTimeout(connectTimer)));
+      connectTimer = setTimeout(fail, 10000); requestTimer = setTimeout(fail, 30000);
+    `.trim().split('\n').map((line) => line.trim()).join(' ');
+    return `node -e ${shellQuote(downloader)} -- ${shellQuote(scriptUrl)}`;
   }
-  return `$p=Join-Path $env:TEMP 'ieti-set-agents-server.ps1'; Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item $p -Force`;
-}
-
-function getBuildLiteScriptCommand(req, filename) {
-  const scriptUrl = `${getWebsiteBaseUrl(req)}/downloads/${filename}`;
-  if (filename.endsWith('.sh')) {
-    return `bash -c "$(curl -fsSL ${shellQuote(scriptUrl)})"`;
-  }
-  return `$p=Join-Path $env:TEMP 'ieti-set-harness-buildlite.ps1'; Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item $p -Force`;
+  return `$p=Join-Path $env:TEMP 'ieti-set-agents-server.ps1'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item $p -Force`;
 }
 
 function getModelEntries(models) {
@@ -517,10 +536,8 @@ router.get('/portal', requireStudentSession, (req, res) => {
   const usage = getUsageTotals(user.id);
   const usageByDay = dailyUsage(15, new Date(), user.id);
   const models = getActiveModelsForUser(user);
-  const shellCommand = getClientScriptCommand(req, 'set_agents.sh');
-  const powershellCommand = getClientScriptCommand(req, 'set_agents.ps1');
-  const buildLiteShellCommand = getBuildLiteScriptCommand(req, 'set_harness_buildlite.sh');
-  const buildLitePowerShellCommand = getBuildLiteScriptCommand(req, 'set_harness_buildlite.ps1');
+  const shellCommand = getClientScriptCommand(req, 'set_agents_opencode.sh');
+  const powershellCommand = getClientScriptCommand(req, 'set_agents_opencode.ps1');
   const usageRows = recentUsage(25, user.id).map((row) => `
     <tr>
       <td>${escapeHtml(row.created_at)}</td>
@@ -538,10 +555,9 @@ router.get('/portal', requireStudentSession, (req, res) => {
     content: `
       <h1>${escapeHtml(user.name)}</h1>
       <p class="muted">${escapeHtml(user.email)}</p>
-      ${usageLimitCards(models[0]?.group, usage)}
       <div class="panel" style="margin-top:16px">
         <h2>Agent configuration</h2>
-        <p>Run the command for your operating system. It detects installed OpenCode and Atomic Agent clients and updates their user-wide configuration with your available models and capabilities. Windows uses native PowerShell; macOS/Linux requires Python 3.9+. Existing project settings can override global settings.</p>
+        <p>Run the command for your operating system to install or update your global OpenCode configuration with your available models and capabilities. Confirm the server URL and enter your API key when requested. You can keep or replace a valid saved key, or uninstall an existing configuration. macOS/Linux requires Node.js; Windows uses built-in PowerShell. Existing project settings can override global settings.</p>
         <label>macOS/Linux</label>
         <div class="command-row">
           <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>
@@ -592,62 +608,8 @@ router.get('/portal', requireStudentSession, (req, res) => {
         </script>
         <p class="muted">Manage your API keys from <a href="/portal/settings">Settings</a>.</p>
       </div>
-      <div class="panel" style="margin-top:16px">
-        <h2>BuildLite Configuration</h2>
-        <p>Run the command for your operating system. It downloads and extracts the BuildLite harness into the current project folder, keeping <code>.agents/</code> and <code>AGENTS.md</code> at the project root. It then creates <code>.opencode</code> as a link to <code>.agents</code>.</p>
-        <label>macOS/Linux</label>
-        <div class="command-row">
-          <div class="command-scroll"><pre><code id="buildlite-shell-command">${escapeHtml(buildLiteShellCommand)}</code></pre></div>
-          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="buildlite-shell-command" data-copy-value="${escapeHtml(buildLiteShellCommand)}" title="Copy BuildLite macOS/Linux command" aria-label="Copy BuildLite macOS/Linux command">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2-2-2h10c1.1 0 2 .9 2 2"></path></svg>
-            <span class="copy-label">Copy</span>
-          </button>
-        </div>
-        <label>Windows PowerShell</label>
-        <div class="command-row">
-          <div class="command-scroll"><pre><code id="buildlite-powershell-command">${escapeHtml(buildLitePowerShellCommand)}</code></pre></div>
-          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="buildlite-powershell-command" data-copy-value="${escapeHtml(buildLitePowerShellCommand)}" title="Copy BuildLite Windows PowerShell command" aria-label="Copy BuildLite Windows PowerShell command">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2-2-2h10c1.1 0 2 .9 2 2"></path></svg>
-            <span class="copy-label">Copy</span>
-          </button>
-        </div>
-        <p class="muted">Linux creates a symbolic link with <code>.opencode -&gt; .agents</code>. Windows creates a directory junction with <code>mklink /J .opencode .agents</code>.</p>
-        <script>
-          (function(){
-            function copyText(text) {
-              if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
-              var area = document.createElement('textarea');
-              area.value = text;
-              area.setAttribute('readonly', '');
-              area.style.position = 'fixed';
-              area.style.opacity = '0';
-              document.body.appendChild(area);
-              area.select();
-              var copied = document.execCommand('copy');
-              area.remove();
-              return copied ? Promise.resolve() : Promise.reject(new Error('Copy failed'));
-            }
-            document.querySelectorAll('[data-copy-command]').forEach(function(button){
-              if (button.dataset.copyReady) return;
-              button.dataset.copyReady = '1';
-              button.addEventListener('click', function(){
-                var target = document.getElementById(button.dataset.copyTarget);
-                var label = button.querySelector('.copy-label');
-                var text = button.dataset.copyValue || (target && target.textContent);
-                if (!text || !label) return;
-                copyText(text).then(function(){
-                  label.textContent = 'Copied';
-                  window.setTimeout(function(){ label.textContent = 'Copy'; }, 1600);
-                }).catch(function(){
-                  label.textContent = 'Copy failed';
-                  window.setTimeout(function(){ label.textContent = 'Copy'; }, 1600);
-                });
-              });
-            });
-          })();
-        </script>
-      </div>
       ${renderActiveModels(req, models)}
+      <div class="dashboard-section">${usageLimitCards(models[0]?.group, usage)}</div>
       <div class="dashboard-section">${dailyUsageCard(usageByDay)}</div>
       <script src="/portal/assets/dashboard-usage.js" defer></script>
       <h2>Recent usage</h2>
@@ -894,13 +856,8 @@ function sendClientScript(req, res, filename) {
   const baseUrlReplacement = filename.endsWith('.sh')
     ? defaultBaseUrl.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
     : defaultBaseUrl.replaceAll("'", "''");
-  const buildLiteArchiveUrl = `${getWebsiteBaseUrl(req)}/downloads/buildlite_harness.zip`;
-  const buildLiteArchiveReplacement = filename.endsWith('.sh')
-    ? buildLiteArchiveUrl.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
-    : buildLiteArchiveUrl.replaceAll("'", "''");
-  const script = source
-    .replaceAll('__IETI_DEFAULT_BASE_URL__', baseUrlReplacement)
-    .replaceAll('__IETI_BUILD_LITE_ZIP_URL__', buildLiteArchiveReplacement);
+  // Preserve literal replacement tokens such as $& in the URL.
+  const script = source.replace('__IETI_DEFAULT_BASE_URL__', () => baseUrlReplacement);
   res.set({
     'Content-Type': 'text/plain; charset=utf-8',
     'Content-Disposition': `attachment; filename="${filename}"`,
@@ -909,35 +866,12 @@ function sendClientScript(req, res, filename) {
   res.send(script);
 }
 
-router.get('/downloads/set_agents.sh', (req, res) => {
-  sendClientScript(req, res, 'set_agents.sh');
-});
-
-router.get('/downloads/set_agents.ps1', (req, res) => {
-  sendClientScript(req, res, 'set_agents.ps1');
-});
-
 router.get('/downloads/set_agents_opencode.sh', (req, res) => {
   sendClientScript(req, res, 'set_agents_opencode.sh');
 });
 
 router.get('/downloads/set_agents_opencode.ps1', (req, res) => {
   sendClientScript(req, res, 'set_agents_opencode.ps1');
-});
-
-router.get('/downloads/set_harness_buildlite.sh', (req, res) => {
-  sendClientScript(req, res, 'set_harness_buildlite.sh');
-});
-
-router.get('/downloads/set_harness_buildlite.ps1', (req, res) => {
-  sendClientScript(req, res, 'set_harness_buildlite.ps1');
-});
-
-router.get('/downloads/buildlite_harness.zip', (_req, res, next) => {
-  res.set('Cache-Control', 'no-store');
-  res.download(BUILD_LITE_ARCHIVE_FILE, 'buildlite_harness.zip', (error) => {
-    if (error) next(error);
-  });
 });
 
 module.exports = router;
