@@ -49,7 +49,52 @@ function recordUsage({ userId, model, providerSlug = null, inputTokens = 0, outp
   }
 }
 
-function dashboardSummary() {
+function usageDayWindow(days, now) {
+  const count = Math.max(1, Number.parseInt(days, 10) || 15);
+  const today = new Date(now);
+  today.setUTCHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setUTCDate(start.getUTCDate() - count + 1);
+  const end = new Date(today);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const sqlTimestamp = (date) => date.toISOString().slice(0, 19).replace('T', ' ');
+  return { count, start, from: sqlTimestamp(start), until: sqlTimestamp(end) };
+}
+
+function dailyUsage(days = 15, now = new Date()) {
+  const window = usageDayWindow(days, now);
+  const rows = getDb().prepare(`
+    SELECT substr(created_at, 1, 10) AS date, COUNT(*) AS calls,
+      COALESCE(SUM(total_tokens), 0) AS tokens
+    FROM usage_logs
+    WHERE status = 'success' AND created_at >= ? AND created_at < ?
+    GROUP BY substr(created_at, 1, 10)
+  `).all(window.from, window.until);
+  const byDate = new Map(rows.map((row) => [row.date, row]));
+  return Array.from({ length: window.count }, (_, index) => {
+    const day = new Date(window.start);
+    day.setUTCDate(day.getUTCDate() + index);
+    const date = day.toISOString().slice(0, 10);
+    return byDate.get(date) || { date, calls: 0, tokens: 0 };
+  });
+}
+
+function topActiveUsers(days = 15, limit = 10, now = new Date()) {
+  const window = usageDayWindow(days, now);
+  return getDb().prepare(`
+    SELECT users.id, users.name, users.email, COUNT(*) AS calls,
+      COALESCE(SUM(usage_logs.total_tokens), 0) AS tokens
+    FROM usage_logs
+    JOIN users ON users.id = usage_logs.user_id
+    WHERE usage_logs.status = 'success'
+      AND usage_logs.created_at >= ? AND usage_logs.created_at < ?
+    GROUP BY users.id
+    ORDER BY calls DESC, tokens DESC, users.id ASC
+    LIMIT ?
+  `).all(window.from, window.until, Math.max(0, Number.parseInt(limit, 10) || 0));
+}
+
+function dashboardSummary(now = new Date()) {
   const db = getDb();
   const users = db.prepare(`
     SELECT
@@ -58,13 +103,13 @@ function dashboardSummary() {
       SUM(CASE WHEN enabled = 0 THEN 1 ELSE 0 END) AS disabled_users
     FROM users
   `).get();
-  const today = db.prepare(`SELECT COALESCE(SUM(total_tokens), 0) AS tokens FROM usage_logs WHERE status = 'success' AND created_at >= ${startOfTodaySql()}`).get();
+  const daily = dailyUsage(15, now);
   const recentErrors = db.prepare(`
     SELECT usage_logs.*, users.email
     FROM usage_logs
     LEFT JOIN users ON users.id = usage_logs.user_id
     WHERE usage_logs.status != 'success'
-    ORDER BY usage_logs.created_at DESC
+    ORDER BY usage_logs.created_at DESC, usage_logs.id DESC
     LIMIT 10
   `).all();
 
@@ -72,8 +117,11 @@ function dashboardSummary() {
     totalUsers: users.total_users || 0,
     enabledUsers: users.enabled_users || 0,
     disabledUsers: users.disabled_users || 0,
-    totalTokensToday: today.tokens || 0,
-    recentErrors
+    totalTokensToday: daily[daily.length - 1].tokens,
+    recentErrors,
+    dailyUsage: daily,
+    topUsers: topActiveUsers(15, 10, now),
+    recentCalls: recentUsage(25)
   };
 }
 
@@ -85,7 +133,7 @@ function recentUsage(limit = 100, userId = null, offset = 0) {
       FROM usage_logs
       LEFT JOIN users ON users.id = usage_logs.user_id
       WHERE usage_logs.user_id = ?
-      ORDER BY usage_logs.created_at DESC
+      ORDER BY usage_logs.created_at DESC, usage_logs.id DESC
       LIMIT ? OFFSET ?
     `).all(userId, limit, offset);
   }
@@ -93,7 +141,7 @@ function recentUsage(limit = 100, userId = null, offset = 0) {
     SELECT usage_logs.*, users.email
     FROM usage_logs
     LEFT JOIN users ON users.id = usage_logs.user_id
-    ORDER BY usage_logs.created_at DESC
+    ORDER BY usage_logs.created_at DESC, usage_logs.id DESC
     LIMIT ? OFFSET ?
   `).all(limit, offset);
 }
@@ -155,6 +203,7 @@ function getUsageCleanupStatus(retentionDays = getUsageCleanupRetentionDays()) {
 module.exports = {
   cleanupUsageLogs,
   countUsage,
+  dailyUsage,
   dashboardSummary,
   DEFAULT_CLEANUP_RETENTION_DAYS,
   getUsageCleanupRetentionDays,
@@ -162,5 +211,6 @@ module.exports = {
   getUsageTotals,
   normalizeCleanupRetentionDays,
   recentUsage,
-  recordUsage
+  recordUsage,
+  topActiveUsers
 };

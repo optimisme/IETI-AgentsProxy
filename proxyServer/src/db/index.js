@@ -202,6 +202,7 @@ function initSchema(database) {
 
     CREATE INDEX IF NOT EXISTS idx_usage_logs_user_created ON usage_logs(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_logs_status_created ON usage_logs(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_usage_logs_created_id ON usage_logs(created_at, id);
     CREATE INDEX IF NOT EXISTS idx_user_groups_group ON user_groups(group_id);
     CREATE INDEX IF NOT EXISTS idx_group_providers_provider ON group_providers(provider_id);
     CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id);

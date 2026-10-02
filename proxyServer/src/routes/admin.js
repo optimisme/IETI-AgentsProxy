@@ -810,6 +810,11 @@ router.get('/admin/assets/provider-autoconfigure.js', requireAdmin, (_req, res) 
   res.sendFile(path.join(__dirname, '../../assets/provider-autoconfigure.js'));
 });
 
+router.get('/admin/assets/dashboard-usage.js', requireAdmin, (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, '../../assets/dashboard-usage.js'));
+});
+
 router.get('/admin', requireAdmin, (req, res) => {
   const summary = dashboardSummary();
   const cleanupStatus = getUsageCleanupStatus();
@@ -822,8 +827,22 @@ router.get('/admin', requireAdmin, (req, res) => {
       <div class="metric">Pending approval<strong>${getDb().prepare("SELECT COUNT(*) AS count FROM users WHERE registration_status = 'pending'").get().count}</strong></div>
       <div class="metric">Tokens today<strong>${summary.totalTokensToday}</strong></div>
     </div>
-    <h2>Recent errors</h2>
-    ${usageTable(summary.recentErrors)}
+    <div class="dashboard-cards">
+      ${dailyUsageCard(summary.dailyUsage)}
+      ${topUsersCard(summary.topUsers)}
+    </div>
+    <section class="panel dashboard-section" aria-labelledby="recent-calls-heading">
+      <div class="dashboard-card-heading">
+        <h2 id="recent-calls-heading">Recent calls</h2>
+        <p class="muted">Latest 25 logged calls across all users · UTC</p>
+      </div>
+      <div class="table-scroll">${usageTable(summary.recentCalls)}</div>
+    </section>
+    <section class="panel dashboard-section" aria-labelledby="recent-errors-heading">
+      <div class="dashboard-card-heading"><h2 id="recent-errors-heading">Recent errors</h2></div>
+      <div class="table-scroll">${usageTable(summary.recentErrors)}</div>
+    </section>
+    <script src="/admin/assets/dashboard-usage.js" defer></script>
   `;
   render(req, res, 'dashboard', { title: 'Dashboard', content });
 });
@@ -1894,6 +1913,62 @@ router.post('/admin/providers/:id/mapping/test.json', requireAdmin, async (req, 
   }
 });
 
+function formatUsageNumber(value) {
+  return Number(value || 0).toLocaleString('en-US');
+}
+
+function dailyUsageCard(rows) {
+  const totalTokens = rows.reduce((sum, row) => sum + row.tokens, 0);
+  const totalCalls = rows.reduce((sum, row) => sum + row.calls, 0);
+  return `
+    <section class="panel dashboard-card" aria-labelledby="daily-usage-heading">
+      <div class="dashboard-card-heading">
+        <h2 id="daily-usage-heading">Daily usage</h2>
+        <p class="muted">Last 15 days, including today · UTC</p>
+      </div>
+      <div class="dashboard-usage-totals">
+        <span><strong>${formatUsageNumber(totalTokens)}</strong> tokens</span>
+        <span><strong>${formatUsageNumber(totalCalls)}</strong> successful calls</span>
+      </div>
+      <div class="dashboard-chart" data-usage-chart data-usage="${escapeHtml(JSON.stringify(rows))}">
+        <canvas tabindex="0" role="img" aria-label="Daily token usage for the last 15 days, UTC. Use left and right arrow keys to inspect each day." aria-describedby="daily-usage-help">Daily token usage. Exact values are available in the daily usage table below.</canvas>
+        <div class="dashboard-chart-tooltip" data-chart-tooltip role="status" hidden></div>
+      </div>
+      <p class="muted dashboard-chart-help" id="daily-usage-help">Successful calls only. Hover, tap, or use arrow keys to inspect a day.</p>
+      <details class="dashboard-chart-data">
+        <summary>View daily usage table</summary>
+        <div class="table-scroll">
+          <table>
+            <caption class="visually-hidden">Daily successful usage, UTC</caption>
+            <thead><tr><th scope="col">Day (UTC)</th><th scope="col">Calls</th><th scope="col">Tokens</th></tr></thead>
+            <tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${formatUsageNumber(row.calls)}</td><td>${formatUsageNumber(row.tokens)}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+  `;
+}
+
+function topUsersCard(rows) {
+  return `
+    <section class="panel dashboard-card" aria-labelledby="active-users-heading">
+      <div class="dashboard-card-heading">
+        <h2 id="active-users-heading">Most active users</h2>
+        <p class="muted">Top 10 by successful calls · Last 15 days · UTC</p>
+      </div>
+      ${rows.length ? `<div class="table-scroll"><table class="dashboard-users-table">
+        <thead><tr><th scope="col">User</th><th scope="col" class="numeric">Calls</th><th scope="col" class="numeric">Tokens</th></tr></thead>
+        <tbody>${rows.map((row) => `
+          <tr>
+            <td><a href="/admin/users/${row.id}">${escapeHtml(row.name || row.email)}</a><span class="muted dashboard-user-email">${escapeHtml(row.email)}</span></td>
+            <td class="numeric">${formatUsageNumber(row.calls)}</td>
+            <td class="numeric">${formatUsageNumber(row.tokens)}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : '<p class="muted">No successful calls from current users in the last 15 days.</p>'}
+    </section>
+  `;
+}
+
 function usageTable(rows) {
   if (!rows.length) return '<p class="muted">No records.</p>';
   return `
@@ -1902,7 +1977,7 @@ function usageTable(rows) {
       <tbody>${rows.map((row) => `
         <tr>
           <td>${escapeHtml(row.created_at)}</td>
-          <td>${escapeHtml(row.email || row.user_id || 'unknown')}</td>
+          <td>${escapeHtml(row.email || row.user_id || 'Deleted user')}</td>
           <td>${escapeHtml(row.model)}</td>
           <td>${escapeHtml(row.provider_slug || '')}</td>
           <td>${row.total_tokens}</td>
