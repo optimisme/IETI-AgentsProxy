@@ -914,13 +914,16 @@ router.get('/admin/users', requireAdmin, (req, res) => {
       ${page < totalPages ? `<a class="button secondary" href="${adminUsersUrl({ search, groupId, status, page: page + 1 })}">Next</a>` : '<span class="muted">Next</span>'}
     </nav>
   ` : `<p class="muted">${totalUsers} user${totalUsers === 1 ? '' : 's'}.</p>`;
-  const emailAddresses = getDb().prepare('SELECT email FROM users ORDER BY email COLLATE NOCASE').all()
+  const emailAddresses = getDb().prepare(`
+    SELECT users.email
+    FROM users
+    ${whereSql}
+    ORDER BY users.email COLLATE NOCASE
+  `).all(params)
     .map(({ email }) => email.trim()).filter(Boolean);
   const content = `
     <p class="actions">
       <a class="button" href="/admin/users/new">Create user</a>
-      <button type="button" class="secondary" data-copy-user-emails="${escapeHtml(emailAddresses.join(', '))}" data-email-count="${emailAddresses.length}" title="Copy all users' email addresses, including users outside the current filters"${emailAddresses.length ? '' : ' disabled'}>Copy all emails</button>
-      <span id="copy-user-emails-status" class="muted" role="status" aria-live="polite"></span>
     </p>
     <form method="get" action="/admin/users" class="panel search-panel">
       <label>Search users</label><input name="q" value="${escapeHtml(search)}" placeholder="Name, email, id, or date">
@@ -931,7 +934,12 @@ router.get('/admin/users', requireAdmin, (req, res) => {
       <label>Filter by registration status</label><select name="status">
         ${USER_STATUS_FILTERS.map((entry) => `<option value="${entry.value}" ${entry.value === status ? 'selected' : ''}>${entry.label}</option>`).join('')}
       </select>
-      <p><button>Search</button> <a class="button secondary" href="/admin/users">Clear</a></p>
+      <div class="actions user-filter-actions">
+        <button>Search</button>
+        <a class="button secondary" href="/admin/users">Clear</a>
+        <button type="button" class="secondary user-filter-copy" data-copy-user-emails="${escapeHtml(emailAddresses.join(', '))}" data-email-count="${emailAddresses.length}" title="Copy email addresses matching the current filters across all pages"${emailAddresses.length ? '' : ' disabled'}>Copy filtered emails</button>
+      </div>
+      <span id="copy-user-emails-status" class="muted user-filter-copy-status" role="status" aria-live="polite"></span>
     </form>
     <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Group</th><th>Status</th><th>Last used</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="muted">No users found.</td></tr>'}</tbody></table>
     ${pagination}
@@ -958,7 +966,8 @@ router.get('/admin/users', requireAdmin, (req, res) => {
           button.disabled = true;
           try {
             await copyText(button.dataset.copyUserEmails);
-            status.textContent = 'Copied ' + button.dataset.emailCount + ' email addresses.';
+            const count = Number(button.dataset.emailCount);
+            status.textContent = 'Copied ' + count + (count === 1 ? ' email address.' : ' email addresses.');
           } catch {
             status.textContent = 'Copy failed. Please allow clipboard access and try again.';
           } finally {

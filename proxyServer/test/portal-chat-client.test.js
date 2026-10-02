@@ -103,8 +103,21 @@ function browser(overrides = {}) {
   elements.get('chat-model').value = config.models[0]?.id || '';
   const replies = [];
   const calls = [];
+  const copied = [];
+  const copyReplies = [];
+  const navigator = {
+    clipboard: {
+      async writeText(text) {
+        copied.push(text);
+        const result = copyReplies.shift();
+        if (result instanceof Error) throw result;
+        if (result) await result;
+      }
+    }
+  };
   const sandbox = {
-    window: {},
+    window: { navigator },
+    navigator,
     document: { getElementById: (id) => elements.get(id), createElement: (tag) => new Element(tag) },
     AbortController, TextDecoder, Intl,
     fetch: async (url, options) => {
@@ -123,8 +136,9 @@ function browser(overrides = {}) {
   vm.runInNewContext(clientSource, sandbox, { filename: 'portal-chat.js' });
   const get = (id) => elements.get(`chat-${id}`);
   return {
-    calls, get, config,
+    calls, get, config, copied,
     queue: (reply) => replies.push(reply),
+    queueCopy: (reply) => copyReplies.push(reply),
     async draft(text) { get('input').value = text; await get('input').dispatch('input'); },
     async submit(text) {
       if (text !== undefined) { get('input').value = text; await get('input').dispatch('input'); }
@@ -154,6 +168,17 @@ function imageCount(fixture) {
 
 function summaryCards(fixture) {
   return descendants(fixture.get('messages'), (element) => (element.className || '').split(/\s+/).includes('chat-summary'));
+}
+
+function messageCopyButtons(fixture) {
+  // With Markdown libraries absent in this fixture, messages contain only the
+  // complete-message controls, while code and table controls are browser-tested.
+  return descendants(fixture.get('messages'), (element) => element.tagName === 'button');
+}
+
+async function waitForText(fixture, text) {
+  for (let attempt = 0; attempt < 30 && !fixture.get('messages').textContent.includes(text); attempt += 1) await Promise.resolve();
+  assert.ok(fixture.get('messages').textContent.includes(text), `Expected message text: ${text}`);
 }
 
 test('Enter sends through the form once while a busy or empty composer does not submit', async () => {
@@ -332,6 +357,122 @@ test('Compact forces a summary below 65% and can summarize an already compacted 
 function smallBrowser() {
   return browser({ models: [{ id: 'small-model', limit: { context: 2048, output: 256 }, capabilities: { image: false } }], maxOutputTokens: 256 });
 }
+
+test('full-message Copy preserves user and model Markdown without labels or private reasoning', async () => {
+  const fixture = browser();
+  const question = 'Please review this snippet:\n\n```java\nint a = 3;\n```';
+  const answer = '## Result\n\n| Name | Value |\n| --- | --- |\n| a | 3 |\n\nThe value is **three**.';
+  fixture.queue(response(answer, { reasoning: 'Private chain of reasoning, excluded from copying.' }));
+  await fixture.submit(question);
+  const [userCopy, modelCopy] = messageCopyButtons(fixture);
+  assert.equal(messageCopyButtons(fixture).length, 2);
+  assert.equal(userCopy.attributes.get('aria-label'), 'Copy user message');
+  assert.equal(modelCopy.attributes.get('aria-label'), 'Copy model answer');
+  await userCopy.dispatch('click');
+  await modelCopy.dispatch('click');
+  assert.deepEqual(fixture.copied, [question, answer], 'clipboard contains the original Markdown, not rendered or labeled message text');
+  assert.doesNotMatch(fixture.copied[1], /Private chain|text-model|Copy model answer/);
+});
+
+test('Copy keeps image-message text but never includes uploaded image data', async () => {
+  const fixture = browser();
+  await fixture.select('vision-model');
+  await fixture.upload(new ImageFile(PNG));
+  fixture.queue(response('Image answer.'));
+  await fixture.submit('What does **this image** show?');
+  const userCopy = messageCopyButtons(fixture)[0];
+  await userCopy.dispatch('click');
+  assert.equal(fixture.copied[0], 'What does **this image** show?');
+  assert.doesNotMatch(fixture.copied[0], /data:image|base64/);
+
+  await fixture.click('reset');
+  await fixture.upload(new ImageFile(PNG));
+  fixture.queue(response('Image-only answer.'));
+  await fixture.submit();
+  const imageOnlyCopy = messageCopyButtons(fixture)[0];
+  assert.equal(imageOnlyCopy.disabled, true, 'an image-only user message has no text to copy');
+  assert.equal(fixture.copied.length, 1);
+});
+
+test('Copy confirms clipboard success and allows retry after denied access without changing chat availability', async () => {
+  const fixture = browser();
+  fixture.queue(response('Answer with **Markdown**.'));
+  await fixture.submit('Question');
+  const button = messageCopyButtons(fixture)[1];
+  const originalStatus = fixture.get('status').textContent;
+  const indicator = fixture.get('state');
+
+  fixture.queueCopy(new Error('Clipboard permission denied.'));
+  await button.dispatch('click');
+  assert.equal(button.textContent, 'Copy failed');
+  assert.equal(button.disabled, false, 'a failed copy can be retried');
+  assert.equal(fixture.get('status').textContent, originalStatus);
+  assert.equal(indicator.attributes.get('data-state'), 'ready', 'clipboard failure does not mark the model unavailable');
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
+  await button.dispatch('click');
+  assert.equal(button.textContent, 'Copied');
+  assert.equal(button.disabled, false);
+  assert.deepEqual(fixture.copied, ['Answer with **Markdown**.', 'Answer with **Markdown**.']);
+  assert.equal(fixture.calls.length, 1, 'copying does not send requests to the model');
+});
+
+test('Copy reads the latest partial and completed streaming answer and excludes streamed reasoning', async () => {
+  const fixture = browser({ streaming: true });
+  const firstChunk = deferred();
+  const secondChunk = deferred();
+  let readCount = 0;
+  const encode = (payload) => Uint8Array.from(Buffer.from(`data: ${JSON.stringify(payload)}\n\n`));
+  fixture.queue({
+    ok: true, status: 200, redirected: false,
+    headers: { get: () => 'text/event-stream' },
+    body: { getReader: () => ({
+      read() { readCount += 1; return readCount === 1 ? firstChunk.promise : secondChunk.promise; },
+      async cancel() {},
+      releaseLock() {}
+    }) }
+  });
+  const sending = fixture.submit('Show code.');
+  await waitForCalls(fixture, 1);
+  const button = messageCopyButtons(fixture)[1];
+  assert.equal(button.disabled, true, 'the initial ellipsis is not copied as answer text');
+  firstChunk.resolve({ done: false, value: encode({ choices: [{ delta: { content: '# Example\n\n', reasoning_content: 'Private streamed reasoning.' } }] }) });
+  await waitForText(fixture, '# Example');
+  assert.equal(button.disabled, false);
+  await button.dispatch('click');
+  assert.deepEqual(fixture.copied, ['# Example\n\n']);
+
+  const finalChunk = `${Buffer.from(encode({ choices: [{ delta: { content: '```java\nint a = 3;\n```' }, finish_reason: 'stop' }] })).toString()}data: [DONE]\n\n`;
+  secondChunk.resolve({ done: false, value: Uint8Array.from(Buffer.from(finalChunk)) });
+  await sending;
+  assert.equal(messageCopyButtons(fixture)[1], button, 'the answer keeps the same full-message button as it streams');
+  await button.dispatch('click');
+  assert.equal(fixture.copied[1], '# Example\n\n```java\nint a = 3;\n```');
+  assert.doesNotMatch(fixture.copied[1], /Private streamed reasoning|Reasoning|text-model/);
+});
+
+test('compacting and Reset discard old message Copy controls with the old transcript', async () => {
+  const fixture = browser();
+  const question = 'Old goals '.repeat(100);
+  const answer = 'Old answer '.repeat(200);
+  fixture.queue(response(answer));
+  await fixture.submit(question);
+  const oldButtons = messageCopyButtons(fixture);
+  assert.equal(oldButtons.length, 2);
+  fixture.queue(response('Retained goal: continue this project.'));
+  await fixture.click('compact');
+  assert.equal(messageCopyButtons(fixture).length, 0, 'the summary replaces the old visible message controls');
+  assert.equal(summaryCards(fixture).length, 1);
+  fixture.queue(response('Latest answer'));
+  await fixture.submit('Continue');
+  const latestButtons = messageCopyButtons(fixture);
+  assert.equal(latestButtons.length, 2);
+  assert.ok(latestButtons.every((button) => !oldButtons.includes(button)));
+  await latestButtons[1].dispatch('click');
+  assert.deepEqual(fixture.copied, ['Latest answer']);
+  await fixture.click('reset');
+  assert.equal(messageCopyButtons(fixture).length, 0);
+  assert.match(fixture.get('messages').textContent, /Start a conversation/);
+});
 
 test('crossing 65% automatically summarizes existing context before sending the pending user message', async () => {
   const fixture = smallBrowser();

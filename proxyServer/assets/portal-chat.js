@@ -211,12 +211,77 @@
     return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   }
 
+  async function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(text); return; } catch { /* Try the browser fallback. */ }
+    }
+    if (typeof document.execCommand !== 'function') throw new Error('Clipboard unavailable.');
+    const focused = document.activeElement;
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '0';
+    area.style.opacity = '0';
+    document.body.append(area);
+    try {
+      area.select();
+      if (!document.execCommand('copy')) throw new Error('Copy failed.');
+    } finally {
+      area.remove();
+      focused?.focus();
+    }
+  }
+
+  function createCopyButton(getText, label, kind) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `chat-copy-button${kind === 'message' ? ' chat-message-copy' : ''}`;
+    button.textContent = 'Copy';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('data-copy-kind', kind);
+    button.setAttribute('aria-live', 'polite');
+    button.disabled = !getText().trim();
+    button.addEventListener('click', async () => {
+      const text = getText();
+      if (button.copyInProgress || !text.trim()) return;
+      button.copyInProgress = true;
+      button.disabled = true;
+      try {
+        await copyText(text);
+        button.textContent = 'Copied';
+        button.title = 'Copied to clipboard.';
+        button.setAttribute('aria-label', 'Copied to clipboard.');
+      } catch {
+        button.textContent = 'Copy failed';
+        button.title = 'Copy failed. Allow clipboard access and try again.';
+        button.setAttribute('aria-label', button.title);
+      } finally {
+        button.copyInProgress = false;
+        button.disabled = !getText().trim();
+      }
+    });
+    return button;
+  }
+
   function renderMarkdown(node, text) {
     if (!window.marked?.parse || !window.DOMPurify?.sanitize) {
       node.textContent = text;
       return;
     }
     const renderer = new window.marked.Renderer();
+    const blocks = [];
+    const renderCode = renderer.code.bind(renderer);
+    const renderTable = renderer.table.bind(renderer);
+    renderer.code = (token) => {
+      blocks.push({ kind: 'code', text: token.text });
+      return renderCode(token);
+    };
+    renderer.table = (token) => {
+      blocks.push({ kind: 'table', text: token.raw.trimEnd() });
+      return renderTable(token);
+    };
     renderer.html = (token) => escapeHtml(typeof token === 'string' ? token : token.text || '');
     const html = window.marked.parse(text, { gfm: true, breaks: true, renderer });
     node.innerHTML = window.DOMPurify.sanitize(html, {
@@ -227,6 +292,17 @@
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
     }
+    Array.from(node.querySelectorAll('pre, table')).forEach((element, index) => {
+      const block = blocks[index];
+      if (!block || element.tagName !== (block.kind === 'code' ? 'PRE' : 'TABLE')) return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'chat-copy-block';
+      const actions = document.createElement('div');
+      actions.className = 'chat-block-actions';
+      actions.append(createCopyButton(() => block.text, block.kind === 'code' ? 'Copy code' : 'Copy table as Markdown', block.kind));
+      element.before(wrapper);
+      wrapper.append(actions, element);
+    });
   }
 
   function contentText(content) {
@@ -245,9 +321,13 @@
       const label = document.createElement('div');
       label.className = 'chat-message-label';
       label.textContent = message.role === 'assistant' ? (message.model || 'Assistant') : message.role === 'user' ? 'You' : 'Chat';
+      const heading = document.createElement('div');
+      heading.className = 'chat-message-heading';
+      message.copyButton = createCopyButton(() => contentText(message.content), message.role === 'user' ? 'Copy user message' : 'Copy model answer', 'message');
+      heading.append(label, message.copyButton);
       const body = document.createElement('div');
       body.className = 'chat-markdown';
-      article.append(label, body);
+      article.append(heading, body);
       if (message.role === 'assistant') {
         const details = document.createElement('details');
         details.className = 'chat-reasoning';
@@ -276,6 +356,7 @@
       ui.messages.append(article);
     }
     const text = contentText(message.content);
+    message.copyButton.disabled = Boolean(message.copyButton.copyInProgress) || !text.trim();
     if (message.role === 'assistant') {
       renderMarkdown(message.body, text || (message.reasoning_content ? '' : '…'));
       message.reasoningDetails.hidden = !message.reasoning_content;

@@ -2548,20 +2548,26 @@ test('admin registration filter defaults to approved/enabled and preserves filte
     db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(userId, groupId);
   }
   const query = `q=${marker}&group_id=${groupId}`;
+  const copiedEmails = (html) => html.match(/data-copy-user-emails="([^"]*)"/)?.[1].split(', ').filter(Boolean);
+  const expectedEmails = (indexes) => indexes.map((index) => `${marker}-${index}@example.test`).sort();
   const first = await agent.get(`/admin/users?${query}&status=approved-disabled`).expect(200);
   assert.match(first.text, /Page 1 of 2\. 26 users\./);
+  assert.deepEqual(copiedEmails(first.text), expectedEmails(Array.from({ length: 26 }, (_, i) => i)));
+  assert.match(first.text, /<form[^>]*class="panel search-panel">[\s\S]*<button>Search<\/button>[\s\S]*>Clear<\/a>[\s\S]*>Copy filtered emails<\/button>[\s\S]*<\/form>/);
   assert.match(first.text, /value="approved-disabled" selected>approved\/disabled/);
   assert.doesNotMatch(first.text, /class="status-enabled"|name="enabled"|Filter by account access/);
   const next = first.text.match(/href="([^"]+)">Next<\/a>/)[1];
   for (const part of [`q=${marker}`, `group_id=${groupId}`, 'status=approved-disabled', 'page=2']) {
     assert.ok(next.includes(part));
   }
-  await agent.get(next).expect(200).expect(/Page 2 of 2\. 26 users\./);
+  const second = await agent.get(next).expect(200).expect(/Page 2 of 2\. 26 users\./);
+  assert.deepEqual(copiedEmails(second.text), copiedEmails(first.text));
   for (const filter of ['', '&status=approved-enabled', '&status=invalid']) {
     const response = await agent.get(`/admin/users?${query}${filter}`).expect(200);
     assert.match(response.text, /2 users\.<\/p>/);
     assert.match(response.text, /value="approved-enabled" selected>approved\/enabled/);
     assert.doesNotMatch(response.text, /class="status-disabled"/);
+    assert.deepEqual(copiedEmails(response.text), expectedEmails([26, 27]));
     const rows = response.text.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
     assert.ok(rows, 'The approved/enabled filter renders user rows.');
     for (const index of [26, 27]) assert.ok(rows.includes(`${marker}-${index}@example.test`));
@@ -2569,12 +2575,14 @@ test('admin registration filter defaults to approved/enabled and preserves filte
   for (const [status, indexes] of [['pending', [28, 29]], ['rejected', [30, 31]]]) {
     const response = await agent.get(`/admin/users?${query}&status=${status}`).expect(200);
     assert.match(response.text, /2 users\.<\/p>/);
+    assert.deepEqual(copiedEmails(response.text), expectedEmails(indexes));
     const rows = response.text.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
     assert.ok(rows, `The ${status} filter renders user rows.`);
     for (const index of indexes) assert.ok(rows.includes(`${marker}-${index}@example.test`));
   }
   const all = await agent.get(`/admin/users?${query}&status=all`).expect(200);
   assert.match(all.text, /Page 1 of 2\. 32 users\./);
+  assert.deepEqual(copiedEmails(all.text), expectedEmails(Array.from({ length: 32 }, (_, i) => i)));
   const allNext = all.text.match(/href="([^"]+)">Next<\/a>/)[1];
   assert.ok(allNext.includes('status=all'));
   await agent.get(allNext).expect(200).expect(/Page 2 of 2\. 32 users\./);
