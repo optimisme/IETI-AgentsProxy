@@ -394,9 +394,9 @@ test('full-message Copy preserves user and model Markdown without labels or priv
   assert.equal(modelCopy.textContent, 'Copy response');
   assert.equal(modelCopy.attributes.get('aria-label'), 'Copy response');
   const assistantHeading = descendants(fixture.get('messages'), (element) => (element.className || '').split(/\s+/).includes('chat-message-heading-assistant'))[0];
-  assert.ok(assistantHeading, 'the assistant heading has its own vertical layout');
+  assert.ok(assistantHeading, 'the assistant heading groups its attribution and adjacent Copy response control');
   assert.equal(assistantHeading.children[0].textContent, 'Answered by: text-model');
-  assert.equal(assistantHeading.children[1], modelCopy, 'the full answer control immediately follows its attribution');
+  assert.equal(assistantHeading.children[1], modelCopy, 'the full response control immediately follows its attribution in the same heading');
   await userCopy.dispatch('click');
   await modelCopy.dispatch('click');
   assert.deepEqual(fixture.copied, [question, answer], 'clipboard contains the original Markdown, not rendered or labeled message text');
