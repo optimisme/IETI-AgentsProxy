@@ -16,16 +16,16 @@ function startOfHourSql() {
 function getUsageTotals(userId) {
   const db = getDb();
   const today = db.prepare(`
-    SELECT COUNT(*) AS calls, COALESCE(SUM(total_tokens), 0) AS tokens
+    SELECT COUNT(CASE WHEN status != 'upstream_retry' THEN 1 END) AS calls, COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
-    WHERE user_id = ? AND (status = 'success' OR (status = 'cancelled' AND total_tokens > 0))
+    WHERE user_id = ? AND (status = 'success' OR (status IN ('cancelled', 'upstream_retry', 'upstream_error') AND total_tokens > 0))
       AND created_at >= ${startOfTodaySql()}
   `).get(userId);
 
   const hour = db.prepare(`
-    SELECT COUNT(*) AS calls, COALESCE(SUM(total_tokens), 0) AS tokens
+    SELECT COUNT(CASE WHEN status != 'upstream_retry' THEN 1 END) AS calls, COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
-    WHERE user_id = ? AND (status = 'success' OR (status = 'cancelled' AND total_tokens > 0))
+    WHERE user_id = ? AND (status = 'success' OR (status IN ('cancelled', 'upstream_retry', 'upstream_error') AND total_tokens > 0))
       AND created_at >= ${startOfHourSql()}
   `).get(userId);
 
@@ -46,7 +46,7 @@ function recordUsage({ userId, model, providerSlug = null, inputTokens = 0, outp
       (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `).run(userId, model || 'unknown', providerSlug, inputTokens, outputTokens, safeTotal, wasStreaming ? 1 : 0, status, errorMessage);
 
-  if (userId && (status === 'success' || (status === 'cancelled' && safeTotal > 0))) {
+  if (userId && (status === 'success' || (['cancelled', 'upstream_retry', 'upstream_error'].includes(status) && safeTotal > 0))) {
     getDb().prepare('UPDATE users SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
   }
 }
@@ -69,10 +69,10 @@ function dailyUsage(days = 15, now = new Date(), userId = null) {
   const parameters = [window.from, window.until];
   if (userId !== null) parameters.push(userId);
   const rows = getDb().prepare(`
-    SELECT substr(created_at, 1, 10) AS date, COUNT(*) AS calls,
+    SELECT substr(created_at, 1, 10) AS date, COUNT(CASE WHEN status != 'upstream_retry' THEN 1 END) AS calls,
       COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
-    WHERE (status = 'success' OR (status = 'cancelled' AND total_tokens > 0))
+    WHERE (status = 'success' OR (status IN ('cancelled', 'upstream_retry', 'upstream_error') AND total_tokens > 0))
       AND created_at >= ? AND created_at < ?
       ${userFilter}
     GROUP BY substr(created_at, 1, 10)
@@ -89,11 +89,11 @@ function dailyUsage(days = 15, now = new Date(), userId = null) {
 function topActiveUsers(days = 15, limit = 10, now = new Date()) {
   const window = usageDayWindow(days, now);
   return getDb().prepare(`
-    SELECT users.id, users.name, users.email, COUNT(*) AS calls,
+    SELECT users.id, users.name, users.email, COUNT(CASE WHEN usage_logs.status != 'upstream_retry' THEN 1 END) AS calls,
       COALESCE(SUM(usage_logs.total_tokens), 0) AS tokens
     FROM usage_logs
     JOIN users ON users.id = usage_logs.user_id
-    WHERE (usage_logs.status = 'success' OR (usage_logs.status = 'cancelled' AND usage_logs.total_tokens > 0))
+    WHERE (usage_logs.status = 'success' OR (usage_logs.status IN ('cancelled', 'upstream_retry', 'upstream_error') AND usage_logs.total_tokens > 0))
       AND usage_logs.created_at >= ? AND usage_logs.created_at < ?
     GROUP BY users.id
     ORDER BY calls DESC, tokens DESC, users.id ASC

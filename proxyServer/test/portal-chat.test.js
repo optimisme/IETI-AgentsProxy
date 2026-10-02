@@ -23,8 +23,10 @@ process.env.STREAM_INACTIVITY_TIMEOUT_MS = '1000';
 const { getDb, closeDb } = require('../src/db');
 const { hashPassword } = require('../src/services/studentAuthService');
 const { getInFlight } = require('../src/services/providerService');
+const { providerAvailability } = require('../src/services/providerAvailabilityService');
 const { getUsageTotals } = require('../src/services/usageService');
 const { createApp } = require('../src/app');
+const { preparePortalChatPayload } = require('../src/utils/portalChat');
 const password = 'portal-chat-student-password';
 const passwordHash = hashPassword(password);
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHCkAAAAASUVORK5CYII=';
@@ -82,6 +84,7 @@ test.before(async () => {
 });
 
 test.beforeEach(() => {
+  providerAvailability.succeeded('portal-chat-provider');
   db.exec('DELETE FROM usage_logs; DELETE FROM users; DELETE FROM groups;');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('false', 'maintenance_mode');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('1000', 'max_requests_per_minute');
@@ -257,6 +260,23 @@ test('Chat rejects system roles, tool fields and models outside the student’s 
     await complete(agent, config, { [field]: field === 'tools' ? [] : 'auto' }).expect(400);
   }
   assert.equal(upstreamCalls.length, 0);
+});
+
+test('Chat validates an optional opaque conversation identifier and preserves it during payload preparation', async () => {
+  const { agent, config } = await chatSession();
+  const conversationId = crypto.randomUUID();
+  const prepared = preparePortalChatPayload({
+    model: 'portal-chat-text', messages: [{ role: 'user', content: 'Continue this page conversation.' }],
+    conversation_id: conversationId
+  }, config.models);
+  assert.equal(prepared.conversation_id, conversationId);
+  await complete(agent, config, { conversation_id: conversationId }).expect(200);
+  assert.equal(upstreamCalls[0].payload.conversation_id, undefined, 'the routing identifier does not reach upstream');
+  for (const conversation_id of ['', 'white space', '\ncontrol', 'x'.repeat(257), 17, {}, []]) {
+    await complete(agent, config, { conversation_id }).expect(400);
+  }
+  assert.equal(upstreamCalls.length, 1);
+  assertNoPersistedConversation();
 });
 
 test('forced compaction keeps the harness and summaries in context, consumes quota, and persists no messages', async () => {

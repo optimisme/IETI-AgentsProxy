@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { webcrypto } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -125,6 +126,7 @@ function browser(overrides = {}) {
     }
   };
   const sandbox = {
+    crypto: webcrypto,
     window: { navigator, setTimeout, clearTimeout },
     navigator,
     setTimeout, clearTimeout,
@@ -300,11 +302,15 @@ test('Reset prevents a late response from restoring the conversation or finishin
   fixture.queue(old.promise);
   const oldSend = fixture.submit('Old conversation');
   await waitForCalls(fixture, 1);
+  const previousConversationId = fixture.calls[0].body.conversation_id;
+  assert.match(previousConversationId, /^[0-9a-f-]{36}$/);
   await fixture.click('reset');
   assert.equal(fixture.calls[0].signal.aborted, true);
   fixture.queue(fresh.promise);
   const freshSend = fixture.submit('Fresh conversation');
   await waitForCalls(fixture, 2);
+  const nextConversationId = fixture.calls[1].body.conversation_id;
+  assert.notEqual(nextConversationId, previousConversationId, 'Reset also starts fresh affinity while the old request finishes');
   old.resolve(response('Late old answer'));
   await oldSend;
   assert.equal(fixture.get('send').disabled, true, 'the new request remains busy');
@@ -316,6 +322,24 @@ test('Reset prevents a late response from restoring the conversation or finishin
   await fixture.submit('Continue fresh');
   assert.deepEqual(fixture.calls[2].body.messages.map((message) => message.content), ['Fresh conversation', 'Fresh answer', 'Continue fresh']);
   assert.equal(fixture.calls[2].body.summary, '');
+  assert.equal(fixture.calls[2].body.conversation_id, nextConversationId, 'following turns preserve the new conversation identity');
+});
+
+test('separate pages have independent opaque identifiers and model changes preserve the page conversation', async () => {
+  const first = browser();
+  const second = browser();
+  first.queue(response('First answer.'));
+  second.queue(response('Other answer.'));
+  await first.submit('Shared first-message template.');
+  await second.submit('Shared first-message template.');
+  const id = first.calls[0].body.conversation_id;
+  assert.notEqual(id, second.calls[0].body.conversation_id, 'identical initial messages do not identify different page conversations');
+  assert.doesNotMatch(id, /Shared|template|text-model/);
+  await first.select('vision-model');
+  first.queue(response('Answer with the other model.'));
+  await first.submit('Continue with another model.');
+  assert.equal(first.calls[1].body.conversation_id, id);
+  assert.equal(first.calls[1].body.model, 'vision-model');
 });
 
 test('Reset prevents a late compaction summary from becoming the context of a fresh conversation', async () => {
@@ -367,6 +391,7 @@ test('Compact forces a summary below 65% and can summarize an already compacted 
   await fixture.submit('Continue');
   assert.equal(fixture.calls[3].body.summary, 'Bullet list.');
   assert.deepEqual(fixture.calls[3].body.messages, [{ role: 'user', content: 'Continue' }]);
+  assert.ok(fixture.calls.every((call) => call.body.conversation_id === fixture.calls[0].body.conversation_id), 'summary requests and compacted continuations retain the same opaque identity');
   assert.equal(fixture.get('messages').children.length, 3, 'the summary and new exchange stay visible');
   assert.equal(summaryCards(fixture)[0], summaryNode, 'normal sends append new messages without redrawing the existing summary');
   assert.doesNotMatch(fixture.get('messages').textContent, /Detailed response/);

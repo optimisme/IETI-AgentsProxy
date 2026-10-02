@@ -150,6 +150,36 @@ Actualitza la configuracio dels clients despres de canviar de model. Els
 mappings d'una base de dades existent no canvien fins que apliques la descoberta.
 Els proveidors que publiquen la mateixa identitat queden agrupats al proxy.
 
+## Retencio de snapshots de Flash Next CUDA
+
+El perfil `models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml`
+afegeix la variable **personalitzada** `TENSORFOLD_PROMPT_SNAPSHOTS`, amb valor
+per defecte `16` i enters admesos d'`1` a `32`. No es una opcio YAML/CLI nativa
+de TensorFold v0.6.1. L'arrencada substitueix exactament una vegada el `KEEP = 8`
+esperat del commit fixat, **abans** de la instal·lacio pip ordinaria. Si el
+constant o els seus usos no coincideixen, l'arrencada falla clarament. Despres
+comprova el valor i els usos al modul Python instal·lat, no nomes al checkout.
+
+El mateix `KEEP` governa la planificacio de memoria d'`indexed_stream_geometry`
+i la retencio de `MultiDecoder`. `16` son snapshots retinguts de prefixos de
+text, no necessàriament setze converses: una conversa pot generar-ne diversos.
+Augmentar-lo consumeix memoria addicional i no garanteix una millora del
+rendiment. Les peticions amb imatges ometen actualment aquesta reutilitzacio
+de prefixos de text. No cal recompilar CUDA ni reconstruir la imatge; si que
+calen la instal·lacio i l'escalfament normals quan es recrea el contenidor.
+
+Per tornar temporalment a vuit snapshots, des de `docker/` i amb el mateix
+projecte Compose i volums persistents:
+
+```bash
+TENSORFOLD_PROMPT_SNAPSHOTS=8 docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d --no-deps --force-recreate qwen-tensorfold
+```
+
+Revisa als logs el missatge `Verified installed Flash Next KEEP=8` (o `16`)
+i espera l'estat saludable abans d'enviar-hi càrrega. La variable es resol
+quan s'executa Compose; conserva el YAML anterior per recuperar la configuracio
+completa. Recrear nomes aquest servei conserva pesos, `tokens.env` i caches.
+
 ## Migracio dels desplegaments anteriors
 
 Aquesta reorganitzacio conserva els noms dels contenidors i dels 22 volums de

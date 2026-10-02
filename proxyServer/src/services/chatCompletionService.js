@@ -6,6 +6,19 @@ const { recordUsage } = require('./usageService');
 const { estimateChatTokens, estimateTokensFromText } = require('../utils/tokens');
 const { validateRequestPayload } = require('../utils/payloadValidation');
 const { apiError } = require('../utils/errors');
+const { affinityContextFromRequest } = require('./conversationAffinityService');
+const { providerAvailability } = require('./providerAvailabilityService');
+
+function failedAttemptUsage(error) {
+  const usage = error.upstreamUsage;
+  const inputTokens = Math.max(0, Number(usage?.prompt_tokens ?? usage?.input_tokens) || 0);
+  const outputTokens = Math.max(0, Number(usage?.completion_tokens ?? usage?.output_tokens) || 0);
+  return { inputTokens, outputTokens, totalTokens: Math.max(0, Number(usage?.total_tokens) || inputTokens + outputTokens) };
+}
+
+function recordFailedAttempt({ userId, model, wasStreaming }, error) {
+  recordUsage({ userId, model, wasStreaming, providerSlug: error.providerSlug, ...failedAttemptUsage(error), status: 'upstream_retry', errorMessage: error.message });
+}
 
 function responseIsClosed(res) {
   return res.destroyed || res.writableEnded;
@@ -32,6 +45,8 @@ async function handleChatCompletion(req, res, next) {
   let releaseProvider;
   let providerSlug = null;
   let providerRequestStarted = false;
+  let completeProvider;
+  let failProvider;
   let clientDisconnected = false;
   const controller = new AbortController();
   const disconnect = () => {
@@ -67,11 +82,15 @@ async function handleChatCompletion(req, res, next) {
     timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
 
     providerRequestStarted = true;
-    const { upstream, provider, release } = await callChatCompletions({ ...payload, model }, {
+    const { upstream, provider, release, complete, fail } = await callChatCompletions({ ...payload, model }, {
       signal: controller.signal,
-      providerSlugs: group.provider_slugs
+      providerSlugs: group.provider_slugs,
+      conversation: affinityContextFromRequest(req),
+      onAttemptFailure: (error) => recordFailedAttempt({ userId: user.id, model, wasStreaming }, error)
     });
     releaseProvider = release;
+    completeProvider = complete;
+    failProvider = fail;
     providerSlug = provider.slug;
 
     if (wasStreaming) {
@@ -85,6 +104,8 @@ async function handleChatCompletion(req, res, next) {
         providerSlug,
         estimatedInputTokens,
         controller,
+        completeProvider,
+        failProvider,
         isClientDisconnected: () => clientDisconnected
       });
       return;
@@ -95,6 +116,7 @@ async function handleChatCompletion(req, res, next) {
       throw new DOMException('Client disconnected.', 'AbortError');
     }
     const usage = normalizeUsage(body.usage, estimatedInputTokens, body);
+    completeProvider(body.choices?.[0]?.message);
     recordUsage({
       userId: user.id,
       model,
@@ -109,16 +131,22 @@ async function handleChatCompletion(req, res, next) {
   } catch (error) {
     const cancelled = clientDisconnected || responseIsClosed(res);
     const timedOut = !cancelled && error.name === 'AbortError';
-    const inputTokens = cancelled && !providerRequestStarted ? 0 : estimatedInputTokens;
+    if (!cancelled) {
+      if (failProvider) failProvider();
+      else if (timedOut && error.providerSlug) providerAvailability.failed(error.providerSlug);
+    }
+    const upstreamUsage = error.upstreamAttempt && !(cancelled && providerRequestStarted && !error.upstreamUsage) ? failedAttemptUsage(error) : null;
+    const inputTokens = upstreamUsage?.inputTokens ?? (cancelled && !providerRequestStarted ? 0 : estimatedInputTokens);
+    providerSlug = error.providerSlug || providerSlug;
     recordUsage({
       userId: user?.id,
       model,
       providerSlug,
       inputTokens,
-      outputTokens: 0,
-      totalTokens: inputTokens,
+      outputTokens: upstreamUsage?.outputTokens || 0,
+      totalTokens: upstreamUsage?.totalTokens ?? inputTokens,
       wasStreaming,
-      status: cancelled ? 'cancelled' : timedOut ? 'timeout' : 'error',
+      status: cancelled ? 'cancelled' : timedOut ? 'timeout' : upstreamUsage?.totalTokens > 0 ? 'upstream_error' : 'error',
       errorMessage: cancelled ? 'Client disconnected.' : timedOut ? 'Provider request timed out.' : error.message
     });
     if (cancelled || res.headersSent) {
@@ -134,27 +162,44 @@ async function handleChatCompletion(req, res, next) {
   }
 }
 
-async function streamResponse({ upstream, res, userId, model, providerSlug, estimatedInputTokens, controller, isClientDisconnected }) {
+async function streamResponse({ upstream, res, userId, model, providerSlug, estimatedInputTokens, controller, isClientDisconnected, completeProvider, failProvider }) {
   let reader;
   let inactivityTimer;
   let outputText = '';
   let reasoningText = '';
   let usageFromStream = null;
-  const outputEstimate = () => estimateTokensFromText(outputText) + estimateTokensFromText(reasoningText);
+  let streamFinished = false;
+  const toolCalls = new Map();
+  const outputEstimate = () => estimateTokensFromText(outputText) + estimateTokensFromText(reasoningText) +
+    estimateTokensFromText([...toolCalls.values()].map((entry) => entry.function.arguments).join(''));
   const inspectEvent = (event) => {
     const data = event.split(/\r?\n/)
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trimStart()).join('\n');
-    if (!data || data === '[DONE]') return;
+    if (!data) return;
+    if (data === '[DONE]') { streamFinished = true; return; }
+    let parsed;
     try {
-      const parsed = JSON.parse(data);
-      const delta = parsed.choices?.[0]?.delta || {};
-      if (typeof delta.content === 'string') outputText += delta.content;
-      const reasoning = delta.reasoning_content ?? delta.reasoning;
-      if (typeof reasoning === 'string') reasoningText += reasoning;
-      if (parsed.usage) usageFromStream = parsed.usage;
+      parsed = JSON.parse(data);
     } catch {
       // Preserve malformed upstream SSE fragments without treating them as usage.
+      return;
+    }
+    if (parsed.usage) usageFromStream = parsed.usage;
+    if (parsed.error) throw new Error(parsed.error.message || 'The upstream stream failed.');
+    if (parsed.choices?.some((choice) => choice.finish_reason)) streamFinished = true;
+    const delta = parsed.choices?.[0]?.delta || {};
+    if (typeof delta.content === 'string') outputText += delta.content;
+    const reasoning = delta.reasoning_content ?? delta.reasoning;
+    if (typeof reasoning === 'string') reasoningText += reasoning;
+    for (const tool of delta.tool_calls || []) {
+      const index = Number(tool.index || 0);
+      const entry = toolCalls.get(index) || { id: '', type: 'function', function: { name: '', arguments: '' } };
+      if (tool.id) entry.id = tool.id;
+      if (tool.type) entry.type = tool.type;
+      entry.function.name += tool.function?.name || '';
+      entry.function.arguments += tool.function?.arguments || '';
+      toolCalls.set(index, entry);
     }
   };
   const writeEvent = (event, separator = '') => {
@@ -198,7 +243,9 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
     if (isClientDisconnected() || responseIsClosed(res)) {
       throw new DOMException('Client disconnected.', 'AbortError');
     }
+    if (!streamFinished) throw new Error('The upstream stream ended before completion.');
     const usage = normalizeUsage(usageFromStream, estimatedInputTokens, null, outputEstimate());
+    completeProvider({ role: 'assistant', content: outputText, ...(toolCalls.size ? { tool_calls: [...toolCalls.values()] } : {}) });
     recordUsage({
       userId,
       model,
@@ -213,14 +260,18 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
   } catch (error) {
     controller.abort();
     const cancelled = isClientDisconnected() || responseIsClosed(res);
+    if (!cancelled) failProvider?.();
+    const consumed = Boolean(usageFromStream || outputEstimate() > 0);
+    const usage = normalizeUsage(usageFromStream, cancelled || consumed ? estimatedInputTokens : 0, null, outputEstimate());
     recordUsage({
       userId,
       model,
       providerSlug,
-      inputTokens: estimatedInputTokens,
-      outputTokens: outputEstimate(),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
       wasStreaming: true,
-      status: cancelled ? 'cancelled' : 'error',
+      status: cancelled ? 'cancelled' : consumed ? 'upstream_error' : 'error',
       errorMessage: cancelled ? 'Client disconnected.' : error.message
     });
     if (!cancelled) {
@@ -247,4 +298,4 @@ function normalizeUsage(usage, estimatedInputTokens, body, estimatedOutputTokens
   };
 }
 
-module.exports = { handleChatCompletion };
+module.exports = { failedAttemptUsage, handleChatCompletion, recordFailedAttempt };

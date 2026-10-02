@@ -256,6 +256,7 @@ Si Google recrea un compte institucional amb el mateix correu i un `sub` diferen
 La seccio **Chat**, entre Dashboard i Settings, utilitza la sessio de l'usuari i nomes els seus models actius, amb les mateixes quotes, limitacio de peticions i registre d'us que l'API. No cal introduir una clau API.
 
 - Una unica conversa temporal en memoria de la pagina. **Reset** cancel·la les peticions i elimina la conversa, el resum i les imatges; recarregar la pagina tambe inicia una conversa nova. No es guarden missatges al navegador ni a SQLite.
+- La pagina genera un `conversation_id` opac nomes en memoria per afavorir el mateix servidor d'inferencia quan els servidors elegibles estan igual de carregats. **Reset** i recarregar la pagina generen una identitat nova; **Compact** i canviar de model la conserven. El servidor separa l'afinitat per usuari autenticat, model i pool autoritzat.
 - **Compact** resumeix la conversa a peticio de l'usuari. La compactacio automatica s'activa abans d'enviar un missatge quan la projeccio arriba al **65% del pressupost d'entrada**, reservant espai per a la resposta i les instruccions. La projeccio de tokens es aproximada; els resums conserven els missatges recents i nomes substitueixen el context anterior si tenen exit i alliberen espai. A la pantalla, un unic resum actualitzat substitueix els missatges antics; se n'alliberen el text, les imatges i els elements HTML per evitar acumular historial al navegador. Cada resum consumeix una peticio i tokens de la quota.
 - Els models amb visio permeten adjuntar PNG, JPEG o WebP amb els limits de quantitat i mida del servidor. Les imatges es processen en memoria, sense crear fitxers al servidor.
 - Els missatges de l'usuari, les respostes i els resums mostren Markdown amb taules i blocs de codi. Marked i DOMPurify es distribueixen localment a `assets/vendor/`, amb les seves llicencies; no cal cap framework, CDN ni servei addicional.
@@ -369,6 +370,18 @@ Endpoints principals:
 - `GET /v1/models?client_version=...`: cataleg dinamic de models virtuals i capacitats per a Codex.
 - `POST /v1/chat/completions`: entrada Chat Completions usada per OpenCode.
 - `POST /v1/responses`: entrada Responses API usada per Codex; es tradueix al mateix encaminament intern de Chat Completions.
+
+## Balanceig i afinitat de conversa
+
+El criteri principal continua sent el nombre de peticions en curs: una conversa nova va a un proveidor elegible amb la carrega minima. En torns posteriors, el proveidor anterior te preferencia nomes entre els proveidors amb aquesta mateixa carrega minima. Si esta mes ocupat, deshabilitat, temporalment indisponible, ple o no admet el model, les capacitats o el pool del grup, es tria un altre. Sense afinitat aprofitable, es conserven la prioritat configurada i la seleccio aleatoria en empat. La reserva de concurrencia dura fins que acaba o es cancel·la tota la resposta, inclosos els streams.
+
+Els clients poden enviar un identificador opac i estable per conversa amb `X-Conversation-ID` o el camp JSON `conversation_id` a Chat Completions i Responses. Genereu una identitat nova per una conversa independent o una branca que vulgueu encaminar independentment; conserveu-la durant una compactacio si voleu mantenir l'afinitat. L'identificador nomes es una pista d'encaminament: no dona permisos ni es reenvia al proveidor. L'abast inclou l'usuari autenticat, el model i el pool autoritzat; una clau API o un ID d'usuari no identifica una conversa.
+
+OpenCode envia el context complet a `/v1/chat/completions`; la configuracio generada no fixa cap identificador comu per a totes les sessions. Sense identificador explicit, el proxy fa un reconeixement prudent de prefixes de missatges continuats mitjançant hashes. Un prompt de sistema compartit o una primera pregunta comuna no son suficients. Historials identics del mateix usuari, model i pool poden ser indistinguibles sense un identificador; les branques o compactacions que canvien el prefix poden perdre aquesta afinitat estimada. El proxy no reconstrueix context omes a Responses: el client ha de continuar enviant el context complet.
+
+L'afinitat conserva com a maxim 10.000 entrades amb caducitat de 30 minuts des de l'ultim us. El seguiment d'errors conserva fins a 1.024 proveidors durant cinc minuts i aplica una pausa exponencial d'1 a 30 segons, sense consultar salut abans de cada peticio. Nomes es guarden metadades en memoria del proces: hashes, identificadors de proveidor i marques de temps. No es guarden prompts, imatges, respostes ni historial de conversa, i un reinici elimina les pistes.
+
+Els errors transitoris abans de lliurar sortida poden provocar un segon intent, com a maxim, en un altre proveidor elegible; un stream que ja ha lliurat sortida mai es repeteix. La quota de crides compta una peticio logica, no els seus intents. Els intents rebutjats nomes afegeixen tokens si el proveidor n'informa explicitament; les generacions cancel·lades o fallides que ja han consumit recursos mantenen el registre i el carrec corresponents.
 
 ## Com es guarden les dades
 

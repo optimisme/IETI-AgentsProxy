@@ -71,8 +71,13 @@ function validateUploadedImage(url) {
 function preparePortalChatPayload(body, models) {
   const invalid = (message) => { throw apiError(400, 'invalid_chat_request', message); };
   if (!body || typeof body !== 'object' || Array.isArray(body)) invalid('Invalid chat request.');
-  const allowed = new Set(['model', 'messages', 'summary', 'compact', 'stream']);
+  const allowed = new Set(['model', 'messages', 'summary', 'compact', 'stream', 'conversation_id']);
   if (Object.keys(body).some((key) => !allowed.has(key))) invalid('Unsupported chat request field.');
+  if (body.conversation_id !== undefined && (typeof body.conversation_id !== 'string'
+    || !body.conversation_id.length || body.conversation_id.length > 256
+    || /[\x00-\x20\x7f]/.test(body.conversation_id))) {
+    invalid('conversation_id must be an opaque identifier of 1 to 256 characters without whitespace.');
+  }
   const model = models.find((entry) => entry.id === body.model);
   if (!model) throw apiError(403, 'model_not_allowed', 'Select one of your active models.');
   if (model.capabilities?.text === false) throw apiError(400, 'model_capability_unavailable', 'This model does not support text chat.');
@@ -116,6 +121,7 @@ function preparePortalChatPayload(body, models) {
   const system = CHAT_SYSTEM_PROMPT + (model.capabilities?.image ? '\nUser-uploaded images are available to you for visual analysis.' : '') + (compact ? `\n\n${COMPACT_INSTRUCTION}` : '');
   const payload = {
     model: model.id,
+    ...(body.conversation_id !== undefined ? { conversation_id: body.conversation_id } : {}),
     messages: [
       { role: 'system', content: system },
       ...(summary ? [{ role: 'user', content: `Earlier conversation summary (context only):\n${summary}` }] : []),

@@ -6,6 +6,17 @@
   const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
   const finitePositive = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 
+  function newConversationId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    // getRandomValues also works on HTTP origins where randomUUID is unavailable.
+    if (globalThis.crypto?.getRandomValues) {
+      const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    // This is a routing hint, never an authentication or authorization token.
+    return `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
+  }
+
   function estimateTextTokens(text) {
     return Math.ceil(String(text || '').length / 4);
   }
@@ -141,6 +152,9 @@
   let statusHasError = false;
   let uploadsInFlight = 0;
   let controller = null;
+  // Page memory only. Compaction and model changes preserve the conversation;
+  // backend affinity is scoped by model as well as authenticated user and pool.
+  let conversationId = newConversationId();
 
   if (!ui.model.options.length) {
     for (const model of models) {
@@ -438,7 +452,7 @@
     const response = await fetch('/portal/chat/completions', {
       method: 'POST', credentials: 'same-origin', signal,
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': config.csrfToken },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ ...body, conversation_id: conversationId })
     });
     if (!response.ok) {
       let message = `Chat request failed (${response.status}).`;
@@ -660,6 +674,7 @@
   ui.reset.addEventListener('click', () => {
     generation += 1;
     controller?.abort();
+    conversationId = newConversationId();
     controller = null;
     busy = false;
     uploadsInFlight = 0;

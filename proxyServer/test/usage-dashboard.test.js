@@ -11,7 +11,7 @@ process.env.PUBLIC_BASE_URL = '';
 process.env.DEFAULT_PROVIDER_API_KEY = '';
 
 const { getDb, closeDb, initSchema } = require('../src/db');
-const { dailyUsage, topActiveUsers, dashboardSummary, recentUsage } = require('../src/services/usageService');
+const { dailyUsage, topActiveUsers, dashboardSummary, recentUsage, getUsageTotals } = require('../src/services/usageService');
 const now = new Date('2026-10-02T15:04:05Z');
 let db;
 
@@ -35,6 +35,24 @@ function usage(userId, createdAt, tokens = 7, status = 'success') {
     VALUES (?, 'test-model', 'test-provider', ?, ?, ?)
   `).run(userId, tokens, status, createdAt).lastInsertRowid);
 }
+
+test('retry attempts charge reported tokens without charging another logical call', () => {
+  const alice = user('Alice');
+  const bob = user('Bob');
+  const timestamp = db.prepare("SELECT datetime('now') AS value").get().value;
+  usage(alice, timestamp, 0, 'upstream_retry');
+  usage(alice, timestamp, 11, 'upstream_retry');
+  usage(alice, timestamp, 17, 'success');
+  usage(alice, timestamp, 5, 'upstream_error');
+  usage(alice, timestamp, 0, 'upstream_error');
+  usage(bob, timestamp, 999, 'upstream_retry');
+  assert.deepEqual(getUsageTotals(alice), { hourCalls: 2, hourTokens: 33, todayCalls: 2, todayTokens: 33 });
+  const realNow = new Date();
+  assert.deepEqual(dailyUsage(1, realNow, alice)[0], { date: timestamp.slice(0, 10), calls: 2, tokens: 33 });
+  const ranked = topActiveUsers(1, 10, realNow).find(row => row.id === alice);
+  assert.equal(ranked.calls, 2);
+  assert.equal(ranked.tokens, 33);
+});
 
 test('daily usage includes exactly 15 UTC calendar days, fills gaps and counts completed calls and charged cancellations', () => {
   const student = user('Alice');

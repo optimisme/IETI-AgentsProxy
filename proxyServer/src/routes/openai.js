@@ -3,7 +3,9 @@ const config = require('../config');
 const { authStudent } = require('../middleware/authStudent');
 const { studentRateLimit } = require('../middleware/rateLimit');
 const { callChatCompletions, getEnabledModelEntries } = require('../services/providerService');
-const { handleChatCompletion } = require('../services/chatCompletionService');
+const { failedAttemptUsage, handleChatCompletion, recordFailedAttempt } = require('../services/chatCompletionService');
+const { affinityContextFromRequest } = require('../services/conversationAffinityService');
+const { providerAvailability } = require('../services/providerAvailabilityService');
 const { checkQuota } = require('../services/quotaService');
 const { recordUsage } = require('../services/usageService');
 const { getUserGroup } = require('../services/accessService');
@@ -104,9 +106,24 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
   let timeout;
   let releaseProvider;
   let providerSlug = null;
+  let completeProvider;
+  let failProvider;
+  let providerRequestStarted = false;
+  let clientDisconnected = false;
   const controller = new AbortController();
+  const disconnect = () => {
+    if (res.writableEnded) return;
+    clientDisconnected = true;
+    controller.abort();
+  };
+  req.once('aborted', disconnect);
+  res.once('close', disconnect);
 
   try {
+    if (req.aborted || res.destroyed) {
+      clientDisconnected = true;
+      throw new DOMException('Client disconnected.', 'AbortError');
+    }
     chatPayload = responsesToChatPayload(responsesPayload);
     model = chatPayload.model;
     estimatedInputTokens = estimateChatTokens(chatPayload);
@@ -125,16 +142,21 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
     });
     timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
 
+    providerRequestStarted = true;
     const providerResponse = await callChatCompletions(chatPayload, {
       signal: controller.signal,
       providerSlugs: group.provider_slugs,
+      conversation: affinityContextFromRequest(req, responsesPayload),
+      onAttemptFailure: (error) => recordFailedAttempt({ userId: user.id, model, wasStreaming }, error),
       requiredCapabilities: {
         reasoning: Boolean(responsesPayload.reasoning),
         parallelTools: Boolean(responsesPayload.parallel_tool_calls && chatPayload.tools?.length)
       }
     });
-    const { upstream, provider, release } = providerResponse;
+    const { upstream, provider, release, complete, fail } = providerResponse;
     releaseProvider = release;
+    completeProvider = complete;
+    failProvider = fail;
     providerSlug = provider.slug;
 
     if (wasStreaming) {
@@ -148,13 +170,18 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
         providerSlug,
         estimatedInputTokens,
         responsesPayload,
-        controller
+        controller,
+        completeProvider,
+        failProvider,
+        isClientDisconnected: () => clientDisconnected
       });
       return;
     }
 
     const chatBody = await upstream.json();
+    if (clientDisconnected || res.destroyed) throw new DOMException('Client disconnected.', 'AbortError');
     const responseBody = chatCompletionToResponse(chatBody, responsesPayload, estimatedInputTokens);
+    completeProvider(chatBody.choices?.[0]?.message);
     const usage = responseBody.usage;
     recordUsage({
       userId: user.id,
@@ -168,25 +195,40 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
     });
     res.json(responseBody);
   } catch (error) {
-    const errorMessage = error.name === 'AbortError' ? 'Provider request timed out.' : error.message;
+    const cancelled = clientDisconnected || res.destroyed;
+    const timedOut = !cancelled && error.name === 'AbortError';
+    if (!cancelled) {
+      if (failProvider) failProvider();
+      else if (timedOut && error.providerSlug) providerAvailability.failed(error.providerSlug);
+    }
+    const upstreamUsage = error.upstreamAttempt && !(cancelled && providerRequestStarted && !error.upstreamUsage) ? failedAttemptUsage(error) : null;
+    const inputTokens = upstreamUsage?.inputTokens ?? (cancelled && !providerRequestStarted ? 0 : estimatedInputTokens);
+    providerSlug = error.providerSlug || providerSlug;
+    const errorMessage = cancelled ? 'Client disconnected.' : timedOut ? 'Provider request timed out.' : error.message;
     recordUsage({
       userId: user?.id,
       model,
       providerSlug,
-      inputTokens: estimatedInputTokens,
-      outputTokens: 0,
-      totalTokens: estimatedInputTokens,
+      inputTokens,
+      outputTokens: upstreamUsage?.outputTokens || 0,
+      totalTokens: upstreamUsage?.totalTokens ?? inputTokens,
       wasStreaming,
-      status: error.name === 'AbortError' ? 'timeout' : 'error',
+      status: cancelled ? 'cancelled' : timedOut ? 'timeout' : upstreamUsage?.totalTokens > 0 ? 'upstream_error' : 'error',
       errorMessage
     });
-    if (error.name === 'AbortError') {
+    if (cancelled || res.headersSent) {
+      if (!res.destroyed && !res.writableEnded) res.end();
+      return;
+    }
+    if (timedOut) {
       next(apiError(504, 'provider_timeout', 'Provider request timed out.'));
     } else {
       next(error);
     }
   } finally {
     if (timeout) clearTimeout(timeout);
+    req.removeListener('aborted', disconnect);
+    res.removeListener('close', disconnect);
     releaseProvider?.();
   }
 });
@@ -320,7 +362,8 @@ function finishResponseOutputs(res, state) {
   }
 }
 
-async function streamResponsesCompatibility({ upstream, res, userId, model, providerSlug, estimatedInputTokens, responsesPayload, controller }) {
+async function streamResponsesCompatibility({ upstream, res, userId, model, providerSlug, estimatedInputTokens, responsesPayload, controller, completeProvider, failProvider, isClientDisconnected }) {
+  if (isClientDisconnected() || res.destroyed) throw new DOMException('Client disconnected.', 'AbortError');
   res.status(upstream.status);
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -341,6 +384,7 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
     usage: null,
     finishReason: null
   };
+  let streamFinished = false;
   writeResponseEvent(res, state, 'response.created', { response });
   writeResponseEvent(res, state, 'response.in_progress', { response });
 
@@ -352,18 +396,20 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      inactivityTimer.reset();
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
+      if (isClientDisconnected() || res.destroyed) throw new DOMException('Client disconnected.', 'AbortError');
+      if (!done) inactivityTimer.reset();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
       buffer = events.pop() || '';
+      if (done && buffer) { events.push(buffer); buffer = ''; }
 
       for (const rawEvent of events) {
-        const dataLines = rawEvent.split('\n')
+        const dataLines = rawEvent.split(/\r?\n/)
           .filter((line) => line.startsWith('data:'))
           .map((line) => line.slice(5).trim());
         for (const data of dataLines) {
-          if (!data || data === '[DONE]') continue;
+          if (!data) continue;
+          if (data === '[DONE]') { streamFinished = true; continue; }
           let chunk;
           try {
             chunk = JSON.parse(data);
@@ -371,9 +417,10 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
             continue;
           }
           if (chunk.usage) state.usage = chunk.usage;
+          if (chunk.error) throw new Error(chunk.error.message || 'The upstream stream failed.');
           const choice = chunk.choices?.[0];
           if (!choice) continue;
-          if (choice.finish_reason) state.finishReason = choice.finish_reason;
+          if (choice.finish_reason) { state.finishReason = choice.finish_reason; streamFinished = true; }
           const delta = choice.delta || {};
 
           const reasoningDelta = delta.reasoning ?? delta.reasoning_content;
@@ -417,8 +464,18 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
           }
         }
       }
+      if (done) break;
     }
 
+    if (isClientDisconnected() || res.destroyed) throw new DOMException('Client disconnected.', 'AbortError');
+    if (!streamFinished) throw new Error('The upstream stream ended before completion.');
+    completeProvider({
+      role: 'assistant',
+      content: state.message?.text || '',
+      ...(state.toolCalls.size ? { tool_calls: [...state.toolCalls.values()].map(({ item, arguments: argumentsText }) => ({
+        id: item.call_id, type: 'function', function: { name: item.name, arguments: argumentsText }
+      })) } : {})
+    });
     finishResponseOutputs(res, state);
     response.output = state.outputs.map(({ item }) => item);
     const outputEstimate = estimateTokensFromText(state.reasoning?.text || '') +
@@ -447,22 +504,32 @@ async function streamResponsesCompatibility({ upstream, res, userId, model, prov
     });
     res.end();
   } catch (error) {
+    controller.abort();
+    const cancelled = isClientDisconnected() || res.destroyed;
+    if (!cancelled) failProvider?.();
     response.status = 'failed';
     response.error = { code: 'stream_error', message: 'Streaming failed.' };
-    writeResponseEvent(res, state, 'response.failed', { response });
+    if (!cancelled) writeResponseEvent(res, state, 'response.failed', { response });
+    const outputEstimate = estimateTokensFromText(state.reasoning?.text || '') +
+      estimateTokensFromText(state.message?.text || '') +
+      estimateTokensFromText([...state.toolCalls.values()].map((entry) => entry.arguments).join(''));
+    const consumed = Boolean(state.usage || outputEstimate > 0);
+    const usage = chatUsageToResponses(state.usage, cancelled || consumed ? estimatedInputTokens : 0, outputEstimate);
     recordUsage({
       userId,
       model,
       providerSlug,
-      inputTokens: estimatedInputTokens,
-      outputTokens: estimateTokensFromText(state.message?.text || ''),
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      totalTokens: usage.total_tokens,
       wasStreaming: true,
-      status: 'error',
-      errorMessage: error.message
+      status: cancelled ? 'cancelled' : consumed ? 'upstream_error' : 'error',
+      errorMessage: cancelled ? 'Client disconnected.' : error.message
     });
-    res.end();
+    if (!cancelled) res.end();
   } finally {
     inactivityTimer.clear();
+    reader.releaseLock();
   }
 }
 

@@ -21,7 +21,7 @@ function dailyUsageCard(rows) {
         <canvas tabindex="0" role="img" aria-label="Daily token usage for the last 15 days, UTC. Use left and right arrow keys to inspect each day." aria-describedby="daily-usage-help">Daily token usage. Exact values are available in the daily usage table below.</canvas>
         <div class="dashboard-chart-tooltip" data-chart-tooltip role="status" hidden></div>
       </div>
-      <p class="muted dashboard-chart-help" id="daily-usage-help">Completed requests and stopped generations. Hover, tap, or use arrow keys to inspect a day.</p>
+      <p class="muted dashboard-chart-help" id="daily-usage-help">Completed requests and stopped generations, including charged failed generations. Reported tokens from retried attempts are included without counting extra calls. Hover, tap, or use arrow keys to inspect a day.</p>
       <details class="dashboard-chart-data">
         <summary>View daily usage table</summary>
         <div class="table-scroll">

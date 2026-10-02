@@ -1,7 +1,12 @@
 # From docker/: docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d
 # Served model: Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP
 # TensorFold v0.6.1, pinned to its official release commit.
-# Flash-Next CUDA vision is upstream through PR #146; no local patch is needed.
+# Flash-Next CUDA vision is upstream through PR #146.
+# Custom startup patch: TENSORFOLD_PROMPT_SNAPSHOTS defaults to 16 (integer 1–32).
+# This is retained text-prefix snapshots, not a limit of sixteen conversations.
+# Extra retention consumes memory; vision requests bypass text-prefix reuse.
+# KEEP is patched before pip install, for both memory planning and runtime use;
+# the installed module is verified before serving. No CUDA/image rebuild is needed.
 # CUDA on one ARM64 DGX Spark / GB10, internal MTP drafting and native vision.
 # Default profile: sixteen concurrent streams, 75000 tokens per stream, int8 KV
 # and SSD n-gram reads.
@@ -71,6 +76,7 @@ services:
       MODEL_ID: Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP
       CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
       PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
+      TENSORFOLD_PROMPT_SNAPSHOTS: "${TENSORFOLD_PROMPT_SNAPSHOTS:-16}"
     # Preserve NVIDIA's entrypoint and its CUDA compatibility initialization.
     command:
       - /bin/bash
@@ -93,11 +99,55 @@ services:
         rm -rf /opt/tensorfold-source
         git clone --filter=blob:none --no-checkout https://github.com/ashhart/TensorFold.git /opt/tensorfold-source
         git -C /opt/tensorfold-source checkout --detach 17c73e189f5e6a5304cda7ea37f086f9c49b4788
+        # Custom setting, not an upstream CLI option. Fail if the pinned source drifts.
+        python - /opt/tensorfold-source/src/tensorfold/families/qwen4_exp/cuda/engine.py <<'PY_PATCH_SNAPSHOTS'
+        import os
+        from pathlib import Path
+        import re
+        import sys
+
+        value = os.environ['TENSORFOLD_PROMPT_SNAPSHOTS']
+        if not re.fullmatch(r'[0-9]{1,2}', value) or not 1 <= int(value) <= 32:
+            raise SystemExit('TENSORFOLD_PROMPT_SNAPSHOTS must be an integer from 1 to 32')
+        path = Path(sys.argv[1])
+        source = path.read_text()
+        expected = 'KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from'
+        uses = (
+            'indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits)',
+            'confidence=self.confidence, keep=KEEP, points=self.points,',
+        )
+        if re.findall(r'^KEEP\s*=.*', source, re.MULTILINE) != [expected] or any(source.count(use) != 1 for use in uses):
+            raise SystemExit('TensorFold snapshot patch failed: pinned engine.py KEEP=8 or its planning/runtime uses no longer match')
+        path.write_text(source.replace(expected, expected.replace('KEEP = 8 ', f'KEEP = {int(value)} '), 1))
+        print(f'[ieti] Patched Flash Next retained prompt snapshots: {int(value)}', flush=True)
+        PY_PATCH_SNAPSHOTS
         # The test extra supplies pytest, also required by NGC's triton-kernels.
         python -m pip install \
           '/opt/tensorfold-source[test,vision]' \
           'transformers==5.18.0' 'huggingface-hub==1.33.0' \
           'hf-xet==1.6.0' 'pytest==9.1.1'
+
+        # Ordinary pip copies the checkout: inspect/import the installed package too.
+        python - /opt/tensorfold-source <<'PY_VERIFY_SNAPSHOTS'
+        import importlib
+        import inspect
+        import os
+        from pathlib import Path
+        import sys
+
+        engine = importlib.import_module('tensorfold.families.qwen4_exp.cuda.engine')
+        installed = Path(engine.__file__).resolve()
+        keep = getattr(engine, 'KEEP', None)
+        expected = int(os.environ['TENSORFOLD_PROMPT_SNAPSHOTS'])
+        source = inspect.getsource(engine)
+        uses = (
+            'indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits)',
+            'confidence=self.confidence, keep=KEEP, points=self.points,',
+        )
+        if installed.is_relative_to(Path(sys.argv[1]).resolve()) or keep != expected or any(source.count(use) != 1 for use in uses):
+            raise SystemExit(f'TensorFold installed snapshot verification failed: {installed}, KEEP={keep!r}, expected={expected}')
+        print(f'[ieti] Verified installed Flash Next KEEP={keep}: {installed}', flush=True)
+        PY_VERIFY_SNAPSHOTS
 
         # Flash Next includes its own MTP head; its n-gram tables stay on SSD.
         tensorfold pull "$${MODEL_ID}"

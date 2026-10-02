@@ -3,6 +3,8 @@ const { prepareAssistantHistory } = require('../utils/reasoningHistory');
 const { getDb } = require('../db');
 const { apiError } = require('../utils/errors');
 const { officialModelSettings } = require('../utils/providerMetadata');
+const { affinityStore } = require('./conversationAffinityService');
+const { providerAvailability } = require('./providerAvailabilityService');
 const {
   CHAT_TEMPLATE_KWARG_NAMES,
   CHAT_TEMPLATE_KWARG_SET,
@@ -221,7 +223,9 @@ function reserveProvider(provider) {
   return () => {
     if (released) return;
     released = true;
-    inFlightByProvider.set(provider.slug, Math.max(0, getInFlight(provider.slug) - 1));
+    const remaining = Math.max(0, getInFlight(provider.slug) - 1);
+    if (remaining) inFlightByProvider.set(provider.slug, remaining);
+    else inFlightByProvider.delete(provider.slug);
   };
 }
 
@@ -238,7 +242,7 @@ function normalizeProviderSlugs(slugs) {
   return [...new Set(values.map((slug) => String(slug || '').trim()).filter(Boolean))];
 }
 
-function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, requiredCapabilities = {}) {
+function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, requiredCapabilities = {}, { affinity, excludedProviderSlugs = [] } = {}) {
   const slugs = normalizeProviderSlugs(assignedProviderSlugs);
   const params = { publicModelAlias };
   const providerFilter = slugs.length
@@ -313,13 +317,21 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
     throw apiError(400, 'model_capability_unavailable', `Model ${publicModelAlias} has no assigned provider supporting: ${missing}.`);
   }
 
-  const availableCandidates = capableCandidates.filter(hasCapacity);
+  const preferredSlug = affinity?.setPool(capableCandidates.map((provider) => provider.slug));
+  const excluded = new Set(excludedProviderSlugs);
+  const reachableCandidates = capableCandidates.filter((provider) => !excluded.has(provider.slug) && providerAvailability.available(provider.slug));
+  if (!reachableCandidates.length) {
+    throw apiError(503, 'provider_unavailable', `Providers for ${publicModelAlias} are temporarily unavailable. Retry shortly.`);
+  }
+  const availableCandidates = reachableCandidates.filter(hasCapacity);
   if (!availableCandidates.length) {
     throw apiError(503, 'provider_capacity_exceeded', `All providers for ${publicModelAlias} are at capacity.`);
   }
 
   const lowestInFlight = Math.min(...availableCandidates.map((provider) => getInFlight(provider.slug)));
   const leastBusyCandidates = availableCandidates.filter((provider) => getInFlight(provider.slug) === lowestInFlight);
+  const preferred = leastBusyCandidates.find((provider) => provider.slug === preferredSlug);
+  if (preferred) return preferred;
   const highestPriority = Math.max(...leastBusyCandidates.map((provider) => Number(provider.priority || 0)));
   const topCandidates = leastBusyCandidates.filter((provider) => Number(provider.priority || 0) === highestPriority);
   const candidate = randomChoice(topCandidates);
@@ -342,7 +354,7 @@ function inferRequiredCapabilities(payload) {
   };
 }
 
-async function callChatCompletions(payload, { signal, providerSlug = null, providerSlugs = null, requiredCapabilities = {} } = {}) {
+async function callChatCompletions(payload, { signal, providerSlug = null, providerSlugs = null, requiredCapabilities = {}, conversation = {}, onAttemptFailure } = {}) {
   const inferred = inferRequiredCapabilities(payload);
   const requirements = {
     text: Boolean(inferred.text || requiredCapabilities.text),
@@ -353,46 +365,84 @@ async function callChatCompletions(payload, { signal, providerSlug = null, provi
     reasoningEffort: requiredCapabilities.reasoningEffort || inferred.reasoningEffort || null,
     chatTemplateKwargs: Boolean(inferred.chatTemplateKwargs || requiredCapabilities.chatTemplateKwargs)
   };
-  const provider = chooseProviderModel(payload.model, providerSlugs || providerSlug, requirements);
-  if (!provider.base_url) {
-    throw apiError(503, 'provider_misconfigured', `Provider ${provider.slug} has no base URL.`);
-  }
-  if (!provider.api_key) {
-    throw apiError(503, 'provider_misconfigured', `Provider ${provider.slug} has no API key placeholder or API key.`);
-  }
-
-  const release = reserveProvider(provider);
-  try {
-    const response = await fetch(chatCompletionsUrl(provider.base_url), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${provider.api_key}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(buildPayload(payload, provider.upstream_model, provider)),
-      signal
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      let body;
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = { error: { message: text || response.statusText } };
-      }
-      const message = body?.error?.message || response.statusText || `${provider.name} request failed.`;
-      const code = response.status === 402 || /balance|insufficient/i.test(message)
-        ? 'insufficient_provider_balance'
-        : 'provider_error';
-      release();
-      throw apiError(response.status === 401 ? 502 : response.status, code, message, body);
+  const affinity = affinityStore.request({ ...conversation, model: payload.model, messages: payload.messages });
+  const attemptedSlugs = [];
+  let lastError;
+  // Two attempts at most, each to a different eligible endpoint. Once a response
+  // is returned, its body belongs to the route and is never replayed.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    signal?.throwIfAborted();
+    let provider;
+    try {
+      provider = chooseProviderModel(payload.model, providerSlugs || providerSlug, requirements, { affinity, excludedProviderSlugs: attemptedSlugs });
+    } catch (error) {
+      throw lastError || error;
+    }
+    if (!provider.base_url) {
+      if (lastError) throw lastError;
+      throw apiError(503, 'provider_misconfigured', `Provider ${provider.slug} has no base URL.`);
+    }
+    if (!provider.api_key) {
+      if (lastError) throw lastError;
+      throw apiError(503, 'provider_misconfigured', `Provider ${provider.slug} has no API key placeholder or API key.`);
     }
 
-    return { upstream: response, provider, release };
-  } catch (error) {
-    release();
-    throw error;
+    if (lastError) onAttemptFailure?.(lastError);
+    const release = reserveProvider(provider);
+    attemptedSlugs.push(provider.slug);
+    try {
+      const response = await fetch(chatCompletionsUrl(provider.base_url), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${provider.api_key}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(buildPayload(payload, provider.upstream_model, provider)),
+        signal
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        let body;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = { error: { message: text || response.statusText } };
+        }
+        const message = body?.error?.message || response.statusText || `${provider.name} request failed.`;
+        const code = response.status === 402 || /balance|insufficient/i.test(message)
+          ? 'insufficient_provider_balance'
+          : 'provider_error';
+        const error = apiError(response.status === 401 ? 502 : response.status, code, message, body);
+        error.transient = [429, 502, 503, 504].includes(response.status);
+        const retryAfter = response.headers.get('retry-after');
+        error.retryAfterMs = Math.max(0, Number(retryAfter) * 1000 || Date.parse(retryAfter) - Date.now() || 0);
+        error.upstreamUsage = body?.usage;
+        throw error;
+      }
+
+      return {
+        upstream: response,
+        provider,
+        release,
+        complete: (assistantMessage) => {
+          providerAvailability.succeeded(provider.slug);
+          affinity.complete(provider.slug, assistantMessage);
+        },
+        fail: () => providerAvailability.failed(provider.slug)
+      };
+    } catch (error) {
+      release();
+      error.providerSlug = provider.slug;
+      const connectFailure = ['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'ETIMEDOUT'].includes(error.cause?.code || error.code);
+      const transient = !signal?.aborted && error.name !== 'AbortError' && (error.transient || connectFailure);
+      error.upstreamAttempt = true;
+      if (transient) providerAvailability.failed(provider.slug, error.retryAfterMs);
+      if (!transient || attempt === 1) throw error;
+      // Record the rejected attempt separately; it never counts as another
+      // logical call. Only explicit upstream usage is charged as consumed tokens.
+      lastError = error;
+    }
   }
 }
 
