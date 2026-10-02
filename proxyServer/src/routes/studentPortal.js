@@ -645,10 +645,10 @@ router.get('/portal', requireStudentSession, (req, res) => {
         <p class="muted">Manage your API keys from <a href="/portal/settings">Settings</a>.</p>
       </div>
       ${renderActiveModels(req, models)}
+      <h2>Recent usage</h2>
       <div class="dashboard-section">${usageLimitCards(models[0]?.group, usage)}</div>
       <div class="dashboard-section">${dailyUsageCard(usageByDay)}</div>
       <script src="/portal/assets/dashboard-usage.js" defer></script>
-      <h2>Recent usage</h2>
       <table>
         <thead><tr><th>When</th><th>Model</th><th>Input</th><th>Output</th><th>Total</th><th>Status</th></tr></thead>
         <tbody>${usageRows || '<tr><td colspan="6" class="muted">No usage yet.</td></tr>'}</tbody>
