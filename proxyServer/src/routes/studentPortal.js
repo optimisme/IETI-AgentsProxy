@@ -14,7 +14,7 @@ const {
   MAX_USER_API_KEYS
 } = require('../services/userApiKeyService');
 const { verifyAdminCredentials } = require('../middleware/authAdmin');
-const { getUsageTotals, recentUsage } = require('../services/usageService');
+const { getUsageTotals, recentUsage, dailyUsage } = require('../services/usageService');
 const { getSetting } = require('../services/settingsService');
 const { getEnabledModelEntries } = require('../services/providerService');
 const { getUserGroup } = require('../services/accessService');
@@ -31,6 +31,7 @@ const {
 const config = require('../config');
 const { renderTemplate } = require('../utils/templates');
 const { REASONING_EFFORTS } = require('../utils/reasoning');
+const { dailyUsageCard } = require('../utils/usageCards');
 const {
   escapeHtml,
   flash,
@@ -489,9 +490,14 @@ router.post('/invite/:token', (req, res) => {
   });
 });
 
+router.get('/portal/assets/dashboard-usage.js', requireApprovedStudentSession, (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(path.join(CLIENT_SCRIPT_DIRECTORY, 'dashboard-usage.js'));
+});
+
 router.get('/portal', requireStudentSession, (req, res) => {
   const user = req.portalUser;
-  if (user.registration_status === 'pending' || !getUserGroup(user.id)) {
+  if (user.registration_status !== 'approved' || !getUserGroup(user.id)) {
     res.set('Cache-Control', 'no-store');
     return render(req, res, {
       title: 'Account awaiting approval',
@@ -509,6 +515,7 @@ router.get('/portal', requireStudentSession, (req, res) => {
     });
   }
   const usage = getUsageTotals(user.id);
+  const usageByDay = dailyUsage(15, new Date(), user.id);
   const models = getActiveModelsForUser(user);
   const shellCommand = getClientScriptCommand(req, 'set_agents.sh');
   const powershellCommand = getClientScriptCommand(req, 'set_agents.ps1');
@@ -641,6 +648,8 @@ router.get('/portal', requireStudentSession, (req, res) => {
         </script>
       </div>
       ${renderActiveModels(req, models)}
+      <div class="dashboard-section">${dailyUsageCard(usageByDay)}</div>
+      <script src="/portal/assets/dashboard-usage.js" defer></script>
       <h2>Recent usage</h2>
       <table>
         <thead><tr><th>When</th><th>Model</th><th>Input</th><th>Output</th><th>Total</th><th>Status</th></tr></thead>

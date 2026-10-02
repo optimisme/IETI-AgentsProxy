@@ -70,6 +70,59 @@ test('empty usage and UTC boundaries produce complete buckets across a leap day'
   assert.deepEqual(summary.recentCalls, []);
 });
 
+test('student daily usage isolates successful calls within UTC boundaries from other and anonymous users', () => {
+  const alice = user('Alice');
+  const bob = user('Bob');
+  const removed = user('Removed');
+  usage(alice, '2026-09-17 23:59:59', 10000);
+  usage(alice, '2026-09-18 00:00:00', 11);
+  usage(alice, '2026-10-01 23:59:59', 13);
+  usage(alice, '2026-10-02 00:00:00', 17);
+  usage(alice, '2026-10-02 23:59:59', 19);
+  usage(alice, '2026-10-02 12:00:00', 10000, 'error');
+  usage(alice, '2026-10-03 00:00:00', 10000);
+  usage(bob, '2026-09-18 00:00:00', 100);
+  usage(bob, '2026-10-02 12:00:00', 200);
+  usage(removed, '2026-10-02 12:00:00', 300);
+  usage(null, '2026-10-02 12:00:00', 400);
+  db.prepare('DELETE FROM users WHERE id = ?').run(removed);
+
+  const aliceDaily = dailyUsage(15, now, alice);
+  assert.equal(aliceDaily.length, 15);
+  assert.deepEqual(aliceDaily[0], { date: '2026-09-18', calls: 1, tokens: 11 });
+  assert.deepEqual(aliceDaily[1], { date: '2026-09-19', calls: 0, tokens: 0 });
+  assert.deepEqual(aliceDaily[13], { date: '2026-10-01', calls: 1, tokens: 13 });
+  assert.deepEqual(aliceDaily[14], { date: '2026-10-02', calls: 2, tokens: 36 });
+  assert.equal(aliceDaily.reduce((sum, day) => sum + day.calls, 0), 4);
+  assert.equal(aliceDaily.reduce((sum, day) => sum + day.tokens, 0), 60);
+  const bobDaily = dailyUsage(15, now, bob);
+  assert.equal(bobDaily.reduce((sum, day) => sum + day.calls, 0), 2);
+  assert.equal(bobDaily.reduce((sum, day) => sum + day.tokens, 0), 300);
+
+  const globalDaily = dailyUsage(15, now);
+  assert.deepEqual(globalDaily[0], { date: '2026-09-18', calls: 2, tokens: 111 });
+  assert.deepEqual(globalDaily[14], { date: '2026-10-02', calls: 5, tokens: 936 });
+  assert.equal(globalDaily.reduce((sum, day) => sum + day.tokens, 0), 1060);
+  assert.deepEqual(dailyUsage(15, now, null), globalDaily);
+});
+
+test('new, nonexistent, zero and deleted student ids receive zero-filled daily buckets', () => {
+  const active = user('Active');
+  const removed = user('Removed');
+  const newStudent = user('New');
+  usage(active, '2026-10-02 12:00:00', 17);
+  usage(removed, '2026-10-02 12:00:00', 23);
+  usage(null, '2026-10-02 12:00:00', 29);
+  db.prepare('DELETE FROM users WHERE id = ?').run(removed);
+
+  const globalDaily = dailyUsage(15, now);
+  assert.equal(globalDaily[14].tokens, 69);
+  const empty = globalDaily.map(({ date }) => ({ date, calls: 0, tokens: 0 }));
+  for (const studentId of [newStudent, 0, 999999, removed]) {
+    assert.deepEqual(dailyUsage(15, now, studentId), empty);
+  }
+});
+
 test('active users rank by successful calls, tokens and user id with the same date window and limit', () => {
   const alice = user('Alice');
   const bob = user('Bob', 0);

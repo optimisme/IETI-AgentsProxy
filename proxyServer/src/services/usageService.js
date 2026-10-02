@@ -61,15 +61,19 @@ function usageDayWindow(days, now) {
   return { count, start, from: sqlTimestamp(start), until: sqlTimestamp(end) };
 }
 
-function dailyUsage(days = 15, now = new Date()) {
+function dailyUsage(days = 15, now = new Date(), userId = null) {
   const window = usageDayWindow(days, now);
+  const userFilter = userId === null ? '' : 'AND user_id = ?';
+  const parameters = [window.from, window.until];
+  if (userId !== null) parameters.push(userId);
   const rows = getDb().prepare(`
     SELECT substr(created_at, 1, 10) AS date, COUNT(*) AS calls,
       COALESCE(SUM(total_tokens), 0) AS tokens
     FROM usage_logs
     WHERE status = 'success' AND created_at >= ? AND created_at < ?
+      ${userFilter}
     GROUP BY substr(created_at, 1, 10)
-  `).all(window.from, window.until);
+  `).all(...parameters);
   const byDate = new Map(rows.map((row) => [row.date, row]));
   return Array.from({ length: window.count }, (_, index) => {
     const day = new Date(window.start);
