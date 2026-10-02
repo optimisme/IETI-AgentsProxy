@@ -1,42 +1,31 @@
 # From docker/: docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d
 # Served model: Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP
-# TensorFold v0.6.0 plus a local image-only port of upstream PR #146.
+# TensorFold v0.6.1, pinned to its official release commit.
+# Flash-Next CUDA vision is upstream through PR #146; no local patch is needed.
 # CUDA on one ARM64 DGX Spark / GB10, internal MTP drafting and native vision.
 # Default profile: sixteen concurrent streams, 75000 tokens per stream, int8 KV
 # and SSD n-gram reads.
 # Thinking stays enabled with low reasoning effort and a 1024-token budget,
 # preserving the rest of the reply allowance for answers and tool calls.
 # Temperature 0.1 reduces sampling randomness. Requests can override defaults.
-# Applies ../patches/tensorfold-flash-next-vision-v0.6.0.patch before installation.
-# Patch origin: MiaAI patch 0008, ported by upstream PR #146, adapted here for
-# v0.6.0's dynamic KV growth and mixed prompt/decode rounds. Image input only.
-# PR source commit: 23e055556e543903ddf1ea9a985ba18374c8e997.
-# Keeps 4 GiB of vision workspace plus 2 GiB of runtime cache-growth headroom.
+# Upstream reserves 4 GiB of vision workspace at startup; runtime cache growth
+# normally keeps 2 GiB of headroom, without the old patch's extra vision guard.
 # Reuses the existing Flash Next HF cache volume; it must already exist.
 # Runtime and compiled-kernel caches are separate from the text-only profile.
-# To test the tweet's five-stream / 262k settings from docker/:
+# Optional five-stream / 262k configuration from docker/ (not validated here):
 # TENSORFOLD_CONTEXT=262144 TENSORFOLD_STREAMS=5 docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d
-# Those overrides match the tweet's model/KV/context/stream choices.
-# The tweet author's v0.6.0 port of MiaAI's SSD reader and prefill geometry
-# patches was not supplied or found published; MiaAI's patch set targets v0.3.6.3.
-# Text-only baseline verified 2026-10-01: clean dependencies, CUDA startup,
-# text/SSE and sixteen concurrent drafted replies equal to serial replies.
-# Baseline estimate 84.51 GiB; the vision tower and workspace add memory.
-# The text-only baseline passed 256 cold-prefix requests and a 32k prefill test.
-# Vision verified 2026-10-01: swapped-image grounding, exact serial/MTP tokens,
-# image-cache isolation, thinking-budget continuation and four mixed requests.
-# 410 CPU checks and 19 CUDA checks passed; memory-guard regressions passed.
-# Vision startup estimate: 89.35 GiB within a 105.25 GiB admission budget.
-# Idle warm burst: 8 image + 8 text requests, all correct, max TTFT 1.52s,
-# 4.06s total and 273 aggregate generated tokens/s (short prompts, thinking off,
-# temperature 0; this is not the tweet benchmark). Large overlapping prefills
-# raised burst TTFT to 15.11-22.37s, so a 10s latency target is not guaranteed.
-# Image SSE through the main proxy passed with low/default thinking in 2.26s.
+# Release adds shared text-prefix reuse and short-prompt-first prefill scheduling.
+# Paired CUDA validation 2026-10-02 against the unchanged old control passed:
+# text/SSE, conversation, shared-prefix reuse, two-image cache isolation, MTP,
+# 1/4/8/16 streams, mixed 8-image + 8-text bursts and 2k/8k/16k/32k prefills.
+# Shared-prefix and short-request admission improved; decode speedups were not
+# established. Cold overlapping 4x16k prefills still exceeded 10s TTFT.
+# With vision enabled, upstream uses 2048-row idle prefill pieces, not 4096.
 # All sixteen full 75k windows at once remain unverified.
 # The checkpoint download is about 114 GB; leave at least 160 GB free disk.
 # Do not run alongside another large model on a 128 GB Spark.
-# Sources: https://github.com/ashhart/TensorFold/pull/146
-#          https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/tree/a3aa89835022c55ca8e55008c37785954834e04f
+# Sources: https://github.com/ashhart/TensorFold/releases/tag/v0.6.1
+#          https://github.com/ashhart/TensorFold/pull/146
 
 name: ieti-qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb
 
@@ -59,12 +48,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - type: bind
-        source: ../patches/tensorfold-flash-next-vision-v0.6.0.patch
-        target: /opt/ieti-patches/flash-next-vision.patch
-        read_only: true
-        bind:
-          create_host_path: false
       - type: bind
         source: ../tokens.env
         target: /run/secrets/tokens.env
@@ -106,14 +89,10 @@ services:
         # The venv is recreated with the container; only downloads and caches persist.
         python3 -m venv --system-site-packages /opt/tensorfold-venv
         . /opt/tensorfold-venv/bin/activate
-        # Pin upstream and reject a patch with a different digest before applying it.
-        # Recreate this container-only checkout so restart never reapplies a patch.
+        # Recreate the container-only checkout at the official v0.6.1 commit.
         rm -rf /opt/tensorfold-source
         git clone --filter=blob:none --no-checkout https://github.com/ashhart/TensorFold.git /opt/tensorfold-source
-        git -C /opt/tensorfold-source checkout --detach c4646171139ee8a3c38103eaa1699dad226ec12b
-        printf '%s  %s\n' 'faf2fa62fd995d8c9f7587d590e3a57ce1028974b0023ca85d2394c09d4c4200' /opt/ieti-patches/flash-next-vision.patch | sha256sum -c -
-        git -C /opt/tensorfold-source apply --check /opt/ieti-patches/flash-next-vision.patch
-        git -C /opt/tensorfold-source apply /opt/ieti-patches/flash-next-vision.patch
+        git -C /opt/tensorfold-source checkout --detach 17c73e189f5e6a5304cda7ea37f086f9c49b4788
         # The test extra supplies pytest, also required by NGC's triton-kernels.
         python -m pip install \
           '/opt/tensorfold-source[test,vision]' \
