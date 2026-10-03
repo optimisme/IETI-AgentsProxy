@@ -22,8 +22,9 @@ function embeddedPython(marker) {
 const expected = 'KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from';
 // The relevant unchanged planning/runtime call sites from the pinned engine.
 const fixture = `KEEP_SERIAL = 4\n${expected}\n
-def plan(text, streams, each, mtp, bits):
-    return indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits)
+def plan(text, streams, each, mtp, bits, rows0):
+    return indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits,
+                                                          prefill_rows=rows0)
 
 def decoder(w, streams, max_len, depth, confidence, points):
     return MultiDecoder(w, slots=streams, capacity=max_len, depth=depth,
@@ -40,13 +41,13 @@ function runPython(script, args, value, env = {}) {
 }
 
 test('Flash Next patch runs before pip and verifies the installed module before serving', { skip: !profileAvailable }, () => {
-  const checkout = source.indexOf('checkout --detach 17c73e189f5e6a5304cda7ea37f086f9c49b4788');
+  const checkout = source.indexOf('checkout --detach 9356df5c424b0c36b7737e37873a6f968b08de79');
   const patch = source.indexOf("<<'PY_PATCH_SNAPSHOTS'");
   const install = source.indexOf('python -m pip install');
   const verify = source.indexOf("<<'PY_VERIFY_SNAPSHOTS'");
   const serve = source.indexOf('exec tensorfold serve');
   assert.ok(checkout < patch && patch < install && install < verify && verify < serve);
-  assert.match(source, /TENSORFOLD_PROMPT_SNAPSHOTS: "\$\{TENSORFOLD_PROMPT_SNAPSHOTS:-16\}"/);
+  assert.match(source, /TENSORFOLD_PROMPT_SNAPSHOTS: "\$\{TENSORFOLD_PROMPT_SNAPSHOTS:-32\}"/);
 });
 
 test('Flash Next snapshot patch accepts bounded values and rejects source drift without writing', { skip }, (t) => {
@@ -114,20 +115,55 @@ test('Flash Next verification rejects stale installed packages and source-checko
   assert.match(result.stderr, /installed snapshot verification failed/);
 });
 
+test('Flash Next canonical startup pins and verifies the checkpoint before serving', { skip }, (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-model-snapshot-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const revision = '2b170fa6309d5d1ee380b35636075fac7945f286';
+  const snapshot = path.join(temp, revision);
+  fs.mkdirSync(snapshot);
+  fs.writeFileSync(path.join(snapshot, 'config.json'), '{}');
+  fs.writeFileSync(path.join(snapshot, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { weight: 'model-00001-of-00001.safetensors' } }));
+  fs.writeFileSync(path.join(snapshot, 'model-00001-of-00001.safetensors'), 'fixture');
+  fs.writeFileSync(path.join(temp, 'huggingface_hub.py'), `import os\ndef snapshot_download(*, repo_id, revision, max_workers):\n    assert repo_id == 'TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP'\n    assert revision == '${revision}'\n    assert max_workers == 4\n    return os.environ['TEST_SNAPSHOT']\n`);
+  const env = { PYTHONPATH: temp, MODEL_ID: 'TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP', MODEL_REVISION: revision, TEST_SNAPSHOT: snapshot };
+  const script = embeddedPython('PY_MODEL_SNAPSHOT');
+  let result = runPython(script, [], '32', env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), snapshot);
+  assert.match(result.stderr, /Verified pinned model TensorFold\/Qwen3.8/);
+  fs.rmSync(path.join(snapshot, 'model-00001-of-00001.safetensors'));
+  result = runPython(script, [], '32', env);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /missing weights or has an invalid shard index/);
+  const wrongSnapshot = path.join(temp, 'wrong-revision');
+  fs.mkdirSync(wrongSnapshot);
+  fs.writeFileSync(path.join(wrongSnapshot, 'config.json'), '{}');
+  result = runPython(script, [], '32', { ...env, TEST_SNAPSHOT: wrongSnapshot });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unexpected model snapshot/);
+  assert.doesNotMatch(source, /\n\s+tensorfold pull /);
+  assert.match(source, /exec tensorfold serve "\$\$\{MODEL_PATH\}"/);
+  assert.match(source, /MODEL_ID: TensorFold\/Qwen3.8-Flash-Next-MLX-4bit-MTP/);
+});
+
 test('Compose resolves snapshot overrides and retains escaped runtime variables and valid Bash', {
   skip: !profileAvailable ? 'Docker profiles are omitted from proxy-only deployments'
     : composeAvailable ? false : 'Docker Compose CLI is required',
 }, () => {
-  for (const override of [undefined, '8', '16']) {
+  for (const override of [undefined, '8', '16', '32']) {
     const env = { ...process.env };
     delete env.TENSORFOLD_PROMPT_SNAPSHOTS;
     if (override) env.TENSORFOLD_PROMPT_SNAPSHOTS = override;
     const result = spawnSync('docker', ['compose', '-f', profile, 'config', '--format', 'json'], { encoding: 'utf8', env });
     assert.equal(result.status, 0, result.stderr);
     const service = JSON.parse(result.stdout).services['qwen-tensorfold'];
-    assert.equal(service.environment.TENSORFOLD_PROMPT_SNAPSHOTS, override || '16');
+    assert.equal(service.environment.TENSORFOLD_PROMPT_SNAPSHOTS, override || '32');
+    assert.equal(service.environment.MODEL_REVISION, '2b170fa6309d5d1ee380b35636075fac7945f286');
+    assert.equal(service.environment.MODEL_ID, 'TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP');
     const command = service.command.at(-1).replaceAll('$$', '$');
     assert.match(command, /--context "\$\{CONTEXT_LENGTH\}"/);
+    assert.match(command, /MODEL_PATH=\$\(python - <<'PY_MODEL_SNAPSHOT'/);
+    assert.match(command, /--name "\$\{MODEL_ID\}"/);
     const syntax = spawnSync('bash', ['-n'], { input: command, encoding: 'utf8' });
     assert.equal(syntax.status, 0, syntax.stderr);
   }

@@ -27,7 +27,7 @@ Create a new museum-guide website at webs folder (museum.html, museum.css, museu
 
 Create a new paint-like editor website at webs folder (paint.html, paint.css, paint.js). Build a canvas editor using only HTML, CSS, and JavaScript. Include color picker, eraser, line size, clear button. User must draw "free hand" when mouse is pressed and moved on the canvas, capturing movement points and joining those points with lines.
 
-Look at image @./tests/calculator.png, it is a picture of a calculator, inspect its design, colors, buttons and screen distribution and brand location. Then create a new website at webs folder (calculator.html, calculator.css, calculator.js) and include basic operations, decimal numbers, keyboard support, clear/delete buttons, error handling for invalid operations. Make it look like the calculator in the picture, even the positioning of the buttons. Ensure the ON/OFF slider is on by default
+Look at image @./tests/calculator.png, it is a picture of a calculator, inspect its design, colors, buttons and screen distribution and brand location. Then create a new website at webs folder (calculator.html) and include basic operations, decimal numbers, keyboard support, clear/delete buttons, error handling for invalid operations. Make it look like the calculator in the picture, even the positioning of the buttons. Ensure the ON/OFF slider is on by default
 
 Create a new website at webs folder (kanban.html, kanban.css, kanban.js) with a simple Kanban board using only HTML, CSS, and JavaScript. Include three columns: Todo, Doing, Done. Allow adding cards, editing text, deleting cards, dragging cards between columns, saving state with localStorage, responsive layout. Ensure cards can be moved from one status to another, for example from Todo to Doing, or from Doing back to Todo.
 
@@ -58,3 +58,7 @@ Requirements:
 - Test that grass and dirt remain distinguishable from every camera angle.
 
 Return a working HTML+CSS+JS files code. Write empty files and then add code in small chunks, don't write big monolite code blocks.
+
+create a tetris like game at webs/tetris.html file, ensure when a new line is done it blinks twice before disappearing
+
+create a new webs/pagoda3.html demo with a japanese looking pagoda with 2d traditional japanese drawings, animated with cherry blossom trees and at least 5000 floating dandelions. use threejs to create the world with plain 2d look and feel

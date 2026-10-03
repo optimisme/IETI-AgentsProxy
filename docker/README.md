@@ -153,38 +153,57 @@ Els proveidors que publiquen la mateixa identitat queden agrupats al proxy.
 ## Retencio de snapshots de Flash Next CUDA
 
 El perfil `models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml`
+conserva el nom historic del fitxer, pero publica
+`TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP`. TensorFold esta fixat al commit
+`9356df5c424b0c36b7737e37873a6f968b08de79` de v0.6.3, i els pesos a la revisio
+`2b170fa6309d5d1ee380b35636075fac7945f286`. L'arrencada descarrega aquesta
+revisio explicita, verifica l'index de shards i serveix el snapshot local amb
+la identitat canonica; no executa `tensorfold pull` sobre la branca principal.
+
+Els tres volums d'aquest perfil tenen noms `ieti-...-tensorfold-mlx-...` sense
+`vontra`, i Compose els crea automaticament. En migrar des del projecte antic,
+atura i retira primer el contenidor anterior amb el seu YAML encara disponible;
+despres sincronitza el YAML local i arrenca el projecte nou. Els volums nous
+comencen buits: cal tornar a descarregar aproximadament 114 GB de pesos i
+escalfar els kernels. Quan el nou servei sigui saludable i validat, es poden
+retirar els volums antics que cap altre contenidor utilitzi; no facis un prune
+global. Els altres perfils conserven els seus volums.
+
+El perfil
 afegeix la variable **personalitzada** `TENSORFOLD_PROMPT_SNAPSHOTS`, amb valor
-per defecte `16` i enters admesos d'`1` a `32`. No es una opcio YAML/CLI nativa
-de TensorFold v0.6.1. L'arrencada substitueix exactament una vegada el `KEEP = 8`
+per defecte `32` i enters admesos d'`1` a `32`. No es una opcio YAML/CLI nativa
+de TensorFold v0.6.3. L'arrencada substitueix exactament una vegada el `KEEP = 8`
 esperat del commit fixat, **abans** de la instal·lacio pip ordinaria. Si el
 constant o els seus usos no coincideixen, l'arrencada falla clarament. Despres
 comprova el valor i els usos al modul Python instal·lat, no nomes al checkout.
 
 El mateix `KEEP` governa la planificacio de memoria d'`indexed_stream_geometry`
-i la retencio de `MultiDecoder`. `16` son snapshots retinguts de prefixos de
-text, no necessàriament setze converses: una conversa pot generar-ne diversos.
+i la retencio de `MultiDecoder`. `32` son snapshots retinguts de prefixos de
+text compartits pel servidor, no trenta-dues converses garantides: una conversa
+pot generar-ne diversos. El nombre de streams concurrents continua sent `16`.
 Augmentar-lo consumeix memoria addicional i no garanteix una millora del
 rendiment. Les peticions amb imatges ometen actualment aquesta reutilitzacio
 de prefixos de text. No cal recompilar CUDA ni reconstruir la imatge; si que
 calen la instal·lacio i l'escalfament normals quan es recrea el contenidor.
 
-Per tornar temporalment a vuit snapshots, des de `docker/` i amb el mateix
+Per tornar temporalment a setze snapshots, des de `docker/` i amb el mateix
 projecte Compose i volums persistents:
 
 ```bash
-TENSORFOLD_PROMPT_SNAPSHOTS=8 docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d --no-deps --force-recreate qwen-tensorfold
+TENSORFOLD_PROMPT_SNAPSHOTS=16 docker compose -f models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml up -d --no-deps --force-recreate qwen-tensorfold
 ```
 
-Revisa als logs el missatge `Verified installed Flash Next KEEP=8` (o `16`)
+Revisa als logs el missatge `Verified installed Flash Next KEEP=16` (o `32`)
 i espera l'estat saludable abans d'enviar-hi càrrega. La variable es resol
 quan s'executa Compose; conserva el YAML anterior per recuperar la configuracio
 completa. Recrear nomes aquest servei conserva pesos, `tokens.env` i caches.
 
 ## Migracio dels desplegaments anteriors
 
-Aquesta reorganitzacio conserva els noms dels contenidors i dels 22 volums de
-perfil. Les caches existents es poden reutilitzar sense tornar a descarregar
-pesos. Els projectes Compose ara tenen noms explicits diferents dels antics.
+La reorganitzacio inicial conservava els noms dels contenidors i volums de
+perfil per reutilitzar les caches. El perfil Flash Next TensorFold amb visio
+ara migra a la identitat i els volums canonics descrits a la seccio anterior.
+Els projectes Compose tenen noms explicits diferents dels antics.
 
 Abans del primer `up` al servidor, identifica el contenidor antic que publica
 el port 8000 i el seu projecte:

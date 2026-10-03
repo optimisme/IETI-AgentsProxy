@@ -45,4 +45,6 @@ migracio del README abans del primer `up`.
 
 No es generen manifests ni s'arrenca cap servei auxiliar de metadades.
 Les caches viuen als volums Docker de cada servidor i no es sincronitzen amb
-els YAML. Conserva'n els noms persistents quan modifiquis un perfil.
+els YAML. Conserva'n els noms persistents quan modifiquis un perfil, excepte
+en una migracio explicita de caches com la del perfil Flash Next TensorFold
+amb visio a la identitat canonica; segueix el procediment del README.
