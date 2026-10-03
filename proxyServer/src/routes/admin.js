@@ -201,12 +201,17 @@ function parseGroupForm(body) {
 
 function parseProviderForm(body, existingProvider = {}) {
   const name = requiredText(body.name, 'Name', { max: 160 });
+  const keepWarmInterval = body.keep_warm_interval_minutes === undefined ? 0 : body.keep_warm_interval_minutes;
+  if (![0, 1, 5, '0', '1', '5'].includes(keepWarmInterval)) {
+    throw apiError(400, 'invalid_form', 'Keep warm calling must be Never, 1 min, or 5 min.');
+  }
   return {
     slug: slugify(body.slug || name),
     name,
     baseUrl: validateUrl(body.base_url, 'Base URL'),
     apiKey: optionalText(body.api_key, { max: 4096 }) || existingProvider.api_key || 'local',
     enabled: body.enabled ? 1 : 0,
+    keepWarmIntervalMinutes: Number(keepWarmInterval),
     maxConcurrentRequests: nonNegativeIntegerOrNull(body.max_concurrent_requests, 'Maximum concurrent requests'),
     timeoutMs: nonNegativeIntegerOrNull(body.timeout_ms, 'Timeout milliseconds')
   };
@@ -723,6 +728,7 @@ function providerForm(provider = {}, action = '/admin/providers') {
   const deleteModalId = provider.id ? `provider-delete-modal-${provider.id}` : '';
   const autoconfigureModalId = provider.id ? `provider-autoconfigure-modal-${provider.id}` : '';
   const providerTestModalId = provider.id ? `provider-test-modal-${provider.id}` : '';
+  const keepWarmSelectId = `provider-keep-warm-${provider.id || 'new'}`;
   return `
     <form method="post" action="${action}" class="panel" data-provider-settings-form>
       <h2>Provider Settings</h2>
@@ -731,7 +737,12 @@ function providerForm(provider = {}, action = '/admin/providers') {
       <label>Base URL</label><input name="base_url" value="${escapeHtml(provider.base_url)}" placeholder="http://127.0.0.1:8001" required>
       <label>Maximum concurrent requests. Blank or 0 means infinite.</label><input name="max_concurrent_requests" type="number" min="0" value="${escapeHtml(provider.max_concurrent_requests ?? '')}">
       <label>Timeout milliseconds. Blank uses the server default.</label><input name="timeout_ms" type="number" min="0" value="${escapeHtml(provider.timeout_ms ?? '')}">
-      <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${provider.enabled === 0 ? '' : 'checked'}> Enabled</label>
+      <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${provider.enabled === 0 ? '' : 'checked'}> Provider enabled</label>
+      <label for="${keepWarmSelectId}">Keep warm calling</label>
+      <select id="${keepWarmSelectId}" name="keep_warm_interval_minutes">
+        ${[[0, 'Never'], [1, '1 min'], [5, '5 min']].map(([minutes, label]) => `<option value="${minutes}" ${Number(provider.keep_warm_interval_minutes || 0) === minutes ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
+      <p class="muted">No calls are sent when set to Never. Other options send a tiny completion at the selected interval when this provider and a model are enabled. May consume billable tokens; does not use student quota.</p>
       ${modelMappingFields(provider)}
       <div class="actions" style="margin-top:16px">
         <button type="submit">Save provider</button>
@@ -1520,8 +1531,8 @@ router.post('/admin/providers', requireAdmin, (req, res) => {
   const providerId = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO providers
-        (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests, timeout_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (slug, name, kind, base_url, api_key, enabled, keep_warm_interval_minutes, max_concurrent_requests, timeout_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       form.slug,
       form.name,
@@ -1529,6 +1540,7 @@ router.post('/admin/providers', requireAdmin, (req, res) => {
       form.baseUrl,
       form.apiKey,
       form.enabled,
+      form.keepWarmIntervalMinutes,
       form.maxConcurrentRequests,
       form.timeoutMs
     );
@@ -1672,7 +1684,7 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
   db.transaction(() => {
     db.prepare(`
       UPDATE providers
-      SET slug = ?, name = ?, kind = ?, base_url = ?, api_key = ?, enabled = ?,
+      SET slug = ?, name = ?, kind = ?, base_url = ?, api_key = ?, enabled = ?, keep_warm_interval_minutes = ?,
           max_concurrent_requests = ?, timeout_ms = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -1682,6 +1694,7 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
       form.baseUrl,
       form.apiKey,
       form.enabled,
+      form.keepWarmIntervalMinutes,
       form.maxConcurrentRequests,
       form.timeoutMs,
       provider.id

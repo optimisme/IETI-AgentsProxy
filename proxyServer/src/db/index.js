@@ -142,6 +142,7 @@ function initSchema(database) {
       base_url TEXT NOT NULL,
       api_key TEXT NOT NULL DEFAULT '',
       enabled INTEGER NOT NULL DEFAULT 1,
+      keep_warm_interval_minutes INTEGER NOT NULL DEFAULT 0 CHECK (keep_warm_interval_minutes IN (0, 1, 5)),
       priority INTEGER NOT NULL DEFAULT 100,
       max_concurrent_requests INTEGER,
       timeout_ms INTEGER,
@@ -263,6 +264,17 @@ function migrateSchema(database) {
   }
   if (usageColumns.includes('estimated_cost_eur')) {
     database.exec('ALTER TABLE usage_logs DROP COLUMN estimated_cost_eur');
+  }
+
+  const providerColumns = database.prepare('PRAGMA table_info(providers)').all().map((column) => column.name);
+  if (!providerColumns.includes('keep_warm_interval_minutes')) {
+    database.exec('ALTER TABLE providers ADD COLUMN keep_warm_interval_minutes INTEGER NOT NULL DEFAULT 0 CHECK (keep_warm_interval_minutes IN (0, 1, 5))');
+    if (providerColumns.includes('keep_warm')) {
+      database.exec('UPDATE providers SET keep_warm_interval_minutes = CASE WHEN keep_warm = 1 THEN 1 ELSE 0 END');
+    }
+  }
+  if (providerColumns.includes('keep_warm')) {
+    database.exec('ALTER TABLE providers DROP COLUMN keep_warm');
   }
 
   const providerModelColumns = database.prepare('PRAGMA table_info(provider_models)').all().map((column) => column.name);

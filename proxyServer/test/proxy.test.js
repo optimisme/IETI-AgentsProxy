@@ -843,6 +843,103 @@ test('admin can clear all providers from a group', async () => {
   assert.equal(providerCount, 0);
 });
 
+test('provider keep-warm interval migration defaults existing providers to Never and preserves saved intervals', () => {
+  const database = new Database(':memory:');
+  const { initSchema, migrateSchema } = require('../src/db');
+  try {
+    initSchema(database);
+    // Reproduce the providers table from installations predating keep-warm.
+    database.exec('ALTER TABLE providers DROP COLUMN keep_warm_interval_minutes');
+    database.prepare(`
+      INSERT INTO providers (slug, name, base_url, api_key, enabled)
+      VALUES (?, ?, ?, ?, ?)
+    `).run('legacy-provider', 'Legacy Provider', mockBaseUrl, 'legacy-key', 1);
+    database.prepare(`
+      INSERT INTO providers (slug, name, base_url, enabled)
+      VALUES (?, ?, ?, ?)
+    `).run('legacy-disabled', 'Legacy Disabled', mockBaseUrl, 0);
+
+    migrateSchema(database);
+    const column = database.prepare('PRAGMA table_info(providers)').all().find((item) => item.name === 'keep_warm_interval_minutes');
+    assert.ok(column);
+    assert.equal(column.notnull, 1);
+    assert.equal(column.dflt_value, '0');
+    assert.deepEqual(database.prepare('SELECT slug, enabled, keep_warm_interval_minutes FROM providers ORDER BY id').all(), [
+      { slug: 'legacy-provider', enabled: 1, keep_warm_interval_minutes: 0 },
+      { slug: 'legacy-disabled', enabled: 0, keep_warm_interval_minutes: 0 }
+    ]);
+    assert.equal(database.prepare('SELECT api_key FROM providers WHERE slug = ?').get('legacy-provider').api_key, 'legacy-key');
+
+    database.prepare('UPDATE providers SET keep_warm_interval_minutes = 5 WHERE slug = ?').run('legacy-provider');
+    migrateSchema(database);
+    assert.equal(database.prepare('SELECT keep_warm_interval_minutes FROM providers WHERE slug = ?').get('legacy-provider').keep_warm_interval_minutes, 5);
+    database.prepare('INSERT INTO providers (slug, name, base_url) VALUES (?, ?, ?)')
+      .run('new-provider', 'New Provider', mockBaseUrl);
+    assert.equal(database.prepare('SELECT keep_warm_interval_minutes FROM providers WHERE slug = ?').get('new-provider').keep_warm_interval_minutes, 0);
+    assert.throws(() => database.prepare('UPDATE providers SET keep_warm_interval_minutes = 2 WHERE slug = ?').run('new-provider'), /CHECK constraint failed/);
+  } finally {
+    database.close();
+  }
+});
+
+test('provider keep-warm interval migration converts old boolean selections and removes the old column', () => {
+  const database = new Database(':memory:');
+  const { initSchema, migrateSchema } = require('../src/db');
+  try {
+    initSchema(database);
+    database.exec(`
+      ALTER TABLE providers DROP COLUMN keep_warm_interval_minutes;
+      ALTER TABLE providers ADD COLUMN keep_warm INTEGER NOT NULL DEFAULT 0;
+    `);
+    const insert = database.prepare(`
+      INSERT INTO providers (slug, name, base_url, enabled, keep_warm)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    insert.run('old-off', 'Old off', mockBaseUrl, 1, 0);
+    insert.run('old-on', 'Old on', mockBaseUrl, 1, 1);
+    insert.run('old-disabled', 'Old disabled', mockBaseUrl, 0, 1);
+    migrateSchema(database);
+    assert.deepEqual(database.prepare('SELECT slug, enabled, keep_warm_interval_minutes FROM providers ORDER BY id').all(), [
+      { slug: 'old-off', enabled: 1, keep_warm_interval_minutes: 0 },
+      { slug: 'old-on', enabled: 1, keep_warm_interval_minutes: 1 },
+      { slug: 'old-disabled', enabled: 0, keep_warm_interval_minutes: 1 }
+    ]);
+    assert.equal(database.prepare('PRAGMA table_info(providers)').all().some((column) => column.name === 'keep_warm'), false);
+    database.prepare('UPDATE providers SET keep_warm_interval_minutes = 5 WHERE slug = ?').run('old-on');
+    migrateSchema(database);
+    assert.equal(database.prepare('SELECT keep_warm_interval_minutes FROM providers WHERE slug = ?').get('old-on').keep_warm_interval_minutes, 5);
+  } finally {
+    database.close();
+  }
+});
+
+test('provider keep-warm interval migration preserves explicit intervals when the old boolean also exists', () => {
+  const database = new Database(':memory:');
+  const { initSchema, migrateSchema } = require('../src/db');
+  try {
+    initSchema(database);
+    database.exec('ALTER TABLE providers ADD COLUMN keep_warm INTEGER NOT NULL DEFAULT 0');
+    const insert = database.prepare(`
+      INSERT INTO providers (slug, name, base_url, keep_warm, keep_warm_interval_minutes)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    insert.run('explicit-five', 'Five', mockBaseUrl, 0, 5);
+    insert.run('explicit-never', 'Never', mockBaseUrl, 1, 0);
+    insert.run('explicit-one', 'One', mockBaseUrl, 0, 1);
+    migrateSchema(database);
+    assert.deepEqual(database.prepare('SELECT keep_warm_interval_minutes FROM providers ORDER BY id').all(), [
+      { keep_warm_interval_minutes: 5 }, { keep_warm_interval_minutes: 0 }, { keep_warm_interval_minutes: 1 }
+    ]);
+    assert.equal(database.prepare('PRAGMA table_info(providers)').all().some((column) => column.name === 'keep_warm'), false);
+    migrateSchema(database);
+    assert.deepEqual(database.prepare('SELECT keep_warm_interval_minutes FROM providers ORDER BY id').all(), [
+      { keep_warm_interval_minutes: 5 }, { keep_warm_interval_minutes: 0 }, { keep_warm_interval_minutes: 1 }
+    ]);
+  } finally {
+    database.close();
+  }
+});
+
 test('database startup preserves configured provider pools, aliases, limits, and settings', () => {
   const database = new Database(path.join(os.tmpdir(), `agents-proxy-startup-test-${Date.now()}.sqlite`));
   const { initSchema, migrateSchema, seedSettings } = require('../src/db');
@@ -1329,6 +1426,120 @@ test('provider list groups exposed aliases and highlights mapping configuration 
   const alignedList = await agent.get('/admin/providers?aligned=1').expect(200);
   assert.match(alignedList.text, /Provider configuration aligned with the main provider/);
   assert.match(alignedList.text, /✓<\/span> All aligned/);
+});
+
+test('admin provider keep-warm dropdown defaults to Never and saves both intervals or disables calls', async (t) => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const providerIds = [];
+  t.after(() => {
+    for (const id of providerIds) db.prepare('DELETE FROM providers WHERE id = ?').run(id);
+  });
+  const selectedInterval = (html) => {
+    const form = html.match(/<form[^>]*data-provider-settings-form>([\s\S]*?)<\/form>/)?.[1];
+    assert.ok(form);
+    assert.match(form, /name="enabled"[^>]*> Provider enabled<\/label>\s*<label[^>]*>Keep warm calling<\/label>\s*<select[^>]*name="keep_warm_interval_minutes"/);
+    assert.doesNotMatch(form, /name="keep_warm"/);
+    const select = form.match(/<select[^>]*name="keep_warm_interval_minutes"[^>]*>([\s\S]*?)<\/select>/)?.[1];
+    assert.ok(select);
+    const options = [...select.matchAll(/<option value="(\d+)"([^>]*)>([^<]*)<\/option>/g)];
+    assert.deepEqual(options.map((option) => [option[1], option[3]]), [['0', 'Never'], ['1', '1 min'], ['5', '5 min']]);
+    const selected = options.filter((option) => /\bselected\b/.test(option[2]));
+    assert.equal(selected.length, 1);
+    return Number(selected[0][1]);
+  };
+
+  const createForm = await agent.get('/admin/providers/new').expect(200);
+  assert.equal(selectedInterval(createForm.text), 0);
+  const form = {
+    slug: `keep-warm-default-${Date.now()}`,
+    name: 'Keep Warm Default',
+    base_url: mockBaseUrl,
+    api_key: 'local-key',
+    enabled: '1',
+    public_model: 'keep-warm-alias',
+    upstream_model: 'keep-warm-upstream',
+    context_limit: '8192',
+    output_limit: '1024'
+  };
+  await agent.post('/admin/providers').type('form').send(form).expect(302);
+  const defaultProvider = db.prepare('SELECT * FROM providers WHERE slug = ?').get(form.slug);
+  providerIds.push(defaultProvider.id);
+  assert.equal(defaultProvider.enabled, 1);
+  assert.equal(defaultProvider.keep_warm_interval_minutes, 0);
+  const defaultEdit = await agent.get(`/admin/providers/${defaultProvider.id}`).expect(200);
+  assert.equal(selectedInterval(defaultEdit.text), 0);
+
+  for (const interval of [1, 5]) {
+    await agent.post(`/admin/providers/${defaultProvider.id}`).type('form')
+      .send({ ...form, keep_warm_interval_minutes: String(interval) }).expect(302);
+    assert.equal(db.prepare('SELECT keep_warm_interval_minutes FROM providers WHERE id = ?').get(defaultProvider.id).keep_warm_interval_minutes, interval);
+    const selectedEdit = await agent.get(`/admin/providers/${defaultProvider.id}`).expect(200);
+    assert.equal(selectedInterval(selectedEdit.text), interval);
+
+    const selectedForm = {
+      ...form, slug: `keep-warm-selected-${interval}-${Date.now()}`, name: `Keep Warm ${interval}`,
+      keep_warm_interval_minutes: String(interval)
+    };
+    await agent.post('/admin/providers').type('form').send(selectedForm).expect(302);
+    const selectedProvider = db.prepare('SELECT * FROM providers WHERE slug = ?').get(selectedForm.slug);
+    providerIds.push(selectedProvider.id);
+    assert.equal(selectedProvider.keep_warm_interval_minutes, interval);
+    await agent.post(`/admin/providers/${selectedProvider.id}`).type('form')
+      .send({ api_key: 'replacement-local-key' }).expect(302);
+    assert.deepEqual(db.prepare('SELECT api_key, enabled, keep_warm_interval_minutes FROM providers WHERE id = ?').get(selectedProvider.id), {
+      api_key: 'replacement-local-key', enabled: 1, keep_warm_interval_minutes: interval
+    });
+  }
+
+  await agent.post(`/admin/providers/${defaultProvider.id}`).type('form')
+    .send({ ...form, keep_warm_interval_minutes: '0' }).expect(302);
+  assert.deepEqual(db.prepare('SELECT enabled, keep_warm_interval_minutes FROM providers WHERE id = ?').get(defaultProvider.id), {
+    enabled: 1, keep_warm_interval_minutes: 0
+  });
+  const neverEdit = await agent.get(`/admin/providers/${defaultProvider.id}`).expect(200);
+  assert.equal(selectedInterval(neverEdit.text), 0);
+  await agent.post(`/admin/providers/${defaultProvider.id}`).type('form')
+    .send({ ...form, keep_warm_interval_minutes: '5' }).expect(302);
+  await agent.post(`/admin/providers/${defaultProvider.id}`).type('form').send(form).expect(302);
+  assert.deepEqual(db.prepare('SELECT enabled, keep_warm_interval_minutes FROM providers WHERE id = ?').get(defaultProvider.id), {
+    enabled: 1, keep_warm_interval_minutes: 0
+  });
+  const clearedEdit = await agent.get(`/admin/providers/${defaultProvider.id}`).expect(200);
+  assert.equal(selectedInterval(clearedEdit.text), 0);
+});
+
+test('admin provider keep-warm rejects unsupported intervals before writing provider or mapping changes', async (t) => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const form = {
+    slug: `keep-warm-validation-${Date.now()}`,
+    name: 'Keep Warm Validation',
+    base_url: mockBaseUrl,
+    api_key: 'local-key',
+    enabled: '1',
+    keep_warm_interval_minutes: '5',
+    public_model: 'keep-warm-validation-alias',
+    upstream_model: 'keep-warm-validation-upstream'
+  };
+  await agent.post('/admin/providers').type('form').send(form).expect(302);
+  const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get(form.slug);
+  t.after(() => db.prepare('DELETE FROM providers WHERE id = ?').run(provider.id));
+  const snapshot = () => ({
+    providers: db.prepare('SELECT * FROM providers ORDER BY id').all(),
+    mappings: db.prepare('SELECT * FROM provider_models ORDER BY id').all()
+  });
+  const original = snapshot();
+  for (const interval of ['2', '-1', 'unsupported', '', '1.5']) {
+    await agent.post('/admin/providers').type('form').send({
+      ...form, slug: `${form.slug}-invalid`, keep_warm_interval_minutes: interval
+    }).expect(400);
+    assert.deepEqual(snapshot(), original, `Creating with interval ${JSON.stringify(interval)} must not write`);
+    await agent.post(`/admin/providers/${provider.id}`).type('form').send({
+      ...form, name: 'Must Not Save', upstream_model: 'must-not-save', keep_warm_interval_minutes: interval
+    }).expect(400);
+    assert.deepEqual(snapshot(), original, `Editing with interval ${JSON.stringify(interval)} must not write`);
+  }
 });
 
 test('admin can update only provider api key', async () => {
