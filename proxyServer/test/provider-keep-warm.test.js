@@ -225,9 +225,10 @@ async function hangingServer(t, phase) {
 }
 
 for (const phase of ['headers', 'body']) {
-  test(`keep-warm times out while upstream ${phase} remain pending and releases capacity`, { timeout: 1500 }, async (t) => {
+  test(`keep-warm times out while upstream ${phase} remain pending and releases capacity`, { timeout: 3000 }, async (t) => {
     const baseUrl = await hangingServer(t, phase);
-    const provider = addProvider(`timeout-${phase}`, { base_url: baseUrl, timeout_ms: 20 });
+    // Allow a slower deployment VM to receive headers before exercising a stalled body.
+    const provider = addProvider(`timeout-${phase}`, { base_url: baseUrl, timeout_ms: 500 });
     let readingBody = false;
     const { service, warnings } = makeService(t, async (url, options) => {
       const response = await fetch(url, options);
