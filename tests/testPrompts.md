@@ -31,9 +31,7 @@ Look at image @./tests/calculator.png, it is a picture of a calculator, inspect 
 
 Create a new website at webs folder (kanban.html, kanban.css, kanban.js) with a simple Kanban board using only HTML, CSS, and JavaScript. Include three columns: Todo, Doing, Done. Allow adding cards, editing text, deleting cards, dragging cards between columns, saving state with localStorage, responsive layout. Ensure cards can be moved from one status to another, for example from Todo to Doing, or from Doing back to Todo.
 
-Create a new website at webs folder (mines.html, mines.css, mines.js) with a minesweeper like windows 95 game. search on the internet the mechanics and look and feel of the game, then reproduce it on a web. 
-
-Create a new website at webs folder (galaxy.html, galaxy.css, galaxy.js) with a galaxyan like retro game from the 80s. search on the internet the mechanics and look and feel of the game, then reproduce it on a canvas. user will control the game with the keys "space, arrow left, arrow right". at the begining the game won't start until user presses one key. Player must be able to shot with space and aliens must atack the player.
+Create a new website at webs folder mines.html with a minesweeper like windows 95 game. search on the internet the mechanics and look and feel of the game, then reproduce it on a web. 
 
 Create a new website in the webs folder named asteroid.html, asteroid.css, and asteroid.js. Build a polished 1980s arcade-style Asteroids-like canvas game with vector graphics. The game must start only after the first key press. Controls: ArrowLeft and ArrowRight rotate the ship, ArrowUp thrusts, Space shoots. Include screen wrapping, drifting asteroids that split into smaller asteroids, enemy saucers that occasionally appear and shoot, player lives, score, localStorage high score, pause with P, restart after game over with Enter, and a clear HUD. Use only canvas and plain JavaScript. Verify the files. This is a 2d plain game, don't make 3d calculations in it.
 
