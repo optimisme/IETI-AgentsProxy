@@ -50,6 +50,11 @@
     return { context, reserve, harness, input: Math.max(0, context - reserve - harness) };
   }
 
+  function percentToCompact(tokens, inputBudget, ratio = 0.65) {
+    const threshold = inputBudget * ratio;
+    return threshold > 0 ? Math.max(0, Math.min(100, Math.ceil((threshold - tokens) / threshold * 100))) : 0;
+  }
+
   function hasImages(messages) {
     return messages.some((message) => Array.isArray(message.content)
       && message.content.some((part) => part.type === 'image_url'));
@@ -113,7 +118,7 @@
     return false;
   }
 
-  const helpers = { estimateTextTokens, estimateMessageTokens, estimateContextTokens, getBudget, hasImages, imageUsage, imagesFit, chooseCompaction, parseSSEFrame, imageSignatureMatches };
+  const helpers = { estimateTextTokens, estimateMessageTokens, estimateContextTokens, getBudget, percentToCompact, hasImages, imageUsage, imagesFit, chooseCompaction, parseSSEFrame, imageSignatureMatches };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof window !== 'undefined') window.IETIChat = Object.freeze(helpers);
   if (typeof document === 'undefined') return;
@@ -152,6 +157,9 @@
   let statusHasError = false;
   let uploadsInFlight = 0;
   let controller = null;
+  let autoCompactionTimer = null;
+  let autoCompactionAttempt = null;
+  let activeCompactionProgress = null;
   // Page memory only. Compaction and model changes preserve the conversation;
   // backend affinity is scoped by model as well as authenticated user and pool.
   let conversationId = newConversationId();
@@ -214,11 +222,14 @@
     updateStatusIndicator();
     const budget = getBudget(model, config);
     const hasPending = Boolean(ui.input.value.trim() || attachments.length);
-    const estimate = projection(hasPending ? [...context, pendingMessage()] : context);
+    const streaming = busy && transcript.at(-1)?.role === 'assistant' && !context.includes(transcript.at(-1)) ? [transcript.at(-1)] : [];
+    const visibleContext = [...context, ...streaming];
+    const estimate = projection(hasPending ? [...visibleContext, pendingMessage()] : visibleContext);
     ui.budget.textContent = model
-      ? `Approx. ${number.format(estimate)} / ${number.format(budget.input)} input tokens · Auto compact at ${Math.round(ratio * 100)}%`
+      ? `${percentToCompact(estimate, budget.input, ratio)}% to compact · Approx. ${number.format(estimate)} / ${number.format(budget.input)} input tokens`
       : 'No active models are available.';
     ui.budget.classList.toggle('chat-budget-full', estimate > budget.input);
+    scheduleAutoCompaction();
   }
 
   function escapeHtml(value) {
@@ -475,40 +486,108 @@
     calibration.set(model.id, Math.max(calibration.get(model.id) || 1, reported / Math.max(1, estimated)));
   }
 
+  function compactionProgress() {
+    const node = document.createElement('article');
+    node.className = 'chat-message chat-compaction';
+    node.setAttribute('role', 'status');
+    node.setAttribute('aria-live', 'polite');
+    const title = document.createElement('div');
+    title.className = 'chat-message-label';
+    title.textContent = 'Compacting conversation';
+    const detail = document.createElement('p');
+    detail.className = 'chat-compaction-detail';
+    const bar = document.createElement('div');
+    bar.className = 'chat-compaction-bar';
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', 'Conversation compaction stages');
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '3');
+    const fill = document.createElement('span');
+    bar.append(fill);
+    node.append(title, detail, bar);
+    ui.messages.append(node);
+    ui.messages.setAttribute('aria-busy', 'true');
+    ui.messages.scrollTop = ui.messages.scrollHeight;
+    return {
+      stage(step, text, pass = 1) {
+        detail.textContent = `Step ${step} of 3 · ${text}${pass > 1 ? ` · Pass ${pass}` : ''}`;
+        bar.setAttribute('aria-valuenow', String(step));
+        bar.setAttribute('aria-valuetext', detail.textContent);
+        fill.style.width = `${step / 3 * 100}%`;
+        node.classList.toggle('chat-compaction-waiting', step === 2);
+        ui.messages.scrollTop = ui.messages.scrollHeight;
+      },
+      remove() { node.remove(); }
+    };
+  }
+
   async function compactConversation(model, signal, operation, pending = null) {
     if (!(context.length || summary)) return false;
+    autoCompactionAttempt = autoCompactionSnapshot(model);
     const budget = getBudget(model, config);
-    const split = chooseCompaction(context, summary, pending, budget.input, imageTokens, calibration.get(model.id) || 1, imageLimits);
-    if (!split.older.length && !summary) {
-      throw new Error('The oldest message is too large to summarize with this model. Choose a model with a larger context or use Reset. Your conversation is unchanged.');
+    if (pending && projection([pending], '', model) > budget.input) {
+      throw new Error('This message is too large for the selected model’s context. Shorten it or remove images before compacting. Your conversation is unchanged.');
     }
-    if (projection(split.older, summary, model) > budget.input) {
-      throw new Error('The previous summary exceeds this model’s context budget. Choose a model with a larger context or use Reset.');
+    const progress = compactionProgress();
+    activeCompactionProgress = progress;
+    let workingContext = context;
+    let workingSummary = summary;
+    try {
+      for (let pass = 1; pass <= 8; pass += 1) {
+        progress.stage(1, 'Preparing context', pass);
+        const split = chooseCompaction(workingContext, workingSummary, pending, budget.input, imageTokens, calibration.get(model.id) || 1, imageLimits);
+        if (!split.older.length && !workingSummary) {
+          throw new Error('The oldest message is too large to summarize with this model. Choose a model with a larger context or use Reset. Your conversation is unchanged.');
+        }
+        if (projection(split.older, workingSummary, model) > budget.input) {
+          throw new Error('The previous summary exceeds this model’s context budget. Choose a model with a larger context or use Reset.');
+        }
+        progress.stage(2, 'Summarizing earlier messages', pass);
+        status('Summarizing conversation…');
+        const response = await post({ model: model.id, messages: requestMessages(split.older), summary: workingSummary, compact: true, stream: false }, signal);
+        const result = await response.json();
+        if (operation !== generation) return false;
+        if (signal.aborted) throw new Error('Compaction stopped.');
+        if (result.error) throw new Error(result.error.message || 'The conversation could not be summarized.');
+        progress.stage(3, 'Checking compressed context', pass);
+        const choice = result.choices?.[0];
+        if (choice?.finish_reason && choice.finish_reason !== 'stop') {
+          throw new Error('The model did not finish the summary. Your conversation is unchanged; try Compact again.');
+        }
+        const nextSummary = choice?.message?.content;
+        if (typeof nextSummary !== 'string' || !nextSummary.trim()) throw new Error('The model returned an empty summary. Your previous conversation is unchanged.');
+        const candidate = nextSummary.trim();
+        // Summary calls have extra instructions. Their usage must not inflate
+        // the calibration learned from ordinary conversation requests.
+        const previousTokens = projection(workingContext, workingSummary, model);
+        const nextTokens = projection(split.recent, candidate, model);
+        if (nextTokens >= previousTokens) {
+          throw new Error('The summary did not free enough context. Your conversation is unchanged; shorten your message or use Reset.');
+        }
+        workingSummary = candidate;
+        workingContext = split.recent;
+        const nextMessages = pending ? [...workingContext, pending] : workingContext;
+        const nextWithPending = projection(nextMessages, workingSummary, model);
+        // A large unsent draft cannot itself be compacted. Compress history,
+        // then let Send enforce the model's hard input limit for that draft.
+        const draftAtThreshold = pending && projection([pending], '', model) >= budget.input * ratio;
+        if (nextWithPending <= budget.input && imagesFit(nextMessages, imageLimits)
+          && (nextWithPending < budget.input * ratio || (draftAtThreshold && !workingContext.length))) {
+          summary = workingSummary;
+          context = workingContext;
+          transcript = context.slice();
+          renderTranscript();
+          autoCompactionAttempt = autoCompactionSnapshot(model);
+          updateControls();
+          return true;
+        }
+      }
+      throw new Error('Compaction could not free enough context after 8 passes. Your conversation is unchanged; shorten your message or choose a model with a larger context.');
+    } finally {
+      progress.remove();
+      if (activeCompactionProgress === progress) activeCompactionProgress = null;
+      if (operation === generation) ui.messages.setAttribute('aria-busy', 'false');
     }
-    status('Summarizing conversation…');
-    const response = await post({ model: model.id, messages: requestMessages(split.older), summary, compact: true, stream: false }, signal);
-    const result = await response.json();
-    if (operation !== generation) return false;
-    if (result.error) throw new Error(result.error.message || 'The conversation could not be summarized.');
-    const nextSummary = result.choices?.[0]?.message?.content;
-    if (typeof nextSummary !== 'string' || !nextSummary.trim()) throw new Error('The model returned an empty summary. Your previous conversation is unchanged.');
-    calibrate(result.usage, split.older, summary, model);
-    const candidate = nextSummary.trim();
-    const previousTokens = projection(context, summary, model);
-    const nextTokens = projection(split.recent, candidate, model);
-    const nextWithPending = projection(pending ? [...split.recent, pending] : split.recent, candidate, model);
-    if (nextTokens >= previousTokens || nextWithPending > budget.input
-      || !imagesFit(pending ? [...split.recent, pending] : split.recent, imageLimits)) {
-      throw new Error('The summary did not free enough context. Your conversation is unchanged; shorten your message or use Reset.');
-    }
-    summary = candidate;
-    context = split.recent;
-    // Release summarized text, images and DOM nodes instead of retaining an
-    // ever-growing display history separate from the compacted model context.
-    transcript = context.slice();
-    renderTranscript();
-    updateControls();
-    return true;
   }
 
   async function consumeStream(response, assistant, operation, model, requestContext, requestSummary) {
@@ -530,7 +609,7 @@
       if (typeof delta.reasoning_content === 'string') assistant.reasoning_content += delta.reasoning_content;
       if (choice?.finish_reason) finishedChoice = true;
       calibrate(payload.usage, requestContext, requestSummary, model);
-      if (operation === generation) drawMessage(assistant);
+      if (operation === generation) { drawMessage(assistant); updateControls(); }
     };
     try {
       while (!done) {
@@ -565,6 +644,48 @@
     updateControls();
     renderAttachments();
     return { operation: generation, signal: controller.signal };
+  }
+
+  function autoCompactionSnapshot(model) {
+    return { model: model.id, context, length: context.length, summary, draft: ui.input.value.trim(),
+      images: attachments.slice(), calibration: calibration.get(model.id) || 1 };
+  }
+
+  function sameAutoCompactionAttempt(snapshot) {
+    const previous = autoCompactionAttempt;
+    return previous && previous.model === snapshot.model && previous.context === snapshot.context
+      && previous.length === snapshot.length && previous.summary === snapshot.summary
+      && previous.draft === snapshot.draft && previous.calibration === snapshot.calibration
+      && previous.images.length === snapshot.images.length
+      && previous.images.every((image, index) => image === snapshot.images[index]);
+  }
+
+  function scheduleAutoCompaction() {
+    clearTimeout(autoCompactionTimer);
+    autoCompactionTimer = null;
+    const model = selectedModel();
+    if (busy || uploadsInFlight || !model || !(context.length || summary)
+      || (model.capabilities?.image !== true && hasImages(context))) return;
+    const pending = ui.input.value.trim() || attachments.length ? pendingMessage() : null;
+    const messages = pending ? [...context, pending] : context;
+    if (percentToCompact(projection(messages, summary, model), getBudget(model, config).input, ratio) > 0
+      && imagesFit(messages, imageLimits)) return;
+    if (sameAutoCompactionAttempt(autoCompactionSnapshot(model))) return;
+    // Let typing settle, and wait until an active response has fully finished.
+    // An unchanged failed attempt is never automatically retried or billed again.
+    autoCompactionTimer = setTimeout(async () => {
+      autoCompactionTimer = null;
+      if (busy || uploadsInFlight || model !== selectedModel()) return;
+      const { operation, signal } = beginOperation();
+      try {
+        await compactConversation(model, signal, operation, pending);
+        if (operation === generation) status('Earlier messages replaced by a summary. Recent messages stay visible.');
+      } catch (error) {
+        if (operation === generation) status(signal.aborted ? 'Compaction stopped. Your conversation is unchanged.' : error.message || 'Compaction failed. Your conversation is unchanged.', !signal.aborted);
+      } finally {
+        finishOperation(operation);
+      }
+    }, 600);
   }
 
   function finishOperation(operation) {
@@ -670,10 +791,20 @@
     }
   });
 
-  ui.stop.addEventListener('click', () => controller?.abort());
+  ui.stop.addEventListener('click', () => {
+    controller?.abort();
+    activeCompactionProgress?.remove();
+    activeCompactionProgress = null;
+    ui.messages.setAttribute('aria-busy', 'false');
+  });
   ui.reset.addEventListener('click', () => {
     generation += 1;
     controller?.abort();
+    clearTimeout(autoCompactionTimer);
+    autoCompactionTimer = null;
+    autoCompactionAttempt = null;
+    activeCompactionProgress = null;
+    ui.messages.setAttribute('aria-busy', 'false');
     conversationId = newConversationId();
     controller = null;
     busy = false;

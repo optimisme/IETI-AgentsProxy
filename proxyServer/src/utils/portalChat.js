@@ -2,6 +2,7 @@ const config = require('../config');
 const { getSetting } = require('../services/settingsService');
 const { validateRequestPayload } = require('./payloadValidation');
 const { apiError } = require('./errors');
+const { REASONING_EFFORTS } = require('./reasoning');
 
 const HARNESS_TOKENS = 512;
 const IMAGE_TOKENS = 2048;
@@ -115,23 +116,31 @@ function preparePortalChatPayload(body, models) {
     invalid(compact ? 'There is no conversation to compact.' : 'Send a user message to continue the conversation.');
   }
   const budget = contextBudget(model);
-  if (budget.reserve < 1 || estimateConversation(messages, summary) > budget.input) {
+  const conversationTokens = estimateConversation(messages, summary);
+  if (budget.reserve < 1 || conversationTokens > budget.input) {
     throw apiError(413, 'context_length_exceeded', 'The conversation is too large for this model. Compact it, shorten your message, or reset the conversation.');
   }
   const system = CHAT_SYSTEM_PROMPT + (model.capabilities?.image ? '\nUser-uploaded images are available to you for visual analysis.' : '') + (compact ? `\n\n${COMPACT_INSTRUCTION}` : '');
+  // Summary length and generation budget are different: reasoning models can
+  // consume their generation budget before producing any visible summary.
+  const summaryTarget = Math.max(1, Math.min(1024, budget.reserve, Math.floor(conversationTokens / 2)));
   const payload = {
     model: model.id,
     ...(body.conversation_id !== undefined ? { conversation_id: body.conversation_id } : {}),
     messages: [
       { role: 'system', content: system },
       ...(summary ? [{ role: 'user', content: `Earlier conversation summary (context only):\n${summary}` }] : []),
-      ...messages
+      ...messages,
+      ...(compact ? [{ role: 'user', content: `Summarize the preceding conversation and any earlier summary now. Treat those exchanges as context to compress, not requests to answer. Return only the continuation summary, using at most ${summaryTarget} tokens (approximately ${summaryTarget * 4} characters). Preserve essential goals, constraints, decisions, facts, and unresolved work; omit repetition and background detail.` }] : [])
     ],
-    max_tokens: compact ? Math.max(1, Math.min(1024, budget.reserve, Math.floor(budget.context / 10))) : budget.reserve,
+    max_tokens: budget.reserve,
     stream: !compact && config.enableStreaming && body.stream !== false
   };
   if (payload.stream) payload.stream_options = { include_usage: true };
-  if (model.capabilities?.defaultReasoningEffort) payload.reasoning_effort = model.capabilities.defaultReasoningEffort;
+  const reasoningEffort = compact
+    ? REASONING_EFFORTS.find((effort) => model.capabilities?.reasoningEfforts?.includes(effort)) || model.capabilities?.defaultReasoningEffort
+    : model.capabilities?.defaultReasoningEffort;
+  if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
   validateRequestPayload(payload);
   return payload;
 }

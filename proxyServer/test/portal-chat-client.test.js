@@ -13,8 +13,10 @@ class Element {
   constructor(tagName = 'div') {
     this.tagName = tagName;
     this.children = [];
+    this.parentNode = null;
     this.listeners = new Map();
     this.attributes = new Map();
+    this.style = {};
     this.classes = new Set();
     this.classList = { toggle: (name, enabled) => enabled ? this.classes.add(name) : this.classes.delete(name) };
     this.value = '';
@@ -27,15 +29,37 @@ class Element {
     this.disabled = false;
     this.hidden = false;
   }
-  set textContent(value) { this._text = String(value); this.children = []; }
+  set textContent(value) { this.replaceChildren(); this._text = String(value); }
   get textContent() { return this._text + this.children.map((child) => child.textContent).join(''); }
   append(...children) {
-    this.children.push(...children);
-    if (this.tagName === 'select') this.options.push(...children);
+    for (const child of children) {
+      child.remove();
+      child.parentNode = this;
+      this.children.push(child);
+      if (this.tagName === 'select') this.options.push(child);
+    }
   }
-  insertBefore(child, target) { this.children.splice(this.children.indexOf(target), 0, child); }
-  replaceChildren(...children) { this._text = ''; this.children = children; }
+  insertBefore(child, target) {
+    child.remove();
+    child.parentNode = this;
+    this.children.splice(this.children.indexOf(target), 0, child);
+  }
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentNode = null;
+    this._text = '';
+    this.children = [];
+    if (this.tagName === 'select') this.options = [];
+    this.append(...children);
+  }
+  remove() {
+    if (!this.parentNode) return;
+    const parent = this.parentNode;
+    parent.children.splice(parent.children.indexOf(this), 1);
+    if (parent.tagName === 'select') parent.options.splice(parent.options.indexOf(this), 1);
+    this.parentNode = null;
+  }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  removeAttribute(name) { this.attributes.delete(name); }
   querySelectorAll() { return []; }
   focus() { this.focused = true; }
   addEventListener(type, listener) {
@@ -75,14 +99,14 @@ function deferred() {
   return { promise, resolve };
 }
 
-function response(content, { status = 200, reasoning = '' } = {}) {
+function response(content, { status = 200, reasoning = '', usage, finishReason = 'stop' } = {}) {
   return {
     ok: status < 400,
     status,
     redirected: false,
     headers: { get: () => 'application/json' },
     json: async () => status < 400
-      ? { choices: [{ message: { role: 'assistant', content, reasoning_content: reasoning } }] }
+      ? { choices: [{ message: { role: 'assistant', content, reasoning_content: reasoning }, finish_reason: finishReason }], usage }
       : { error: { message: content } }
   };
 }
@@ -193,6 +217,20 @@ function imageCount(fixture) {
 
 function summaryCards(fixture) {
   return descendants(fixture.get('messages'), (element) => (element.className || '').split(/\s+/).includes('chat-summary'));
+}
+
+function compactionCards(fixture) {
+  return descendants(fixture.get('messages'), (element) => (element.className || '').split(/\s+/).includes('chat-compaction'));
+}
+
+function compactPercent(fixture) {
+  const match = fixture.get('budget').textContent.match(/^(\d+)% to compact\b/);
+  assert.ok(match, 'the footer shows the remaining percentage in its token budget row');
+  return Number(match[1]);
+}
+
+async function settle() {
+  for (let attempt = 0; attempt < 40; attempt += 1) await Promise.resolve();
 }
 
 function messageCopyButtons(fixture) {
@@ -405,6 +443,215 @@ test('Compact forces a summary below 65% and can summarize an already compacted 
 function smallBrowser() {
   return browser({ models: [{ id: 'small-model', limit: { context: 2048, output: 256 }, capabilities: { image: false } }], maxOutputTokens: 256 });
 }
+
+test('the footer starts at 100% and reaches zero only at the exact compaction threshold', async () => {
+  const fixture = smallBrowser();
+  assert.equal(compactPercent(fixture), 100);
+  // 1280 usable input tokens × 65% = 832. The draft adds eight message
+  // framing tokens, so these drafts project 831 and exactly 832 tokens.
+  await fixture.draft('u'.repeat(3292));
+  assert.equal(compactPercent(fixture), 1, 'rounding cannot advertise zero before the threshold');
+  await fixture.draft('u'.repeat(3296));
+  assert.equal(compactPercent(fixture), 0);
+  fixture.advanceTime(600);
+  await settle();
+  assert.equal(fixture.calls.length, 0, 'a draft without any conversation has nothing to compact');
+  await fixture.draft('Shorter draft');
+  assert.ok(compactPercent(fixture) > 0);
+  await fixture.click('reset');
+  assert.equal(compactPercent(fixture), 100);
+});
+
+test('the footer accounts for attached images and provider-reported ordinary prompt usage', async () => {
+  const fixture = browser();
+  await fixture.draft('Describe the design.');
+  const textOnly = compactPercent(fixture);
+  await fixture.select('vision-model');
+  await fixture.upload(new ImageFile(PNG));
+  assert.ok(compactPercent(fixture) < textOnly, 'an image consumes remaining context before it is sent');
+  await fixture.click('reset');
+  assert.equal(compactPercent(fixture), 100);
+
+  const ordinary = browser();
+  const calibrated = browser();
+  ordinary.queue(response('a'.repeat(1000)));
+  calibrated.queue(response('a'.repeat(1000), { usage: { prompt_tokens: 4000, completion_tokens: 250 } }));
+  await ordinary.submit('u'.repeat(1000));
+  await calibrated.submit('u'.repeat(1000));
+  assert.ok(compactPercent(calibrated) < compactPercent(ordinary), 'reported prompt usage corrects the estimate used by the footer');
+  assert.ok(compactPercent(calibrated) > 0, 'this ordinary reply is still below the compaction threshold');
+});
+
+test('compaction displays progress in the conversation until its summary completes', async () => {
+  const fixture = browser();
+  fixture.queue(response('Original answer '.repeat(80)));
+  await fixture.submit('Original project goal '.repeat(30));
+  const previousNodes = [...fixture.get('messages').children];
+  const pending = deferred();
+  fixture.queue(pending.promise);
+  const compacting = fixture.click('compact');
+  await waitForCalls(fixture, 2);
+  const cards = compactionCards(fixture);
+  assert.equal(cards.length, 1, 'the conversation contains a visible progress card while the provider is pending');
+  assert.equal(cards[0].hidden, false);
+  assert.match(cards[0].textContent, /compact|summari/i);
+  assert.ok(cards[0].attributes.get('role') === 'progressbar'
+    || descendants(cards[0], (element) => element.attributes.get('role') === 'progressbar').length > 0,
+  'compaction progress is accessible as a progressbar');
+  assert.equal(fixture.get('messages').attributes.get('aria-busy'), 'true');
+  assert.ok(previousNodes.every((node) => fixture.get('messages').children.includes(node)), 'progress does not discard the original transcript');
+  pending.resolve(response('Retained project goal.'));
+  await compacting;
+  assert.equal(compactionCards(fixture).length, 0);
+  assert.notEqual(fixture.get('messages').attributes.get('aria-busy'), 'true');
+  assert.equal(summaryCards(fixture).length, 1);
+});
+
+test('failed, stopped and reset compaction remove progress and preserve the applicable conversation', async (context) => {
+  for (const ending of ['failure', 'stop', 'reset']) {
+    await context.test(ending, async () => {
+      const fixture = browser();
+      fixture.queue(response('Original answer '.repeat(80)));
+      await fixture.submit('Original goal '.repeat(30));
+      const original = fixture.get('messages').textContent;
+      const originalNodes = [...fixture.get('messages').children];
+      const pending = deferred();
+      fixture.queue(pending.promise);
+      const compacting = fixture.click('compact');
+      await waitForCalls(fixture, 2);
+      assert.equal(compactionCards(fixture).length, 1);
+      if (ending !== 'failure') {
+        await fixture.click(ending);
+        assert.equal(fixture.calls[1].signal.aborted, true);
+        assert.equal(compactionCards(fixture).length, 0, 'Stop and Reset remove stale progress immediately');
+      }
+      pending.resolve(ending === 'failure'
+        ? response('Summary service unavailable.', { status: 503 })
+        : response('Late summary that must never replace the transcript.'));
+      await compacting;
+      assert.equal(compactionCards(fixture).length, 0);
+      assert.notEqual(fixture.get('messages').attributes.get('aria-busy'), 'true');
+      assert.equal(summaryCards(fixture).length, 0);
+      if (ending === 'reset') {
+        assert.match(fixture.get('messages').textContent, /Start a conversation/);
+      } else {
+        assert.equal(fixture.get('messages').textContent, original);
+        assert.deepEqual(fixture.get('messages').children, originalNodes);
+      }
+    });
+  }
+});
+
+test('an answer reaching zero schedules idle compaction without another Send', async () => {
+  const fixture = smallBrowser();
+  fixture.queue(response('a'.repeat(1296)));
+  await fixture.submit('u'.repeat(2000));
+  assert.equal(compactPercent(fixture), 0);
+  const pending = deferred();
+  fixture.queue(pending.promise);
+  fixture.advanceTime(599);
+  await settle();
+  assert.equal(fixture.calls.length, 1);
+  fixture.advanceTime(1);
+  await waitForCalls(fixture, 2);
+  assert.equal(fixture.calls[1].body.compact, true);
+  assert.equal(compactionCards(fixture).length, 1);
+  assert.equal(fixture.get('input').value, '');
+  pending.resolve(response('Retained goal after the large answer.'));
+  await settle();
+  assert.equal(fixture.calls.length, 2, 'automatic compaction sends no invented user turn');
+  assert.equal(compactionCards(fixture).length, 0);
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.ok(compactPercent(fixture) > 0);
+});
+
+test('a draft reaching zero compacts while idle and leaves that draft unsent', async () => {
+  const fixture = smallBrowser();
+  fixture.queue(response('a'.repeat(1200)));
+  await fixture.submit('u'.repeat(2000));
+  await fixture.draft('p'.repeat(28));
+  assert.equal(compactPercent(fixture), 1);
+  fixture.advanceTime(600);
+  await settle();
+  assert.equal(fixture.calls.length, 1, 'a positive remaining percentage does not compact');
+  await fixture.draft('p'.repeat(29));
+  assert.equal(compactPercent(fixture), 0);
+  fixture.queue(response('Retained goal for this pending draft.'));
+  fixture.advanceTime(600);
+  await waitForCalls(fixture, 2);
+  await settle();
+  assert.equal(fixture.calls[1].body.compact, true);
+  assert.deepEqual(fixture.calls[1].body.messages.map((message) => message.content), ['u'.repeat(2000), 'a'.repeat(1200)]);
+  assert.equal(fixture.get('input').value, 'p'.repeat(29));
+  assert.equal(fixture.calls.length, 2, 'the typed draft remains unsubmitted');
+  assert.doesNotMatch(fixture.get('messages').textContent, /pppp/);
+  assert.ok(compactPercent(fixture) > 0);
+});
+
+test('failed idle compaction does not retry unchanged context until the user changes it', async () => {
+  const fixture = smallBrowser();
+  fixture.queue(response('a'.repeat(1296)));
+  await fixture.submit('u'.repeat(2000));
+  const original = fixture.get('messages').textContent;
+  fixture.queue(response('Summary service unavailable.', { status: 503 }));
+  fixture.advanceTime(600);
+  await waitForCalls(fixture, 2);
+  await settle();
+  assert.match(fixture.get('status').textContent, /Summary service unavailable/);
+  assert.equal(fixture.get('messages').textContent, original);
+  for (let retry = 0; retry < 3; retry += 1) {
+    fixture.advanceTime(600);
+    await fixture.get('input').dispatch('input');
+    await settle();
+  }
+  assert.equal(fixture.calls.length, 2, 'unchanged state cannot cause a failing automatic request loop');
+  fixture.queue(response('Retained goal after editing the draft.'));
+  await fixture.draft('A new draft');
+  fixture.advanceTime(600);
+  await waitForCalls(fixture, 3);
+  await settle();
+  assert.equal(fixture.calls[2].body.compact, true);
+  assert.equal(summaryCards(fixture).length, 1);
+});
+
+test('streamed content updates the countdown while busy and compacts only after the response finishes', async () => {
+  const fixture = browser({
+    models: [{ id: 'small-model', limit: { context: 2048, output: 256 }, capabilities: { image: false } }],
+    maxOutputTokens: 256, streaming: true
+  });
+  const end = deferred();
+  const answer = 'a'.repeat(1296);
+  let reads = 0;
+  fixture.queue({
+    ok: true, status: 200, redirected: false,
+    headers: { get: () => 'text/event-stream' },
+    body: { getReader: () => ({
+      read: async () => reads++ === 0
+        ? { done: false, value: Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\n`) }
+        : end.promise,
+      async cancel() {},
+      releaseLock() {}
+    }) }
+  });
+  const sending = fixture.submit('u'.repeat(2000));
+  await waitForText(fixture, answer);
+  assert.equal(compactPercent(fixture), 0, 'streamed assistant text already consumes context in the footer');
+  fixture.advanceTime(600);
+  await settle();
+  assert.equal(fixture.calls.length, 1, 'an in-flight generation cannot start compaction');
+  const summary = deferred();
+  fixture.queue(summary.promise);
+  end.resolve({ done: false, value: Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) });
+  await sending;
+  fixture.advanceTime(600);
+  await waitForCalls(fixture, 2);
+  assert.equal(fixture.calls[1].body.compact, true);
+  assert.deepEqual(fixture.calls[1].body.messages.map((message) => message.content), ['u'.repeat(2000), answer]);
+  summary.resolve(response('Retained goal from the completed stream.'));
+  await settle();
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.ok(compactPercent(fixture) > 0);
+});
 
 test('full-message Copy preserves user and model Markdown without labels or private reasoning', async () => {
   const fixture = browser();
@@ -672,6 +919,186 @@ test('an oversized historical pair is compacted through a fitting prefix without
   assert.equal(fixture.get('messages').children.length, 4, 'the summary, unsummarized answer and latest exchange remain visible');
 });
 
+test('multiple fitting compaction passes carry each prefix and commit only after enough context is freed', async () => {
+  const fixture = smallBrowser();
+  const original = 'u'.repeat(4200);
+  const answer = 'a'.repeat(4600);
+  fixture.queue(response(answer));
+  await fixture.submit(original);
+  const originalNodes = [...fixture.get('messages').children];
+  const first = deferred();
+  const second = deferred();
+  fixture.queue(first.promise);
+  fixture.queue(second.promise);
+  fixture.queue(response('Continuation after all necessary summaries.'));
+  const sending = fixture.submit('Continue');
+  await waitForCalls(fixture, 2);
+  assert.deepEqual(fixture.calls[1].body.messages, [{ role: 'user', content: original }]);
+  const firstProgress = compactionCards(fixture)[0].textContent;
+  first.resolve(response('Retained original goal.'));
+  await waitForCalls(fixture, 3);
+  assert.equal(fixture.calls[2].body.compact, true, 'a prefix-only summary still above 65% needs another pass');
+  assert.equal(fixture.calls[2].body.summary, 'Retained original goal.');
+  assert.deepEqual(fixture.calls[2].body.messages, [{ role: 'assistant', content: answer }], 'the unsummarized answer is included in the next fitting request');
+  assert.equal(fixture.get('input').value, 'Continue');
+  assert.equal(summaryCards(fixture).length, 0, 'an intermediate summary is not committed');
+  assert.ok(originalNodes.every((node) => fixture.get('messages').children.includes(node)));
+  assert.equal(compactionCards(fixture).length, 1);
+  assert.notEqual(compactionCards(fixture)[0].textContent, firstProgress, 'progress reflects the additional summarization pass');
+  second.resolve(response('Retained original goal and the complete answer.'));
+  await sending;
+  assert.equal(fixture.calls.length, 4);
+  assert.equal(fixture.calls[3].body.compact, false);
+  assert.equal(fixture.calls[3].body.summary, 'Retained original goal and the complete answer.');
+  assert.deepEqual(fixture.calls[3].body.messages, [{ role: 'user', content: 'Continue' }]);
+  assert.equal(compactionCards(fixture).length, 0);
+  assert.equal(summaryCards(fixture).length, 1);
+  assert.doesNotMatch(fixture.get('messages').textContent, /uuuu|aaaa/);
+});
+
+test('a later compaction-pass failure rolls back all summaries and permits a complete retry', async () => {
+  const fixture = smallBrowser();
+  const original = 'u'.repeat(4200);
+  const answer = 'a'.repeat(4600);
+  fixture.queue(response(answer));
+  await fixture.submit(original);
+  const before = fixture.get('messages').textContent;
+  const beforeNodes = [...fixture.get('messages').children];
+  fixture.queue(response('Intermediate retained goal.'));
+  fixture.queue(response('Second summary service unavailable.', { status: 503 }));
+  await fixture.submit('Continue');
+  assert.equal(fixture.calls.length, 3, 'a failed later pass prevents the pending ordinary message');
+  assert.equal(fixture.calls[2].body.summary, 'Intermediate retained goal.');
+  assert.deepEqual(fixture.calls[2].body.messages, [{ role: 'assistant', content: answer }]);
+  assert.equal(fixture.get('messages').textContent, before);
+  assert.deepEqual(fixture.get('messages').children, beforeNodes);
+  assert.equal(summaryCards(fixture).length, 0);
+  assert.equal(compactionCards(fixture).length, 0);
+  assert.equal(fixture.get('input').value, 'Continue');
+  assert.match(fixture.get('status').textContent, /Second summary service unavailable/);
+  fixture.advanceTime(1800);
+  await settle();
+  assert.equal(fixture.calls.length, 3, 'the failure is not retried automatically with unchanged context');
+
+  fixture.queue(response('Intermediate retained goal.'));
+  fixture.queue(response('Retained complete conversation.'));
+  fixture.queue(response('Continuation'));
+  await fixture.submit();
+  assert.deepEqual(fixture.calls[3].body, fixture.calls[1].body, 'retry starts from the full original context');
+  assert.deepEqual(fixture.calls[4].body, fixture.calls[2].body);
+  assert.equal(fixture.calls[5].body.summary, 'Retained complete conversation.');
+  assert.deepEqual(fixture.calls[5].body.messages, [{ role: 'user', content: 'Continue' }]);
+});
+
+test('Reset during a later compaction pass cannot restore old context or finish a fresh request', async () => {
+  const fixture = smallBrowser();
+  fixture.queue(response('a'.repeat(4600)));
+  await fixture.submit('u'.repeat(4200));
+  const oldId = fixture.calls[0].body.conversation_id;
+  const lateSummary = deferred();
+  fixture.queue(response('Intermediate old goal.'));
+  fixture.queue(lateSummary.promise);
+  const oldSending = fixture.submit('Old continuation');
+  await waitForCalls(fixture, 3);
+  assert.equal(fixture.calls[2].body.compact, true);
+  assert.equal(fixture.calls[2].body.summary, 'Intermediate old goal.');
+  await fixture.click('reset');
+  assert.equal(compactionCards(fixture).length, 0);
+  assert.equal(fixture.calls[2].signal.aborted, true);
+  const freshAnswer = deferred();
+  fixture.queue(freshAnswer.promise);
+  const freshSending = fixture.submit('Fresh goal');
+  await waitForCalls(fixture, 4);
+  assert.notEqual(fixture.calls[3].body.conversation_id, oldId);
+  lateSummary.resolve(response('Late complete old summary.'));
+  await oldSending;
+  assert.equal(fixture.get('send').disabled, true, 'the fresh request remains busy after the old operation settles');
+  assert.equal(fixture.get('stop').hidden, false);
+  assert.equal(summaryCards(fixture).length, 0);
+  assert.doesNotMatch(fixture.get('messages').textContent, /Old continuation|Intermediate old goal|Late complete old summary|uuuu|aaaa/);
+  freshAnswer.resolve(response('Fresh answer'));
+  await freshSending;
+  fixture.queue(response('Next fresh answer'));
+  await fixture.submit('Keep going');
+  assert.equal(fixture.calls[4].body.summary, '');
+  assert.deepEqual(fixture.calls[4].body.messages.map((message) => message.content), ['Fresh goal', 'Fresh answer', 'Keep going']);
+});
+
+test('compaction has a bounded pass count and preserves the entire transcript when the bound is insufficient', async () => {
+  const fixture = browser({ models: [
+    { id: 'large-model', limit: { context: 32768, output: 4096 }, capabilities: { image: false } },
+    { id: 'small-model', limit: { context: 2048, output: 256 }, capabilities: { image: false } }
+  ] });
+  for (let turn = 0; turn < 10; turn += 1) {
+    fixture.queue(response(`${turn}${'a'.repeat(1999)}`));
+    await fixture.submit(`${turn}${'u'.repeat(1999)}`);
+  }
+  assert.equal(fixture.calls.length, 10);
+  const before = fixture.get('messages').textContent;
+  const beforeNodes = [...fixture.get('messages').children];
+  await fixture.select('small-model');
+  for (let pass = 0; pass < 9; pass += 1) fixture.queue(response(`Retained goals through pass ${pass}.`));
+  await fixture.click('compact');
+  assert.equal(fixture.calls.length, 18, 'compaction stops after eight summary requests');
+  assert.ok(fixture.calls.slice(10).every((call) => call.body.compact));
+  assert.match(fixture.get('status').textContent, /8 passes/);
+  assert.equal(fixture.get('messages').textContent, before);
+  assert.deepEqual(fixture.get('messages').children, beforeNodes);
+  assert.equal(summaryCards(fixture).length, 0);
+  assert.equal(compactionCards(fixture).length, 0);
+  fixture.advanceTime(1800);
+  await settle();
+  assert.equal(fixture.calls.length, 18, 'the exhausted attempt cannot restart automatically');
+});
+
+test('truncated or content-filtered summaries cannot replace the original conversation', async (context) => {
+  for (const finishReason of ['length', 'content_filter']) {
+    await context.test(finishReason, async () => {
+      const fixture = browser();
+      const original = 'Original goal '.repeat(30);
+      const answer = 'Original answer '.repeat(80);
+      fixture.queue(response(answer));
+      await fixture.submit(original);
+      const before = fixture.get('messages').textContent;
+      const beforeNodes = [...fixture.get('messages').children];
+      await fixture.draft('Preserve this unsent draft');
+      fixture.queue(response('A short but incomplete summary.', { finishReason }));
+      await fixture.click('compact');
+      assert.equal(fixture.get('messages').textContent, before);
+      assert.deepEqual(fixture.get('messages').children, beforeNodes);
+      assert.equal(summaryCards(fixture).length, 0);
+      assert.equal(compactionCards(fixture).length, 0);
+      assert.equal(fixture.get('input').value, 'Preserve this unsent draft');
+      assert.equal(fixture.get('status').classes.has('chat-status-error'), true);
+      fixture.queue(response('Continued without the incomplete summary.'));
+      await fixture.submit();
+      assert.equal(fixture.calls[2].body.summary, '');
+      assert.deepEqual(fixture.calls[2].body.messages.map((message) => message.content), [original.trim(), answer, 'Preserve this unsent draft']);
+    });
+  }
+});
+
+test('summary-request usage cannot inflate ordinary conversation calibration', async () => {
+  const fixture = browser();
+  fixture.queue(response('Original answer '.repeat(80)));
+  await fixture.submit('Original goal '.repeat(30));
+  fixture.queue(response('Retained goal.', { usage: { prompt_tokens: 999999, completion_tokens: 5 } }));
+  await fixture.click('compact');
+  assert.equal(summaryCards(fixture).length, 1, 'large summary-request overhead does not make a valid summary fail');
+  assert.ok(compactPercent(fixture) > 95);
+  const draft = 'n'.repeat(8000);
+  await fixture.draft(draft);
+  assert.ok(compactPercent(fixture) > 0, 'summary usage cannot force ordinary drafts to an artificial zero');
+  fixture.advanceTime(600);
+  await settle();
+  assert.equal(fixture.calls.length, 2);
+  fixture.queue(response('Ordinary continuation'));
+  await fixture.submit();
+  assert.equal(fixture.calls[2].body.compact, false);
+  assert.equal(fixture.calls[2].body.summary, 'Retained goal.');
+  assert.deepEqual(fixture.calls[2].body.messages, [{ role: 'user', content: draft }]);
+});
+
 test('a non-reducing summary keeps the conversation and draft instead of replacing context', async () => {
   const fixture = browser();
   fixture.queue(response('Useful answer '.repeat(30)));
@@ -690,6 +1117,33 @@ test('a non-reducing summary keeps the conversation and draft instead of replaci
   await fixture.submit();
   assert.equal(fixture.calls[2].body.summary, '');
   assert.deepEqual(fixture.calls[2].body.messages.map((message) => message.content), ['Original user goal '.repeat(20).trim(), 'Useful answer '.repeat(30), 'Unsent draft']);
+});
+
+test('an oversized unsent draft rejects compaction before any summary request is billed', async () => {
+  const fixture = smallBrowser();
+  fixture.queue(response('Original answer'));
+  await fixture.submit('Original goal');
+  const before = fixture.get('messages').textContent;
+  const beforeNodes = [...fixture.get('messages').children];
+  const oversized = 'd'.repeat(6000);
+  await fixture.draft(oversized);
+  await fixture.click('compact');
+  assert.equal(fixture.calls.length, 1, 'a summary cannot make a draft that alone exceeds the hard input budget fit');
+  assert.equal(fixture.get('input').value, oversized);
+  assert.equal(fixture.get('messages').textContent, before);
+  assert.deepEqual(fixture.get('messages').children, beforeNodes);
+  assert.equal(compactionCards(fixture).length, 0);
+  assert.equal(summaryCards(fixture).length, 0);
+  assert.match(fixture.get('status').textContent, /message is too large.*Shorten it.*conversation is unchanged/i);
+  assert.equal(fixture.get('status').classes.has('chat-status-error'), true);
+  fixture.advanceTime(600);
+  await settle();
+  assert.equal(fixture.calls.length, 1, 'unchanged invalid drafts do not trigger a billed automatic retry');
+  fixture.queue(response('Continued original conversation'));
+  await fixture.submit('Shortened draft');
+  assert.equal(fixture.calls[1].body.compact, false);
+  assert.equal(fixture.calls[1].body.summary, '');
+  assert.deepEqual(fixture.calls[1].body.messages.map((message) => message.content), ['Original goal', 'Original answer', 'Shortened draft']);
 });
 
 test('uploads and image-only messages require vision, and switching to text cannot resend image history', async () => {

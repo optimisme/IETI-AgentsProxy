@@ -26,7 +26,7 @@ const { getInFlight } = require('../src/services/providerService');
 const { providerAvailability } = require('../src/services/providerAvailabilityService');
 const { getUsageTotals } = require('../src/services/usageService');
 const { createApp } = require('../src/app');
-const { preparePortalChatPayload } = require('../src/utils/portalChat');
+const { HARNESS_TOKENS, estimateConversation, preparePortalChatPayload } = require('../src/utils/portalChat');
 const password = 'portal-chat-student-password';
 const passwordHash = hashPassword(password);
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHCkAAAAASUVORK5CYII=';
@@ -51,7 +51,12 @@ test.before(async () => {
       return res.end(JSON.stringify({ error: { message: 'Fixture unavailable.' } }));
     }
     if (upstreamMode === 'timeout') return;
-    const content = upstreamMode === 'summary' ? 'Retained goal: write a Markdown explanation.' : '## Answer\n\n**Hello**, student.';
+    const compactReady = payload.messages.at(-1)?.role === 'user'
+      && /Summarize the preceding conversation/.test(payload.messages.at(-1)?.content)
+      && payload.max_tokens > 1024 && payload.reasoning_effort === 'none';
+    const exhaustedCompaction = upstreamMode === 'compaction-strict' && !compactReady;
+    const content = exhaustedCompaction ? '' : ['summary', 'compaction-strict'].includes(upstreamMode)
+      ? 'Retained goal: write a Markdown explanation.' : '## Answer\n\n**Hello**, student.';
     const usage = { prompt_tokens: 37, completion_tokens: 11, total_tokens: 48 };
     if (payload.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -61,7 +66,7 @@ test.before(async () => {
       return;
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ id: 'chat-fixture', object: 'chat.completion', choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }], usage }));
+    res.end(JSON.stringify({ id: 'chat-fixture', object: 'chat.completion', choices: [{ message: { role: 'assistant', content }, finish_reason: exhaustedCompaction ? 'length' : 'stop' }], usage }));
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   db = getDb();
@@ -91,6 +96,7 @@ test.beforeEach(() => {
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('4', 'max_images_per_request');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('8000000', 'max_image_bytes');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('16000000', 'max_total_image_bytes');
+  db.prepare('UPDATE provider_models SET supports_reasoning = 0, reasoning_efforts = NULL, default_reasoning_effort = NULL WHERE provider_id = ?').run(providerId);
   upstreamCalls = [];
   upstreamMode = 'success';
 });
@@ -299,6 +305,8 @@ test('forced compaction keeps the harness and summaries in context, consumes quo
   assert.match(compactText, /summari[sz]|summary/i);
   assert.match(compactText, /Previous goal: teach Markdown\./);
   assert.match(compactText, /We will include a heading and a list\./);
+  assert.equal(compactPayload.messages.at(-1).role, 'user', 'an assistant-ending history receives an explicit summary request');
+  assert.match(compactPayload.messages.at(-1).content, /Return only the continuation summary/);
   upstreamMode = 'success';
   await complete(agent, config, { summary, messages: [{ role: 'user', content: 'Continue.' }] }).expect(200);
   const nextPayload = upstreamCalls[1].payload;
@@ -306,6 +314,57 @@ test('forced compaction keeps the harness and summaries in context, consumes quo
   assert.equal(nextPayload.messages[0].role, 'system');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM usage_logs WHERE user_id = ? AND status = 'success'").get(user.id).n, 2);
   assertNoPersistedConversation();
+});
+
+test('compaction reserves room for reasoning and uses the lowest advertised effort while preserving assistant history', async () => {
+  db.prepare(`UPDATE provider_models SET supports_reasoning = 1, reasoning_efforts = ?, default_reasoning_effort = 'high'
+    WHERE provider_id = ? AND public_model = 'portal-chat-text'`).run(JSON.stringify(['none', 'low', 'high']), providerId);
+  const { agent, config } = await chatSession();
+  const history = [
+    { role: 'user', content: 'Help me write a Markdown explanation.' },
+    { role: 'assistant', content: 'Include a heading and a list.', reasoning_content: 'Retained provider reasoning.' }
+  ];
+  upstreamMode = 'compaction-strict';
+  const response = await complete(agent, config, { compact: true, messages: history }).expect(200);
+  assert.equal(response.body.choices[0].finish_reason, 'stop');
+  assert.equal(response.body.choices[0].message.content, 'Retained goal: write a Markdown explanation.');
+  const compactPayload = upstreamCalls[0].payload;
+  assert.equal(compactPayload.max_tokens, 4096, 'generation allows reasoning and the summary within the reserved output budget');
+  assert.equal(compactPayload.reasoning_effort, 'none');
+  assert.equal(compactPayload.messages.at(-2).reasoning_content, 'Retained provider reasoning.');
+  assert.equal(compactPayload.messages.at(-1).role, 'user');
+  upstreamMode = 'success';
+  await complete(agent, config).expect(200);
+  assert.equal(upstreamCalls[1].payload.reasoning_effort, 'high', 'ordinary replies keep the configured effort');
+});
+
+test('compaction bounds its requested summary by source size and keeps its instructions inside the harness allowance', async () => {
+  const { config } = await chatSession();
+  const model = config.models.find((entry) => entry.id === 'portal-chat-vision');
+  const histories = [
+    { messages: [{ role: 'user', content: 'Remember this goal.' }], summary: '' },
+    { messages: [], summary: 'Previous goal: teach Markdown.' },
+    { messages: [{ role: 'user', content: [{ type: 'text', text: 'Describe this image.' }, { type: 'image_url', image_url: { url: PNG } }] }], summary: 'Preserve the image observations.' },
+    { messages: [{ role: 'user', content: 'x'.repeat(12000) }], summary: '' }
+  ];
+  for (const { messages, summary } of histories) {
+    const payload = preparePortalChatPayload({ model: model.id, messages, summary, compact: true }, [model]);
+    const sourceTokens = estimateConversation(messages, summary);
+    const target = Math.max(1, Math.min(1024, payload.max_tokens, Math.floor(sourceTokens / 2)));
+    assert.ok(payload.messages.at(-1).content.includes(`at most ${target} tokens`));
+    assert.ok(estimateConversation(payload.messages) - sourceTokens <= HARNESS_TOKENS,
+      'the initial harness, previous-summary label, and final compaction request fit the advertised allowance');
+    if (messages[0]?.content instanceof Array) assert.deepEqual(payload.messages.at(-2).content, messages[0].content);
+  }
+  for (const capabilities of [
+    { reasoningEfforts: ['medium', 'minimal', 'low'], defaultReasoningEffort: 'medium' },
+    { reasoningEfforts: [], defaultReasoningEffort: 'high' },
+    { reasoningEfforts: [] }
+  ]) {
+    const payload = preparePortalChatPayload({ model: model.id, messages: histories[0].messages, compact: true },
+      [{ ...model, capabilities: { ...model.capabilities, ...capabilities } }]);
+    assert.equal(payload.reasoning_effort, capabilities.reasoningEfforts.length ? 'minimal' : capabilities.defaultReasoningEffort);
+  }
 });
 
 test('Chat streams Markdown content and records upstream token usage once', async () => {
