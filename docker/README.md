@@ -155,7 +155,7 @@ Els proveidors que publiquen la mateixa identitat queden agrupats al proxy.
 El perfil `models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml`
 conserva el nom historic del fitxer, pero publica
 `TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP`. TensorFold esta fixat al commit
-`9356df5c424b0c36b7737e37873a6f968b08de79` de v0.6.3, i els pesos a la revisio
+`609ca419abecebdc5a059498a613680bd3aa847f` de v0.6.5, i els pesos a la revisio
 `2b170fa6309d5d1ee380b35636075fac7945f286`. L'arrencada descarrega aquesta
 revisio explicita, verifica l'index de shards i serveix el snapshot local amb
 la identitat canonica; no executa `tensorfold pull` sobre la branca principal.
@@ -172,7 +172,7 @@ global. Els altres perfils conserven els seus volums.
 El perfil
 afegeix la variable **personalitzada** `TENSORFOLD_PROMPT_SNAPSHOTS`, amb valor
 per defecte `32` i enters admesos d'`1` a `32`. No es una opcio YAML/CLI nativa
-de TensorFold v0.6.3. L'arrencada substitueix exactament una vegada el `KEEP = 8`
+de TensorFold v0.6.5. L'arrencada substitueix exactament una vegada el `KEEP = 8`
 esperat del commit fixat, **abans** de la instal·lacio pip ordinaria. Si el
 constant o els seus usos no coincideixen, l'arrencada falla clarament. Despres
 comprova el valor i els usos al modul Python instal·lat, no nomes al checkout.
@@ -185,6 +185,21 @@ Augmentar-lo consumeix memoria addicional i no garanteix una millora del
 rendiment. Les peticions amb imatges ometen actualment aquesta reutilitzacio
 de prefixos de text. No cal recompilar CUDA ni reconstruir la imatge; si que
 calen la instal·lacio i l'escalfament normals quan es recrea el contenidor.
+
+v0.6.5 recull les files n-gram abans d'esperar les copies anteriors per defecte
+(`TF_FLASH_STAGE_AHEAD=1`). Les rondes de setze streams continuen en mode eager;
+una peticio de text sola amb MTP, sense prefill pendent, pot usar CUDA Graphs.
+El perfil conserva els valors de context, streams, KV int8, MTP i visio.
+
+El mateix perfil aplica tambe el petit patch Python de batching SSD a
+`forward.stage`: concatena els IDs n-gram dels streams en el mateix ordre i fa
+un gather per capa, mantenint histories, files, events CUDA i el cami EXL3.
+`TENSORFOLD_SSD_BATCH_GATHER=1` es el valor per defecte; `0` recupera el staging
+upstream en recrear el contenidor, sense desactivar el patch de snapshots.
+L'arrencada comprova els SHA-256 exactes abans i despres del canvi, i el fitxer
+instal·lat despres de pip. En tres parelles de proves a 16 peticions, el decode
+va passar de 190,0 a 212,4 tok/s (+11,7%); els 144 outputs comparats coincidien.
+Els comentaris del YAML documenten els parametres i els limits d'aquest resultat.
 
 Per tornar temporalment a setze snapshots, des de `docker/` i amb el mateix
 projecte Compose i volums persistents:

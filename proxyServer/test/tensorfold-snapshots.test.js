@@ -22,9 +22,9 @@ function embeddedPython(marker) {
 const expected = 'KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from';
 // The relevant unchanged planning/runtime call sites from the pinned engine.
 const fixture = `KEEP_SERIAL = 4\n${expected}\n
-def plan(text, streams, each, mtp, bits, rows0):
-    return indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits,
-                                                          prefill_rows=rows0)
+def plan(text, streams, each, mtp, bits, rows0, graphs, tp):
+    return indexed_stream_geometry(text, streams + int(graphs and mtp), each, KEEP, mtp=mtp,
+                                                          kv_bits=bits, world=tp, prefill_rows=rows0)
 
 def decoder(w, streams, max_len, depth, confidence, points):
     return MultiDecoder(w, slots=streams, capacity=max_len, depth=depth,
@@ -41,13 +41,49 @@ function runPython(script, args, value, env = {}) {
 }
 
 test('Flash Next patch runs before pip and verifies the installed module before serving', { skip: !profileAvailable }, () => {
-  const checkout = source.indexOf('checkout --detach 9356df5c424b0c36b7737e37873a6f968b08de79');
+  const checkout = source.indexOf('checkout --detach 609ca419abecebdc5a059498a613680bd3aa847f');
   const patch = source.indexOf("<<'PY_PATCH_SNAPSHOTS'");
+  const ssdPatch = source.indexOf("<<'PY_PATCH_SSD_BATCH'");
   const install = source.indexOf('python -m pip install');
   const verify = source.indexOf("<<'PY_VERIFY_SNAPSHOTS'");
+  const ssdVerify = source.indexOf("<<'PY_VERIFY_SSD_BATCH'");
   const serve = source.indexOf('exec tensorfold serve');
-  assert.ok(checkout < patch && patch < install && install < verify && verify < serve);
+  assert.ok(checkout < patch && patch < ssdPatch && ssdPatch < install && install < verify && verify < ssdVerify && ssdVerify < serve);
   assert.match(source, /TENSORFOLD_PROMPT_SNAPSHOTS: "\$\{TENSORFOLD_PROMPT_SNAPSHOTS:-32\}"/);
+  assert.match(source, /TENSORFOLD_SSD_BATCH_GATHER: "\$\{TENSORFOLD_SSD_BATCH_GATHER:-1\}"/);
+});
+
+test('Flash Next SSD patch rejects invalid switches and source drift without writing', { skip }, (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-ssd-batch-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const filename = path.join(temp, 'forward.py');
+  const drift = '# Unexpected upstream source must never be patched\n';
+  const script = embeddedPython('PY_PATCH_SSD_BATCH');
+  for (const enabled of ['', '2', 'true', ' 1', '0', '1']) {
+    fs.writeFileSync(filename, drift);
+    const result = runPython(script, [filename], '32', { TENSORFOLD_SSD_BATCH_GATHER: enabled });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, enabled === '0' || enabled === '1' ? /SHA-256 no longer matches/ : /must be exactly 0 or 1/);
+    assert.equal(fs.readFileSync(filename, 'utf8'), drift);
+  }
+});
+
+test('Flash Next SSD verification rejects an installed file different from the tested source', { skip }, (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-installed-ssd-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const installedRoot = path.join(temp, 'site-packages');
+  const packageRoot = path.join(installedRoot, 'tensorfold');
+  const cuda = path.join(packageRoot, 'families/qwen4_exp/cuda');
+  fs.mkdirSync(cuda, { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, '__init__.py'), '');
+  fs.writeFileSync(path.join(cuda, 'forward.py'), '# stale installed package\n');
+  for (const enabled of ['0', '1']) {
+    const result = runPython(embeddedPython('PY_VERIFY_SSD_BATCH'), [path.join(temp, 'checkout')], '32', {
+      PYTHONPATH: installedRoot, TENSORFOLD_SSD_BATCH_GATHER: enabled,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /installed SSD batch verification failed/);
+  }
 });
 
 test('Flash Next snapshot patch accepts bounded values and rejects source drift without writing', { skip }, (t) => {
@@ -62,7 +98,7 @@ test('Flash Next snapshot patch accepts bounded values and rejects source drift 
     const updated = fs.readFileSync(filename, 'utf8');
     assert.ok(updated.includes(expected.replace('KEEP = 8 ', `KEEP = ${value} `)));
     assert.ok(updated.includes('KEEP_SERIAL = 4'));
-    assert.match(updated, /indexed_stream_geometry\(text, streams, each, KEEP,/);
+    assert.match(updated, /indexed_stream_geometry\(text, streams \+ int\(graphs and mtp\), each, KEEP,/);
     assert.match(updated, /keep=KEEP/);
   }
   for (const value of ['', '0', '-1', '33', '16.0', ' 16', 'abc', '9'.repeat(5000)]) {
@@ -73,7 +109,7 @@ test('Flash Next snapshot patch accepts bounded values and rejects source drift 
     assert.equal(fs.readFileSync(filename, 'utf8'), fixture);
   }
   for (const drift of [fixture.replace('KEEP = 8 ', 'KEEP = 9 '), `${fixture}\n${expected}\n`,
-    `${fixture}\nKEEP = 9\n`, fixture.replace('streams, each, KEEP,', 'streams, each, 8,'),
+    `${fixture}\nKEEP = 9\n`, fixture.replace('each, KEEP,', 'each, 8,'),
     fixture.replace('keep=KEEP', 'keep=8')]) {
     fs.writeFileSync(filename, drift);
     const result = runPython(script, [filename], '16');
@@ -158,6 +194,7 @@ test('Compose resolves snapshot overrides and retains escaped runtime variables 
     assert.equal(result.status, 0, result.stderr);
     const service = JSON.parse(result.stdout).services['qwen-tensorfold'];
     assert.equal(service.environment.TENSORFOLD_PROMPT_SNAPSHOTS, override || '32');
+    assert.equal(service.environment.TENSORFOLD_SSD_BATCH_GATHER, process.env.TENSORFOLD_SSD_BATCH_GATHER || '1');
     assert.equal(service.environment.MODEL_REVISION, '2b170fa6309d5d1ee380b35636075fac7945f286');
     assert.equal(service.environment.MODEL_ID, 'TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP');
     const command = service.command.at(-1).replaceAll('$$', '$');
@@ -166,5 +203,12 @@ test('Compose resolves snapshot overrides and retains escaped runtime variables 
     assert.match(command, /--name "\$\{MODEL_ID\}"/);
     const syntax = spawnSync('bash', ['-n'], { input: command, encoding: 'utf8' });
     assert.equal(syntax.status, 0, syntax.stderr);
+  }
+  for (const enabled of ['0', '1']) {
+    const result = spawnSync('docker', ['compose', '-f', profile, 'config', '--format', 'json'], {
+      encoding: 'utf8', env: { ...process.env, TENSORFOLD_SSD_BATCH_GATHER: enabled },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).services['qwen-tensorfold'].environment.TENSORFOLD_SSD_BATCH_GATHER, enabled);
   }
 });
