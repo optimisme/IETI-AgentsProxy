@@ -1,0 +1,70 @@
+# From docker/ (or ~/docker on Fedora):
+#   docker compose -f models/qwen38-flash-next-strata-ista-daslab-q2_0-16gb.yml up -d --build
+# Model: ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF, Q2_0, Strata, 75k context.
+# Local SSH forwarding: http://127.0.0.1:8002 -> Fedora 127.0.0.1:8000.
+# The sibling .strata-q2_0.env contains API_KEY and must stay private.
+# API_KEY=_5qgz2-CxeD-tKOhDdrO6K3JUKOrfJyrdKoA5wRv34Y
+# Model settings persist in /data/config; changing context/key/KV requires
+# a single setup pass with REINSTALL=1 before returning it to 0.
+# For OpenCode, persist "fit_max_tokens": true in /data/config/strata-q2_0.json
+# and restart. This clips the output budget to the space left by the prompt.
+# At 64k context and above, use int8 KV streaming with --kv-resident 32768.
+name: strata-q2-0
+
+services:
+  strata:
+    image: local/strata:0.1.39-q2-0-sm89
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-strata-ista-daslab-q2_0-16gb.yml"
+    build:
+      context: https://github.com/Niko1221/Strata.git#6f32ec070f23ced9f50e704d854d775da52591ab
+      args:
+        CUDA_ARCHITECTURES: "89"
+        BUILD_VISION: "0"
+    container_name: strata-q2-0
+    restart: unless-stopped
+    stop_grace_period: 60s
+    env_file:
+      - .strata-q2_0.env
+    environment:
+      FAMILY: qwen
+      MODEL: Q2_0
+      CONTEXT: "75000"
+      VISION: "no"
+      KV: int8
+      GPU: "0"
+      LOW_RAM: "off"
+      HOST: 0.0.0.0
+      PORT: "8000"
+      REINSTALL: "0"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - strata-data:/data
+    shm_size: 1gb
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - /opt/strata/.venv/bin/python
+        - -c
+        - "import json, urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)); assert d.get('loaded') is True, d"
+      interval: 30s
+      timeout: 10s
+      start_period: 2h
+      retries: 3
+
+volumes:
+  strata-data:
+    name: strata-q2-0-data
