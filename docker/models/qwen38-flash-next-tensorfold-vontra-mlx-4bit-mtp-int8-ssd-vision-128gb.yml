@@ -15,11 +15,26 @@
 #    row order, model math, CUDA events and the EXL3 path are preserved. No native
 #    code or general scheduler rewrite is included. Set TENSORFOLD_SSD_BATCH_GATHER=0
 #    and recreate the container to disable only this patch; the default is 1.
+#    This selects the source patch at startup, not a live API/server setting.
 #    Exact before/after SHA-256 guards bind it to the tested v0.6.5 source.
-#    Three paired 16-request trials, 512 output tokens each, measured 190.0→212.4
-#    aggregate decode tok/s (+11.7%), prefill 79.6→83.0 and mixed 111.0→117.5.
-#    Separate Nsight traces measured decode GPU idle 32.7%→24.4% and 64.2→45.0
-#    ms/round. All 144 paired outputs matched; 128 additional requests passed.
+#    October 5 follow-up: two matched 16-request pairs per workload in ABBA order,
+#    512 generated tokens/request, ~120-token decode and ~7400-token long prompts.
+#    Plain serving without Nsight or custom timing wrappers measured pooled
+#    decode 183.5→210.0 tok/s (+14.5%), prefill 78.9→83.5 (+5.8%) and mixed
+#    108.8→115.7 (+6.3%). Both run orders improved; no extra patch was introduced.
+#    All 96 output pairs matched tokens, full text/reasoning and MTP work counters.
+#    82 staging tests and 8 real-reader tests passed, including 3200 concurrent
+#    and 200 combined synthetic gathers; final text/vision smoke outputs matched.
+#    Only forward.py differed across 396 installed Python files; serve args matched.
+#    Prefill TTFT p50 improved only 61.20→60.14 s; batching mainly helps decode.
+#    Two pairs do not establish precise production tail latency or significance.
+#    OS page cache stayed intact. Tiny synthetic reads and CPU event doubles
+#    validate contracts, not cold-storage speed or freedom from actual CUDA races.
+#    October 4: three paired trials measured decode 190.0→212.4 tok/s (+11.7%),
+#    prefill 79.6→83.0 and mixed 111.0→117.5 with common timing wrappers.
+#    Separate representative Nsight traces measured decode idle 32.7%→24.4% and
+#    64.2→45.0 ms/round. No new GPU timeline was captured in the October 5 follow-up.
+#    All 144 earlier paired outputs matched; 128 additional requests passed.
 #    These are workload-specific results, not a throughput or TTFT guarantee.
 # Neither patch requires CUDA compilation itself; normal startup can still build
 # upstream extensions and warm kernels. The container-only checkout is recreated.

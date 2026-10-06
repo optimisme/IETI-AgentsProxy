@@ -19,7 +19,7 @@ Qwen3.8 Flash Next MLX4bit (TensorFold, MTP=6, image input)
 Qwen3.8 27B UD-Q2_K_XL (llama.cpp, native MTP, 64k context)
 - `models/qwen38-27b-llamacpp-unsloth-q2_k_xl-16gb.yml`
 
-## 16GB monolloc (64GB RAM)
+## 12GB monolloc (50GB RAM)
 
 Qwen3.8 Flash Next Q2_0 (Strata, 75k context, text input)
 - `models/qwen38-flash-next-strata-ista-daslab-q2_0-16gb.yml`
