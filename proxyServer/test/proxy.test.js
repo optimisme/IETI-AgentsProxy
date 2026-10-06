@@ -760,6 +760,9 @@ test('cookie-authenticated forms reject cross-site requests', async () => {
   await request(app).post('/login').type('form').set('Sec-Fetch-Site', 'cross-site').send({ login: 'admin', password: 'secret' }).expect(403);
   assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, student.name);
   await agent.post('/portal/settings/name').type('form').set('Sec-Fetch-Site', 'same-origin').send({ name: 'Renamed here' }).expect(302);
+  // Browsers send "Origin: null" on same-origin form posts under some referrer policies.
+  await request(app).post('/login').type('form').set('Sec-Fetch-Site', 'same-origin').set('Origin', 'null')
+    .send({ login: 'admin', password: 'secret' }).expect(302).expect('Location', '/admin');
   assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, 'Renamed here');
   await agent.post('/portal/settings/name').type('form').send({ name: 'x'.repeat(256) }).expect(302).expect('Location', '/portal/settings?name_error=1');
 });
@@ -772,6 +775,7 @@ test('large JSON bodies are only accepted on authenticated completion routes', a
 
 test('pages send a restrictive content security policy', async () => {
   const res = await request(app).get('/').expect(200);
+  assert.equal(res.headers['referrer-policy'], 'same-origin');
   const policy = res.headers['content-security-policy'];
   for (const directive of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "form-action 'self'", "connect-src 'self'"]) {
     assert.ok(policy.includes(directive), directive);

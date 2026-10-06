@@ -41,6 +41,9 @@ function createApp({ googleOAuthService, googleIdentityResolver } = {}) {
   // directives still block loading code from other origins, sending data to them, framing
   // and plugins.
   app.use(helmet({
+    // Same-origin referrers keep form posts' Origin header meaningful without leaking
+    // invite URLs to other sites.
+    referrerPolicy: { policy: 'same-origin' },
     contentSecurityPolicy: {
       useDefaults: false,
       directives: {
