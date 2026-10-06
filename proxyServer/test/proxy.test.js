@@ -773,6 +773,22 @@ test('large JSON bodies are only accepted on authenticated completion routes', a
   await request(app).post('/v1/chat/completions').send(large).expect(401);
 });
 
+test('admin navigation collapses into a script-free menu and marks the current page', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const pending = await agent.get('/admin/users?status=pending').expect(200);
+  assert.match(pending.text, /<input type="checkbox" id="site-nav-toggle" class="site-nav-toggle"/);
+  assert.match(pending.text, /<label for="site-nav-toggle" class="site-nav-button"/);
+  for (const href of ['/admin', '/admin/users', '/admin/oauth-conflicts', '/admin/groups', '/admin/providers', '/admin/server']) {
+    assert.match(pending.text, new RegExp(`<a href="${href}"`));
+  }
+  assert.match(pending.text, /<a href="\/admin\/users\?status=pending" aria-current="page">Pending/);
+  assert.equal((pending.text.match(/<a [^>]*aria-current="page"/g) || []).length, 1);
+  const userList = await agent.get('/admin/users').expect(200);
+  assert.match(userList.text, /<a href="\/admin\/users" aria-current="page">Users<\/a>/);
+  assert.match(userList.text, /@media \(max-width: 760px\)[\s\S]*\.site-nav-toggle:checked ~ \.site-nav \{ display: flex; \}/);
+});
+
 test('pages send a restrictive content security policy', async () => {
   const res = await request(app).get('/').expect(200);
   assert.equal(res.headers['referrer-policy'], 'same-origin');

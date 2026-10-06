@@ -57,6 +57,7 @@ const {
   getRequestBaseUrl: requestBaseUrl,
   paginationControls,
   quotaLimitCards,
+  siteHeader,
   trustedHtml
 } = require('../utils/html');
 const {
@@ -78,19 +79,18 @@ function render(req, res, view, { title, content = '', flash = '' } = {}) {
   const pendingConflicts = isAdminSession(req.session)
     ? getDb().prepare("SELECT COUNT(*) AS count FROM oauth_identity_conflicts WHERE status = 'pending' AND expires_at > ?").get(new Date().toISOString()).count
     : 0;
-  const nav = isAdminSession(req.session) ? `
-    <header>
-      <strong>IETI Agents</strong>
-      <a href="/admin">Dashboard</a>
-      <a href="/admin/users">Users</a>
-      <a href="/admin/users?status=pending">Pending${pendingUsers ? ` (${pendingUsers})` : ''}</a>
-      <a href="/admin/oauth-conflicts">OAuth reviews${pendingConflicts ? ` (${pendingConflicts})` : ''}</a>
-      <a href="/admin/groups">Groups</a>
-      <a href="/admin/providers">Providers</a>
-      <a href="/admin/server">Server</a>
-      <form method="post" action="/admin/logout" style="margin-left:auto"><button>Log out</button></form>
-    </header>
-  ` : '';
+  const nav = isAdminSession(req.session) ? siteHeader(req, {
+    links: [
+      { href: '/admin', label: 'Dashboard', exactOnly: true },
+      { href: '/admin/users', label: 'Users' },
+      { href: '/admin/users?status=pending', label: `Pending${pendingUsers ? ` (${pendingUsers})` : ''}` },
+      { href: '/admin/oauth-conflicts', label: `OAuth reviews${pendingConflicts ? ` (${pendingConflicts})` : ''}` },
+      { href: '/admin/groups', label: 'Groups' },
+      { href: '/admin/providers', label: 'Providers' },
+      { href: '/admin/server', label: 'Server' }
+    ],
+    logoutAction: '/admin/logout'
+  }) : '';
 
   const body = renderTemplate(view, { title: title || 'Admin', content: trustedHtml(content), flash: trustedHtml(flash) });
   res.send(renderTemplate('layout', {

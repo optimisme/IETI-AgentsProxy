@@ -44,6 +44,7 @@ const {
   flash,
   getRequestBaseUrl: requestBaseUrl,
   quotaLimitCards,
+  siteHeader,
   trustedHtml
 } = require('../utils/html');
 
@@ -277,25 +278,17 @@ function renderActiveModels(req, models) {
 }
 
 function render(req, res, { title = 'User Portal', content = '', message = '' }) {
-  const logout = isAdminSession(req.session)
-    ? '<form method="post" action="/admin/logout" style="margin-left:auto"><button>Log out</button></form>'
-    : req.session?.studentUserId
-      ? '<form method="post" action="/portal/logout" style="margin-left:auto"><button>Log out</button></form>'
-      : '';
   const isAdmin = isAdminSession(req.session);
   const isStudent = !!req.session?.studentUserId;
   const isApprovedStudent = isStudent && req.portalUser?.registration_status === 'approved';
-  const isLoggedIn = isAdmin || isStudent;
-  const nav = `
-    <header>
-      <strong>IETI Agents</strong>
-      ${isLoggedIn ? '<a href="/">Dashboard</a>' : ''}
-      ${isApprovedStudent ? '<a href="/portal/chat">Chat</a>' : ''}
-      ${isApprovedStudent ? '<a href="/portal/settings">Settings</a>' : ''}
-      ${isAdmin ? '<a href="/admin">Admin</a>' : ''}
-      ${logout}
-    </header>
-  `;
+  const nav = siteHeader(req, {
+    links: [
+      ...(isAdmin || isStudent ? [{ href: '/', label: 'Dashboard', paths: ['/portal'], exactOnly: true }] : []),
+      ...(isApprovedStudent ? [{ href: '/portal/chat', label: 'Chat' }, { href: '/portal/settings', label: 'Settings' }] : []),
+      ...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])
+    ],
+    logoutAction: isAdmin ? '/admin/logout' : isStudent ? '/portal/logout' : ''
+  });
   res.send(renderTemplate('layout', {
     title,
     nav: trustedHtml(nav),

@@ -7,9 +7,15 @@
   <style>
     :root { color-scheme: light; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
     body { margin: 0; background: #f5f7fb; color: #172033; }
-    header { background: #172033; color: white; padding: 14px 24px; display: flex; gap: 18px; align-items: center; }
-    header strong { margin-right: 36px; }
-    header a, header button { color: white; background: transparent; border: 0; font: inherit; cursor: pointer; text-decoration: none; }
+    .site-header { background: #172033; color: white; padding: 14px 24px; display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; }
+    .site-brand { margin-right: 18px; }
+    .site-nav { display: flex; flex: 1; flex-wrap: wrap; gap: 8px 18px; align-items: center; min-width: 0; }
+    .site-nav a, .site-nav button { color: white; background: transparent; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: none; }
+    .site-nav a:hover, .site-nav button:hover { text-decoration: underline; text-underline-offset: 5px; }
+    .site-nav a[aria-current="page"] { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
+    .site-nav-logout { margin-left: auto; }
+    .site-nav-toggle { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .site-nav-button { display: none; }
     main { max-width: 1180px; margin: 0 auto; padding: 24px; }
     table { width: 100%; border-collapse: collapse; background: white; border: 1px solid #d9deea; }
     th, td { padding: 10px 12px; border-bottom: 1px solid #e5e9f2; text-align: left; vertical-align: top; }
@@ -120,6 +126,8 @@
     .alignment-differences > div { width: min(420px, 70vw); margin-top: 8px; padding: 10px 12px; border: 1px solid #e3c96a; border-radius: 6px; background: #fff8df; font-size: 13px; }
     .alignment-differences ul { margin: 7px 0 0; padding-left: 20px; }
     .form-actions { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-top: 16px; }
+    .form-actions > .muted { flex: 1 1 220px; min-width: 0; }
+    .section-stack > *, .server-sections > *, .provider-sections > * { min-width: 0; }
     .search-panel { margin-bottom: 18px; }
     .user-filter-actions { margin-top: 16px; }
     .user-filter-copy { margin-left: auto; }
@@ -154,6 +162,25 @@
     @media (prefers-reduced-motion: reduce) {
       dialog.modal[open], dialog.modal[open]::backdrop, dialog.modal.is-closing, dialog.modal.is-closing::backdrop { animation: none; }
       .active-model summary::before { transition: none; }
+    }
+    @media (max-width: 760px) {
+      .site-header { padding: 12px 16px; }
+      .site-brand { margin-right: auto; }
+      .site-nav-button { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border: 1px solid rgb(255 255 255 / 45%); border-radius: 6px; font-size: 15px; cursor: pointer; user-select: none; }
+      .site-nav-toggle:focus-visible + .site-nav-button { outline: 2px solid white; outline-offset: 2px; }
+      .site-nav-toggle:checked + .site-nav-button { background: rgb(255 255 255 / 14%); }
+      .site-nav { display: none; flex: 1 1 100%; flex-direction: column; align-items: stretch; gap: 0; }
+      .site-nav-toggle:checked ~ .site-nav { display: flex; }
+      .site-nav a, .site-nav button { display: block; width: 100%; padding: 12px 2px; border-top: 1px solid rgb(255 255 255 / 14%); text-align: left; }
+      .site-nav-logout { margin-left: 0; }
+      main { padding: 16px; }
+      main table:not(.autoconfigure-table table) { display: block; max-width: 100%; overflow-x: auto; }
+      .form-actions, .pagination { flex-wrap: wrap; }
+      .pagination { justify-content: flex-start; }
+      .user-filter-copy { margin-left: 0; }
+      .user-filter-copy-status { text-align: left; }
+      .metric strong { font-size: 24px; }
+      h1 { font-size: 26px; overflow-wrap: anywhere; }
     }
     @media (max-width: 640px) {
       .active-model summary { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 4px 8px; }
