@@ -132,7 +132,7 @@ test('disabled, incompatible, unauthorized and full previous providers cannot be
   assert.equal((await chat(body).expect(200)).body.model, 'upstream-a');
   db.prepare('UPDATE providers SET enabled=1 WHERE slug=?').run(pool[1]);
   db.prepare('UPDATE provider_models SET supports_image_input=0 WHERE provider_id=(SELECT id FROM providers WHERE slug=?)').run(pool[0]);
-  const image = { role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.test/image.png' } }] };
+  const image = { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] };
   assert.equal((await chat({ ...body, messages: [image] }).expect(200)).body.model, 'upstream-b');
   const affinity = createAffinityStore().request({ userId: 1, model: 'affinity-model', conversationId: 'assigned' });
   affinity.setPool(pool); affinity.complete(pool[1]);

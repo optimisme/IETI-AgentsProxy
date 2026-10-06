@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('node:path');
 const config = require('../config');
 const { getDb } = require('../db');
-const { requireAdmin } = require('../middleware/authAdmin');
+const { isAdminSession, requireAdmin } = require('../middleware/authAdmin');
 const { generateStudentKey } = require('../services/keyService');
 const {
   listUserApiKeys,
@@ -13,6 +13,7 @@ const {
   MAX_USER_API_KEYS
 } = require('../services/userApiKeyService');
 const { createInviteForUser, getActiveInviteForUser } = require('../services/studentAuthService');
+const { setPendingSecret, takePendingSecret } = require('../utils/pendingSecrets');
 const {
   auditAuthEvent,
   listIdentityConflicts,
@@ -71,13 +72,13 @@ const router = express.Router();
 const USER_ROLES = ['student', 'teacher'];
 
 function render(req, res, view, { title, content = '', flash = '' } = {}) {
-  const pendingUsers = req.session?.adminAuthenticated
+  const pendingUsers = isAdminSession(req.session)
     ? getDb().prepare("SELECT COUNT(*) AS count FROM users WHERE registration_status = 'pending'").get().count
     : 0;
-  const pendingConflicts = req.session?.adminAuthenticated
+  const pendingConflicts = isAdminSession(req.session)
     ? getDb().prepare("SELECT COUNT(*) AS count FROM oauth_identity_conflicts WHERE status = 'pending' AND expires_at > ?").get(new Date().toISOString()).count
     : 0;
-  const nav = req.session?.adminAuthenticated ? `
+  const nav = isAdminSession(req.session) ? `
     <header>
       <strong>IETI Agents</strong>
       <a href="/admin">Dashboard</a>
@@ -1062,10 +1063,10 @@ router.post('/admin/users', requireAdmin, (req, res) => {
     );
     const userId = result.lastInsertRowid;
     setUserGroups(userId, [form.groupId]);
-    createInviteForUser(userId);
-    return userId;
+    return { userId, invite: createInviteForUser(userId) };
   });
-  const userId = createUser();
+  const { userId, invite } = createUser();
+  setPendingSecret(req.sessionID, `invite:${userId}`, invite);
   res.redirect(`/admin/users/${userId}?created=1&invite_created=1`);
 });
 
@@ -1179,7 +1180,9 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
     ? USER_DELETION_MESSAGE
     : '';
   const activeInvite = getActiveInviteForUser(user.id);
-  const activeInviteUrl = activeInvite ? `${getRequestBaseUrl(req)}/invite/${encodeURIComponent(activeInvite.token)}` : '';
+  // Invitation links are only stored as digests, so a link is shown once, right after it is created.
+  const newInvite = activeInvite ? takePendingSecret(req.sessionID, `invite:${user.id}`) : null;
+  const activeInviteUrl = newInvite ? `${getRequestBaseUrl(req)}/invite/${encodeURIComponent(newInvite.token)}` : '';
   const userApiKeys = listUserApiKeys(user.id);
   const canAddApiKey = user.registration_status === 'approved' && userApiKeys.length < MAX_USER_API_KEYS;
   const apiKeyLimitMessage = `Only ${MAX_USER_API_KEYS} API keys per user are allowed.`;
@@ -1196,7 +1199,10 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
       <section class="panel">
         <h2>Invitation key</h2>
         <p><strong>${escapeHtml(user.name)}</strong><br><span class="muted">${escapeHtml(user.email)}</span></p>
-        ${activeInvite ? `
+        ${activeInvite && !newInvite ? `
+          <p class="muted">An invitation is active until ${escapeHtml(activeInvite.expiresAt)}. Its link is only shown when it is generated; generate a new one if it was lost.</p>
+        ` : ''}
+        ${newInvite ? `
           <div class="command-row">
             <p id="invitation-url-${user.id}" class="key" style="flex:1;margin:0">${escapeHtml(activeInviteUrl)}</p>
             <button type="button" class="copy-command secondary" data-copy-invitation-url data-copy-target="invitation-url-${user.id}" title="Copy invitation URL" aria-label="Copy invitation URL">
@@ -1235,7 +1241,8 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
               });
             })();
           </script>
-        ` : '<p class="muted">No active invitation key.</p>'}
+        ` : ''}
+        ${activeInvite ? '' : '<p class="muted">No active invitation key.</p>'}
         ${user.registration_status === 'approved' ? `<div class="actions">
           <form method="post" action="/admin/users/${user.id}/invite"><button>${activeInvite ? 'Regenerate invitation key' : 'Generate invitation key'}</button></form>
         </div>` : '<p class="muted">Invitations are unavailable until this registration is approved.</p>'}
@@ -1357,7 +1364,7 @@ router.post('/admin/users/:id/invite', requireAdmin, (req, res) => {
   const user = getDb().prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).send('User not found');
   if (user.registration_status !== 'approved') return res.status(409).send('Approve this user before creating an invitation.');
-  createInviteForUser(user.id);
+  setPendingSecret(req.sessionID, `invite:${user.id}`, createInviteForUser(user.id));
   res.redirect(`/admin/users/${user.id}?invite_created=1`);
 });
 
@@ -1473,6 +1480,7 @@ router.get('/admin/server', requireAdmin, (req, res) => {
         <label>Max total image bytes</label><input name="max_total_image_bytes" type="number" value="${escapeHtml(settings.max_total_image_bytes)}">
         <label><input name="allow_video_input" type="checkbox" value="true" style="width:auto" ${settings.allow_video_input === 'true' ? 'checked' : ''}> Allow video input</label>
         <label>Max requests per minute</label><input name="max_requests_per_minute" type="number" value="${escapeHtml(settings.max_requests_per_minute)}">
+        <label>Max concurrent requests per user</label><input name="max_concurrent_requests_per_user" type="number" min="1" value="${escapeHtml(settings.max_concurrent_requests_per_user || config.maxConcurrentRequestsPerUser)}">
         <label><input name="maintenance_mode" type="checkbox" value="true" style="width:auto" ${settings.maintenance_mode === 'true' ? 'checked' : ''}> Maintenance mode</label>
         <p><button>Save server settings</button></p>
       </form>
@@ -1502,7 +1510,7 @@ router.get('/admin/server', requireAdmin, (req, res) => {
 
 router.post('/admin/server', requireAdmin, (req, res) => {
   setSetting('public_base_url', req.body.public_base_url || '');
-  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute', 'max_images_per_request', 'max_image_bytes', 'max_total_image_bytes']) {
+  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute', 'max_concurrent_requests_per_user', 'max_images_per_request', 'max_image_bytes', 'max_total_image_bytes']) {
     setSetting(key, req.body[key]);
   }
   setSetting('allow_video_input', req.body.allow_video_input ? 'true' : 'false');

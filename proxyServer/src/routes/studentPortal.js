@@ -14,7 +14,7 @@ const {
   revokeUserApiKey,
   MAX_USER_API_KEYS
 } = require('../services/userApiKeyService');
-const { verifyAdminCredentials } = require('../middleware/authAdmin');
+const { isAdminSession, startAdminSession, verifyAdminCredentials } = require('../middleware/authAdmin');
 const { getUsageTotals, recentUsage, dailyUsage } = require('../services/usageService');
 const { getSetting } = require('../services/settingsService');
 const { getEnabledModelEntries } = require('../services/providerService');
@@ -24,7 +24,7 @@ const {
   setPasswordFromInvite,
   findUserForLogin,
   verifyPassword,
-  hashPassword,
+  verifyDummyPassword,
   isLocked,
   recordFailedLogin,
   clearFailedLogins
@@ -33,7 +33,9 @@ const config = require('../config');
 const { renderTemplate } = require('../utils/templates');
 const { REASONING_EFFORTS } = require('../utils/reasoning');
 const { apiError } = require('../utils/errors');
-const { studentRateLimit } = require('../middleware/rateLimit');
+const { clearLoginFailures, isLoginAllowed, recordLoginFailure, studentRateLimit } = require('../middleware/rateLimit');
+const { clearPendingSecret, getPendingSecret, setPendingSecret } = require('../utils/pendingSecrets');
+const { largeJsonBody } = require('../middleware/bodyParsers');
 const { handleChatCompletion } = require('../services/chatCompletionService');
 const { chatLimits, preparePortalChatPayload } = require('../utils/portalChat');
 const { dailyUsageCard } = require('../utils/usageCards');
@@ -47,6 +49,8 @@ const {
 
 const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
+const NAME_MAX_LENGTH = 255;
+const PENDING_API_KEY = 'student-api-key';
 const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..', 'assets');
 const chatAssets = new Map([
   ['portal-chat.js', 'portal-chat.js'],
@@ -92,11 +96,6 @@ function normalizeWebsiteBaseUrl(value) {
   }
 }
 
-function getScriptDefaultBaseUrl(req) {
-  const configured = normalizeAgentBaseUrl(req.query?.default_base_url);
-  return configured || getNormalizedRequestBaseUrl(req);
-}
-
 function getNormalizedRequestBaseUrl(req) {
   return normalizeAgentBaseUrl(getRequestBaseUrl(req)) ||
     normalizeAgentBaseUrl(`${req.protocol}://${req.get('host')}`);
@@ -116,9 +115,7 @@ function powershellQuote(value) {
 }
 
 function getClientScriptUrl(req, filename) {
-  const defaultBaseUrl = getScriptDefaultBaseUrl(req);
-  const query = defaultBaseUrl ? `?default_base_url=${encodeURIComponent(defaultBaseUrl)}` : '';
-  return `${getWebsiteBaseUrl(req)}/downloads/${filename}${query}`;
+  return `${getWebsiteBaseUrl(req)}/downloads/${filename}`;
 }
 
 function getClientScriptCommand(req, filename) {
@@ -280,12 +277,12 @@ function renderActiveModels(req, models) {
 }
 
 function render(req, res, { title = 'User Portal', content = '', message = '' }) {
-  const logout = req.session?.adminAuthenticated
+  const logout = isAdminSession(req.session)
     ? '<form method="post" action="/admin/logout" style="margin-left:auto"><button>Log out</button></form>'
     : req.session?.studentUserId
       ? '<form method="post" action="/portal/logout" style="margin-left:auto"><button>Log out</button></form>'
       : '';
-  const isAdmin = !!req.session?.adminAuthenticated;
+  const isAdmin = isAdminSession(req.session);
   const isStudent = !!req.session?.studentUserId;
   const isApprovedStudent = isStudent && req.portalUser?.registration_status === 'approved';
   const isLoggedIn = isAdmin || isStudent;
@@ -358,10 +355,10 @@ function requireApprovedStudentSession(req, res, next) {
 }
 
 router.get('/', (req, res) => {
-  if (req.session?.adminAuthenticated && req.query.admin) return res.redirect('/admin');
+  if (isAdminSession(req.session) && req.query.admin) return res.redirect('/admin');
   if (req.session?.studentUserId) return res.redirect('/portal');
   const message = req.query.error === 'invalid'
-    ? 'Invalid email or password.'
+    ? 'Invalid email or password. If you have not set a password yet, use your invite link.'
     : req.query.error === 'disabled'
       ? 'Your user is disabled. Contact the course administrator.'
       : req.query.error === 'setup'
@@ -404,34 +401,43 @@ router.get('/', (req, res) => {
   });
 });
 
-function handleLogin(req, res) {
-  const login = String(req.body.login || req.body.email || req.body.username || '').trim();
-  const password = String(req.body.password || '');
+async function handleLogin(req, res, next) {
+  try {
+    const login = String(req.body.login || req.body.email || req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    if (!isLoginAllowed(req.ip, login)) return res.redirect('/?error=locked');
 
-  if (verifyAdminCredentials(login, password)) {
-    return req.session.regenerate((error) => {
+    if (await verifyAdminCredentials(login, password)) {
+      clearLoginFailures(req.ip, login);
+      return req.session.regenerate((error) => {
+        if (error) return res.status(500).send('Could not create session.');
+        startAdminSession(req.session);
+        res.redirect('/admin');
+      });
+    }
+
+    // Unknown, disabled and password-less accounts all get the same answer, after the
+    // same bcrypt work, so the login form does not reveal which emails are registered.
+    const user = findUserForLogin(login);
+    const usable = Boolean(user?.enabled && user.registration_status !== 'rejected' && user.password_hash);
+    if (usable && isLocked(user)) return res.redirect('/?error=locked');
+    const valid = usable ? await verifyPassword(password, user.password_hash) : await verifyDummyPassword(password);
+    if (!valid) {
+      recordLoginFailure(req.ip, login);
+      if (usable) recordFailedLogin(user.id);
+      return res.redirect('/?error=invalid');
+    }
+    clearLoginFailures(req.ip, login);
+    clearFailedLogins(user.id);
+
+    req.session.regenerate((error) => {
       if (error) return res.status(500).send('Could not create session.');
-      req.session.adminAuthenticated = true;
-      res.redirect('/admin');
+      setStudentSession(req, user.id, user.password_changed_at);
+      res.redirect('/portal');
     });
+  } catch (error) {
+    next(error);
   }
-
-  const email = login;
-  const user = findUserForLogin(email);
-  if (!user || !user.enabled || user.registration_status === 'rejected') return res.redirect('/?error=invalid');
-  if (!user.password_hash) return res.redirect('/?error=setup');
-  if (isLocked(user)) return res.redirect('/?error=locked');
-  if (!verifyPassword(password, user.password_hash)) {
-    recordFailedLogin(user.id);
-    return res.redirect('/?error=invalid');
-  }
-  clearFailedLogins(user.id);
-
-  req.session.regenerate((error) => {
-    if (error) return res.status(500).send('Could not create session.');
-    setStudentSession(req, user.id, user.password_changed_at);
-    res.redirect('/portal');
-  });
 }
 
 router.post('/login', handleLogin);
@@ -468,7 +474,7 @@ router.get('/invite/:token', (req, res) => {
   });
 });
 
-router.post('/invite/:token', (req, res) => {
+router.post('/invite/:token', async (req, res, next) => {
   const user = findUserByInviteToken(req.params.token);
   const password = String(req.body.password || '');
   const confirmPassword = String(req.body.confirm_password || '');
@@ -498,7 +504,12 @@ router.post('/invite/:token', (req, res) => {
     });
   }
 
-  const passwordChangedAt = setPasswordFromInvite(user.id, password);
+  let passwordChangedAt;
+  try {
+    passwordChangedAt = await setPasswordFromInvite(user.id, password);
+  } catch (error) {
+    return next(error);
+  }
   req.session.regenerate((error) => {
     if (error) return res.status(500).send('Password saved, but the session could not be created. Log in with your new password.');
     setStudentSession(req, user.id, passwordChangedAt);
@@ -575,7 +586,7 @@ router.get('/portal/chat/assets/:filename', requireApprovedStudentSession, (req,
   res.sendFile(path.join(CLIENT_SCRIPT_DIRECTORY, asset));
 });
 
-router.post('/portal/chat/completions', requireApprovedStudentSession, (req, res, next) => {
+router.post('/portal/chat/completions', requireApprovedStudentSession, largeJsonBody, (req, res, next) => {
   try {
     const expected = req.session.portalChatCsrfToken;
     const supplied = req.get('X-CSRF-Token') || '';
@@ -718,19 +729,25 @@ router.get('/portal', requireStudentSession, (req, res) => {
 router.post('/portal/settings/name', requireApprovedStudentSession, (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) return res.redirect('/portal/settings');
+  if (name.length > NAME_MAX_LENGTH) return res.redirect('/portal/settings?name_error=1');
   getDb().prepare('UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(name, req.portalUser.id);
   res.redirect('/portal/settings?name_saved=1');
 });
 
-router.post('/portal/settings/password', requireApprovedStudentSession, (req, res) => {
+router.post('/portal/settings/password', requireApprovedStudentSession, async (req, res, next) => {
   const user = req.portalUser;
   const currentPassword = String(req.body.current_password || '');
   const newPassword = String(req.body.new_password || '');
   const confirmPassword = String(req.body.confirm_password || '');
-  if (!user.password_hash || !verifyPassword(currentPassword, user.password_hash) || newPassword.length < 10 || newPassword !== confirmPassword) {
-    return res.redirect('/portal/settings?password_error=1');
+  let passwordChangedAt;
+  try {
+    if (newPassword.length < 10 || newPassword !== confirmPassword || !await verifyPassword(currentPassword, user.password_hash)) {
+      return res.redirect('/portal/settings?password_error=1');
+    }
+    passwordChangedAt = await setPasswordFromInvite(user.id, newPassword);
+  } catch (error) {
+    return next(error);
   }
-  const passwordChangedAt = setPasswordFromInvite(user.id, newPassword);
   req.session.regenerate((error) => {
     if (error) return res.status(500).send('Password saved, but the session could not be renewed. Log in with your new password.');
     setStudentSession(req, user.id, passwordChangedAt);
@@ -742,7 +759,7 @@ router.get('/portal/settings', requireApprovedStudentSession, (req, res) => {
   const user = req.portalUser;
   const apiKeys = listUserApiKeys(user.id);
   const canAddApiKey = apiKeys.length < MAX_USER_API_KEYS;
-  const pendingApiKey = canAddApiKey ? (req.session.pendingStudentApiKey?.key || '') : '';
+  const pendingApiKey = canAddApiKey ? (getPendingSecret(req.sessionID, PENDING_API_KEY) || '') : '';
   const keyNameError = req.query.key_error === 'duplicate'
     ? 'That key name is already in use. Choose another name.'
     : req.query.key_error === 'invalid'
@@ -767,6 +784,7 @@ router.get('/portal/settings', requireApprovedStudentSession, (req, res) => {
       ${req.query.revoked ? '<div class="notice">API key deleted.</div>' : ''}
       ${req.query.key_error === 'limit' ? `<div class="notice" style="background:#fee;color:#c33">${apiKeyLimitMessage} Delete an existing key before adding another.</div>` : ''}
       ${req.query.name_saved ? '<div class="notice">Name updated.</div>' : ''}
+      ${req.query.name_error ? `<div class="notice" style="background:#fee;color:#c33">The name must be at most ${NAME_MAX_LENGTH} characters.</div>` : ''}
       ${req.query.password_error ? '<div class="notice" style="background:#fee;color:#c33">Current password is incorrect, the new password is shorter than 10 characters, or the passwords do not match.</div>' : ''}
       ${req.query.password_saved ? '<div class="notice">Password updated.</div>' : ''}
       <div class="panel" style="margin-top:16px">
@@ -872,7 +890,7 @@ router.get('/portal/settings', requireApprovedStudentSession, (req, res) => {
         <h2>Account</h2>
         <form method="post" action="/portal/settings/name" style="margin-bottom:16px">
           <label>Name</label>
-          <input name="name" value="${escapeHtml(user.name)}" required>
+          <input name="name" value="${escapeHtml(user.name)}" maxlength="${NAME_MAX_LENGTH}" required>
           <button type="submit" style="margin-top:16px">Save name</button>
         </form>
         <form method="post" action="/portal/settings/password" style="border-top:1px solid #ddd;padding-top:16px">
@@ -893,19 +911,18 @@ router.post('/portal/key/regenerate', requireApprovedStudentSession, (req, res) 
   if (listUserApiKeys(req.portalUser.id).length >= MAX_USER_API_KEYS) {
     return res.status(409).send(`Only ${MAX_USER_API_KEYS} API keys per user are allowed. Delete an existing key before adding another.`);
   }
-  const key = generateStudentKey();
-  req.session.pendingStudentApiKey = { key };
+  setPendingSecret(req.sessionID, PENDING_API_KEY, generateStudentKey());
   res.redirect('/portal/settings?new_key=1');
 });
 
 router.post('/portal/key/add', requireApprovedStudentSession, (req, res) => {
-  const pending = req.session.pendingStudentApiKey;
-  if (!pending?.key) return res.redirect('/portal/settings');
+  const pendingKey = getPendingSecret(req.sessionID, PENDING_API_KEY);
+  if (!pendingKey) return res.redirect('/portal/settings');
   const name = normalizeApiKeyName(req.body.key_name);
   if (!name) return res.redirect('/portal/settings?new_key=1&key_error=invalid');
   if (hasUserApiKeyName(req.portalUser.id, name)) return res.redirect('/portal/settings?new_key=1&key_error=duplicate');
   try {
-    createUserApiKey(req.portalUser.id, name, pending.key);
+    createUserApiKey(req.portalUser.id, name, pendingKey);
   } catch (error) {
     if (error.code === 'max_api_keys') {
       return res.status(409).send(`${error.message} Delete an existing key before adding another.`);
@@ -915,12 +932,12 @@ router.post('/portal/key/add', requireApprovedStudentSession, (req, res) => {
     }
     throw error;
   }
-  req.session.pendingStudentApiKey = null;
+  clearPendingSecret(req.sessionID, PENDING_API_KEY);
   res.redirect('/portal/settings?created=1');
 });
 
 router.post('/portal/key/dismiss-modal', requireApprovedStudentSession, (req, res) => {
-  req.session.pendingStudentApiKey = null;
+  clearPendingSecret(req.sessionID, PENDING_API_KEY);
   res.redirect('/portal/settings');
 });
 
@@ -946,7 +963,9 @@ router.get('/portal/opencode.json', requireApprovedStudentSession, (req, res) =>
 
 function sendClientScript(req, res, filename) {
   const source = fs.readFileSync(path.join(CLIENT_SCRIPT_DIRECTORY, filename), 'utf8');
-  const defaultBaseUrl = getScriptDefaultBaseUrl(req);
+  // Always embed this server's own API URL. Accepting it from the query string would let a
+  // crafted link on this domain hand out a script that sends students' keys elsewhere.
+  const defaultBaseUrl = getNormalizedRequestBaseUrl(req);
   const baseUrlReplacement = filename.endsWith('.sh')
     ? defaultBaseUrl.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
     : defaultBaseUrl.replaceAll("'", "''");

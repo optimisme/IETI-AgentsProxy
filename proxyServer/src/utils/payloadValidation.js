@@ -23,6 +23,12 @@ function base64Bytes(value) {
   return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
 }
 
+function requireInlineMedia(url, label) {
+  if (typeof url !== 'string' || !/^data:/i.test(url.trim())) {
+    throw apiError(400, 'remote_media_not_supported', `${label} must be sent inline as base64 data: URLs.`);
+  }
+}
+
 function validateImageUrl(url, limits) {
   if (typeof url !== 'string' || !url.trim()) {
     throw apiError(400, 'invalid_image', 'Image URL must be a non-empty string.');
@@ -36,14 +42,15 @@ function validateImageUrl(url, limits) {
     if (/^data:/i.test(url)) {
       throw apiError(400, 'invalid_image', 'Only PNG, JPEG, and WebP data images are supported.');
     }
-    return { bytes: 0, remote: true };
+    // Remote URLs would be fetched by the inference host, exposing its internal network.
+    throw apiError(400, 'remote_media_not_supported', 'Images must be sent inline as base64 data: URLs.');
   }
 
   const bytes = base64Bytes(dataMatch[2]);
   if (bytes > limits.maxImageBytes) {
     throw apiError(413, 'image_too_large', `Image exceeds ${limits.maxImageBytes} bytes.`);
   }
-  return { bytes, remote: false };
+  return { bytes };
 }
 
 function validateRequestPayload(payload) {
@@ -71,6 +78,11 @@ function validateRequestPayload(payload) {
         if (!limits.allowVideoInput) {
           throw apiError(400, 'video_not_supported', 'Video input is not supported by this provider.');
         }
+        requireInlineMedia(part.video_url?.url || part.video_url || part.video || part.url, 'Videos');
+      }
+
+      if (part.type === 'audio_url') {
+        requireInlineMedia(part.audio_url?.url || part.audio_url || part.url, 'Audio');
       }
 
       if (part.type === 'image_url' || part.type === 'input_image') {

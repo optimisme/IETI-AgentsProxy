@@ -81,9 +81,13 @@ Test suite at `test/` uses a local mock DeepSeek server. Run with `npm test`. Ex
 
 - Proxy is **stateless per request** (no conversation memory) — OpenCode sends full context each time
 - One **group per user** — group defines the upstream provider and quotas
-- **Rate limiting** is in-memory (not persisted), resets on server restart
-- **Token estimation** is character-based (`Math.ceil(text.length / 4)`) — not a real tokenizer
-- **API keys** and **invite tokens** are only shown once at creation; only bcrypt hashes are stored
+- **Rate limiting** is in-memory (not persisted), resets on server restart. Failed logins are also limited in memory per address and per address+login
+- **Quota reservations** for in-flight requests and the per-user concurrency limit (`MAX_CONCURRENT_REQUESTS_PER_USER`) are in-memory and assume a single server process
+- **Token estimation** is character-based (`Math.ceil(text.length / 4)`) — not a real tokenizer. It feeds quota reservations, so a request whose real input exceeds the estimate can overshoot the quota by that difference
+- **Media** must be inline `data:` URLs; remote URLs are rejected so inference hosts never fetch student-supplied addresses
+- **Internet-facing servers** (`NODE_ENV=production` or an HTTPS `PUBLIC_BASE_URL`) refuse to start with default or placeholder `ADMIN_PASSWORD`/`SESSION_SECRET`
+- **Cross-site POSTs** to cookie-authenticated routes are rejected by `middleware/sameOrigin.js`; large JSON bodies are only parsed on the completion routes after auth (`middleware/bodyParsers.js`)
+- **API keys** and **invite tokens** are only shown once at creation; API keys are stored as SHA-256 digests (older bcrypt hashes still verify), invite nonces as digests, and pending one-time secrets live in process memory (`utils/pendingSecrets.js`), never in the session store
 - **Pricing** is configurable per model in `provider_models` table or via env defaults
 - Admin auth is session-based; student auth is Bearer token (API key)
 - Maintenance mode blocks non-admin, non-health routes

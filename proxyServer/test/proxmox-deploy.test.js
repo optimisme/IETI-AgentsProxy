@@ -62,7 +62,8 @@ if (!fs.existsSync(deploymentPath)) {
     fs.writeFileSync(path.join(current, 'settings.env'), [
       'DATABASE_PATH=./data/custom.sqlite',
       'PUBLIC_BASE_URL=https://deployment.example.test',
-      'SESSION_SECRET=fixture-session-secret',
+      'ADMIN_PASSWORD=fixture-admin-password',
+      'SESSION_SECRET=fixture-session-secret-with-enough-length',
       'DEFAULT_PROVIDER_API_KEY=fixture-provider-key',
       'GOOGLE_OAUTH_ENABLED=false',
       ''

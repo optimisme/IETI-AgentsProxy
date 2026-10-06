@@ -64,8 +64,19 @@ test.before(async () => {
           return;
         }
 
+        if (payload.messages?.[0]?.content === 'Trigger an upstream credential error.') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Authentication Fails, Your api key: ****abcd is invalid', internal: 'org-123' } }));
+          return;
+        }
         if (payload.stream) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (payload.messages?.[0]?.content === 'Stream with a usage chunk.' && payload.stream_options?.include_usage) {
+            res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n');
+            res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}\n\n');
+            res.end('data: [DONE]\n\n');
+            return;
+          }
           if (payload.messages?.[0]?.content === 'Stream beyond the request timeout.') {
             res.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"}}]}\n\n');
             setTimeout(() => {
@@ -624,6 +635,182 @@ test('requested max_tokens is bounded before provider call', async () => {
     })
     .expect(413);
   assert.equal(res.body.error.code, 'max_tokens_too_large');
+});
+
+test('remote media URLs are rejected before reaching the provider', async () => {
+  const student = createStudent();
+  for (const part of [
+    { type: 'image_url', image_url: { url: 'http://169.254.169.254/latest/meta-data/' } },
+    { type: 'image_url', image_url: 'https://internal.example.test/image.png' },
+    { type: 'audio_url', audio_url: { url: 'http://10.0.0.5/admin' } }
+  ]) {
+    lastChatPayload = undefined;
+    const res = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send({ model: 'active-model', messages: [{ role: 'user', content: [{ type: 'text', text: 'Fetch this.' }, part] }] })
+      .expect(400);
+    assert.equal(res.body.error.code, 'remote_media_not_supported');
+    assert.equal(lastChatPayload, undefined, 'The provider never receives the remote URL');
+  }
+});
+
+test('max_tokens defaults to the remaining token quota', async () => {
+  const { estimateChatTokens } = require('../src/utils/tokens');
+  const student = createStudent({ dailyLimit: 1000 });
+  const body = { model: 'active-model', messages: [{ role: 'user', content: 'Say OK.' }] };
+  await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`).send(body).expect(200);
+  assert.equal(lastChatPayload.max_tokens, 1000 - estimateChatTokens(body));
+
+  await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`).send({ ...body, max_tokens: 64 }).expect(200);
+  assert.equal(lastChatPayload.max_tokens, 64, 'A request that fits the quota keeps its own max_tokens');
+});
+
+test('in-flight requests reserve calls and tokens and are limited per user', () => {
+  const { checkQuota } = require('../src/services/quotaService');
+  const student = createStudent({ dailyLimit: 1000 });
+  const user = { id: student.id };
+  const previous = db.prepare('SELECT value FROM settings WHERE key = ?').get('max_concurrent_requests_per_user');
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('max_concurrent_requests_per_user', '2');
+  const releases = [];
+  try {
+    const first = checkQuota({ user, model: 'active-model', estimatedInputTokens: 100, requestedMaxTokens: 600 });
+    releases.push(first.release);
+    assert.equal(first.maxTokens, 600);
+    const second = checkQuota({ user, model: 'active-model', estimatedInputTokens: 100, requestedMaxTokens: 600 });
+    releases.push(second.release);
+    assert.equal(second.maxTokens, 200, 'The first request\'s reserved budget is not available to the second');
+    assert.throws(() => checkQuota({ user, model: 'active-model', estimatedInputTokens: 1 }), { code: 'concurrent_request_limit_exceeded' });
+    first.release();
+    first.release();
+    const third = checkQuota({ user, model: 'active-model', estimatedInputTokens: 100, requestedMaxTokens: 900 });
+    releases.push(third.release);
+    assert.equal(third.maxTokens, 600, 'Releasing twice frees only the first reservation, not the second');
+  } finally {
+    releases.forEach((release) => release());
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('max_concurrent_requests_per_user', previous?.value || '4');
+  }
+  assert.equal(checkQuota({ user, model: 'active-model', estimatedInputTokens: 100, requestedMaxTokens: 600 }).maxTokens, 600);
+});
+
+test('streaming always requests provider usage and hides the usage chunk unless the client asked for it', async () => {
+  const student = createStudent();
+  const body = { model: 'active-model', stream: true, messages: [{ role: 'user', content: 'Stream with a usage chunk.' }] };
+  const hidden = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`).send(body).expect(200);
+  assert.equal(lastChatPayload.stream_options.include_usage, true);
+  assert.doesNotMatch(hidden.text, /"usage"/);
+  assert.match(hidden.text, /\[DONE]/);
+  const usage = db.prepare('SELECT input_tokens, output_tokens, total_tokens FROM usage_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1').get(student.id);
+  assert.deepEqual(usage, { input_tokens: 11, output_tokens: 3, total_tokens: 14 });
+
+  const shown = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ ...body, stream_options: { include_usage: true } }).expect(200);
+  assert.match(shown.text, /"usage":\{"prompt_tokens":11/);
+});
+
+test('API key and invite checks do not run bcrypt for unknown or hashed-lookup tokens', async (t) => {
+  const bcrypt = require('bcryptjs');
+  const originalCompare = bcrypt.compareSync;
+  let comparisons = 0;
+  bcrypt.compareSync = (...args) => { comparisons += 1; return originalCompare(...args); };
+  t.after(() => { bcrypt.compareSync = originalCompare; });
+
+  const student = createStudent();
+  studentAuthService.createInviteForUser(student.id);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${keyService.generateStudentKey()}`).expect(401);
+  await request(app).get('/invite/ieti_inv_not-a-signed-token').expect(200).expect(/invalid or expired/);
+  await request(app).get('/invite/anything').expect(200).expect(/invalid or expired/);
+  assert.equal(comparisons, 0);
+});
+
+test('repeated failed logins from one address are throttled for that login', async () => {
+  const student = createStudent();
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await request(app).post('/login').type('form').send({ login: student.email, password: 'wrong-password' }).expect(302).expect('Location', '/?error=invalid');
+  }
+  await request(app).post('/login').type('form').send({ login: student.email, password: student.password }).expect(302).expect('Location', '/?error=locked');
+  assert.equal(db.prepare('SELECT locked_until FROM users WHERE id = ?').get(student.id).locked_until, null, 'The account itself is not locked for other addresses');
+});
+
+test('login answers do not reveal whether an account exists or has a password', async () => {
+  const student = createStudent({ password: null });
+  for (const login of [student.email, `missing-${Date.now()}@example.test`]) {
+    await request(app).post('/login').type('form').send({ login, password: 'some-password' }).expect(302).expect('Location', '/?error=invalid');
+  }
+});
+
+test('admin sessions end when the admin credentials change', async (t) => {
+  const config = require('../src/config');
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302).expect('Location', '/admin');
+  await agent.get('/admin').expect(200);
+  const previous = config.adminPassword;
+  config.adminPassword = 'a-new-admin-password';
+  t.after(() => { config.adminPassword = previous; });
+  await agent.get('/admin').set('Accept', 'text/html').expect(302).expect('Location', '/?admin=1');
+});
+
+test('cookie-authenticated forms reject cross-site requests', async () => {
+  const student = createStudent();
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  await agent.post('/portal/settings/name').type('form').set('Sec-Fetch-Site', 'same-site').send({ name: 'Renamed by a sibling site' }).expect(403);
+  await agent.post('/portal/settings/name').type('form').set('Origin', 'https://attacker.example.test').send({ name: 'Renamed cross-site' }).expect(403);
+  await request(app).post('/login').type('form').set('Sec-Fetch-Site', 'cross-site').send({ login: 'admin', password: 'secret' }).expect(403);
+  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, student.name);
+  await agent.post('/portal/settings/name').type('form').set('Sec-Fetch-Site', 'same-origin').send({ name: 'Renamed here' }).expect(302);
+  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, 'Renamed here');
+  await agent.post('/portal/settings/name').type('form').send({ name: 'x'.repeat(256) }).expect(302).expect('Location', '/portal/settings?name_error=1');
+});
+
+test('large JSON bodies are only accepted on authenticated completion routes', async () => {
+  const large = { padding: 'x'.repeat(300 * 1024) };
+  await request(app).post('/login').send(large).expect(413);
+  await request(app).post('/v1/chat/completions').send(large).expect(401);
+});
+
+test('pages send a restrictive content security policy', async () => {
+  const res = await request(app).get('/').expect(200);
+  const policy = res.headers['content-security-policy'];
+  for (const directive of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "form-action 'self'", "connect-src 'self'"]) {
+    assert.ok(policy.includes(directive), directive);
+  }
+});
+
+test('upstream credential errors are not forwarded to students', async () => {
+  const student = createStudent();
+  const res = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'active-model', messages: [{ role: 'user', content: 'Trigger an upstream credential error.' }] }).expect(502);
+  assert.doesNotMatch(JSON.stringify(res.body), /abcd|org-123/);
+  assert.equal(res.body.error.details, undefined);
+});
+
+test('secrets shown once are kept out of the database', async () => {
+  const student = createStudent();
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  await agent.post('/portal/key/regenerate').expect(302);
+  const settings = await agent.get('/portal/settings').expect(200);
+  const pendingKey = settings.text.match(/ieti_sk_[A-Za-z0-9_-]+/)[0];
+  const sessionRows = db.prepare('SELECT sess FROM sessions').all().map((row) => row.sess).join('\n');
+  assert.ok(!sessionRows.includes(pendingKey), 'The pending API key is not written to the session store');
+  await agent.post('/portal/key/add').type('form').send({ key_name: 'Laptop' }).expect(302).expect('Location', '/portal/settings?created=1');
+  const stored = db.prepare('SELECT api_key_hash FROM user_api_keys WHERE user_id = ? AND name = ?').get(student.id, 'Laptop');
+  assert.match(stored.api_key_hash, /^sha256:/);
+  await request(app).get('/v1/models').set('Authorization', `Bearer ${pendingKey}`).expect(200);
+
+  const admin = request.agent(app);
+  await admin.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const created = await admin.post(`/admin/users/${student.id}/invite`).expect(302);
+  const firstView = await admin.get(created.headers.location).expect(200);
+  const token = firstView.text.match(/ieti_inv_[A-Za-z0-9_-]+/)[0];
+  const { n: nonce } = JSON.parse(Buffer.from(token.slice('ieti_inv_'.length), 'base64url').toString('utf8'));
+  assert.notEqual(db.prepare('SELECT invite_token_nonce FROM users WHERE id = ?').get(student.id).invite_token_nonce, nonce);
+  const secondView = await admin.get(created.headers.location).expect(200);
+  assert.doesNotMatch(secondView.text, /ieti_inv_/);
+  assert.match(secondView.text, /Its link is only shown when it is generated/);
+  await request(app).get(`/invite/${token}`).expect(200).expect(/Set Password/);
 });
 
 test('admin can create an enabled user with a shareable invitation link and regenerate a key', async () => {
@@ -2179,8 +2366,7 @@ test('portal shell setup downloads with curl and runs Bash only after a successf
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
-  const defaultBaseUrl = "https://download.example.test/course'-$&-$(true)/v1";
-  const portal = await agent.get('/portal').query({ default_base_url: defaultBaseUrl })
+  const portal = await agent.get('/portal').query({ default_base_url: 'https://attacker.example.test/v1' })
     .set('Host', `127.0.0.1:${server.address().port}`).expect(200);
   const encodedCommand = portal.text.match(/data-copy-target="ieti-shell-command" data-copy-value="([^"]+)"/)?.[1];
   assert.ok(encodedCommand);
@@ -2228,7 +2414,7 @@ test('portal shell setup downloads with curl and runs Bash only after a successf
     const parsed = new URL(url, 'http://download.test');
     if (parsed.pathname !== '/redirected') {
       assert.equal(parsed.pathname, '/downloads/set_agents_opencode.sh');
-      assert.equal(parsed.searchParams.get('default_base_url'), defaultBaseUrl);
+      assert.equal(parsed.search, '', 'The setup command never forwards a caller-supplied API URL');
     }
   }
   await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
@@ -2239,19 +2425,22 @@ test('portal shell setup downloads with curl and runs Bash only after a successf
   assert.deepEqual(fs.readdirSync(project), ['http.py'], 'Downloader must not leave temporary files, environments, or Python caches');
 });
 
-test('configuration downloads preserve embedded URLs as inert script data', async () => {
+test('configuration downloads preserve embedded URLs as inert script data', async (t) => {
   const defaultBaseUrl = "https://download.example.test/course'-$&-$(true)/v1";
-  const query = `?default_base_url=${encodeURIComponent(defaultBaseUrl)}`;
-  const shellScript = await request(app).get(`/downloads/set_agents_opencode.sh${query}`).expect(200);
+  const previousSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('public_base_url');
+  db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(defaultBaseUrl.slice(0, -3), 'public_base_url');
+  t.after(() => db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(previousSetting?.value || '', 'public_base_url'));
+  const shellScript = await request(app).get('/downloads/set_agents_opencode.sh').expect(200);
   const shellAssignment = shellScript.text.match(/^DEFAULT_BASE_URL=.*$/m)?.[0];
   assert.ok(shellAssignment);
   const embeddedShellUrl = execFileSync('/bin/bash', ['-c', `${shellAssignment}\nprintf '%s' "$DEFAULT_BASE_URL"`], { encoding: 'utf8' });
   assert.equal(embeddedShellUrl, defaultBaseUrl);
 
-  const powerShellScript = await request(app).get(`/downloads/set_agents_opencode.ps1${query}`).expect(200);
+  const powerShellScript = await request(app).get('/downloads/set_agents_opencode.ps1').expect(200);
   const powerShellLiteral = powerShellScript.text.match(/^\$DefaultBaseUrl = '(.*)'$/m)?.[1];
   assert.ok(powerShellLiteral);
   assert.equal(powerShellLiteral.replaceAll("''", "'"), defaultBaseUrl);
+  db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('', 'public_base_url');
 
   const invalidUrlScript = await request(app)
     .get('/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fuser%3Apassword%40invalid.example.test%2Fv1')
@@ -2260,6 +2449,16 @@ test('configuration downloads preserve embedded URLs as inert script data', asyn
     .expect(200);
   assert.match(invalidUrlScript.text, /DEFAULT_BASE_URL="https:\/\/course\.example\.test:8443\/v1"/);
   assert.doesNotMatch(invalidUrlScript.text, /invalid\.example\.test/);
+
+  for (const filename of ['set_agents_opencode.sh', 'set_agents_opencode.ps1']) {
+    const overridden = await request(app)
+      .get(`/downloads/${filename}?default_base_url=https%3A%2F%2Fattacker.example.test%2Fv1`)
+      .set('Host', 'course.example.test:8443')
+      .set('X-Forwarded-Proto', 'https')
+      .expect(200);
+    assert.match(overridden.text, /https:\/\/course\.example\.test:8443\/v1/);
+    assert.doesNotMatch(overridden.text, /attacker\.example\.test/, 'A crafted download link cannot redirect students to another API server');
+  }
 });
 
 test('student portal shows setup commands and serves configuration scripts', async () => {
@@ -2306,7 +2505,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.match(portal.text, /Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop/);
   assert.match(portal.text, /\[Guid\]::NewGuid\(\)/);
   assert.match(portal.text, /finally \{ Remove-Item -LiteralPath \$p -Force -ErrorAction SilentlyContinue \}/);
-  assert.match(portal.text, /https%3A%2F%2Fcourse\.example\.test%3A8443%2Fv1/);
+  assert.doesNotMatch(portal.text, /default_base_url/);
   assert.match(portal.text, /https:\/\/course\.example\.test:8443\/downloads\/set_agents_opencode\.sh/);
   assert.match(portal.text, /class="command-scroll"/);
   assert.equal((portal.text.match(/data-copy-target=/g) || []).length, 2);
@@ -2334,7 +2533,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.doesNotMatch(portal.text, /env_key/);
   assert.doesNotMatch(portal.text, /chunkTimeout/);
 
-  const shellScript = await request(app).get('/downloads/set_agents_opencode.sh?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
+  const shellScript = await request(app).get('/downloads/set_agents_opencode.sh').set('Host', 'download.example.test').set('X-Forwarded-Proto', 'https').expect(200);
   assert.match(shellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.sh"/);
   assert.match(shellScript.headers['content-type'], /text\/plain/);
   assert.match(shellScript.text, /^#!\/usr\/bin\/env bash/);
@@ -2345,7 +2544,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.doesNotMatch(shellScript.text, /__IETI_DEFAULT_BASE_URL__/);
   assert.doesNotMatch(shellScript.text, /export PROXY_AGENTS_KEY|apiKey: '\{env:PROXY_AGENTS_KEY\}'|opencode:\/\/|OPENCODE_MODELS_PATH|ieti-models\.json|command -v opencode/);
 
-  const powerShellScript = await request(app).get('/downloads/set_agents_opencode.ps1?default_base_url=https%3A%2F%2Fdownload.example.test%2Fv1').expect(200);
+  const powerShellScript = await request(app).get('/downloads/set_agents_opencode.ps1').set('Host', 'download.example.test').set('X-Forwarded-Proto', 'https').expect(200);
   assert.match(powerShellScript.headers['content-disposition'], /attachment; filename="set_agents_opencode\.ps1"/);
   assert.match(powerShellScript.headers['content-type'], /text\/plain/);
   assert.match(powerShellScript.text, /\$ErrorActionPreference = 'Stop'/);

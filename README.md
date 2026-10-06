@@ -125,6 +125,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace_with_a_strong_password
 ADMIN_PASSWORD_HASH=
 SESSION_SECRET=replace_with_a_long_random_session_secret
+TRUST_PROXY=loopback, linklocal, uniquelocal
 
 GOOGLE_OAUTH_ENABLED=false
 GOOGLE_OAUTH_CLIENT_ID=
@@ -133,6 +134,7 @@ GOOGLE_OAUTH_ALLOWED_DOMAINS=xtec.cat,iesesteveterradas.cat
 GOOGLE_OAUTH_AUTO_REGISTER=true
 
 MAX_REQUESTS_PER_MINUTE=1000
+MAX_CONCURRENT_REQUESTS_PER_USER=4
 MAX_TOKENS_PER_REQUEST=8192
 DEFAULT_DAILY_TOKEN_LIMIT=10000000
 DEFAULT_MODEL_CONTEXT_LIMIT=90000
@@ -143,7 +145,6 @@ MAX_TOTAL_IMAGE_BYTES=16000000
 ALLOW_VIDEO_INPUT=false
 
 ENABLE_STREAMING=true
-LOG_REQUEST_BODY=false
 REQUEST_TIMEOUT_MS=120000
 STREAM_INACTIVITY_TIMEOUT_MS=600000
 ```
@@ -217,12 +218,16 @@ Valors principals:
 - `PROXY_AGENTS_BASE_URL`: URL base de l'API, normalment acabada en `/v1`, que els scripts `set_agents_opencode.sh` i `set_agents_opencode.ps1` accepten com a override quan s'executen. No s'ha de confondre amb `PUBLIC_BASE_URL`, que identifica l'aplicacio web i construeix els enllaços d'invitacio.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_PASSWORD_HASH`: credencials d'administracio.
 - `SESSION_SECRET`: secret de sessio Express. Ha de ser llarg i aleatori.
+- Amb `NODE_ENV=production` o un `PUBLIC_BASE_URL` HTTPS, el servidor no arrenca si `ADMIN_PASSWORD` te el valor per defecte o d'exemple o menys de 12 caracters (llevat que hi hagi `ADMIN_PASSWORD_HASH`), ni si `SESSION_SECRET` te el valor per defecte o d'exemple o menys de 32 caracters.
+- `TRUST_PROXY`: proxies dels quals es confien les capçaleres `X-Forwarded-*`, amb la sintaxi de `trust proxy` d'Express. Per defecte `loopback, linklocal, uniquelocal`: nomes un proxy local o de xarxa privada pot indicar la IP i el protocol del client. Si el TLS acaba en un proxy amb IP publica, cal indicar-ne l'adreça.
 - `GOOGLE_OAUTH_ENABLED`: activa l'inici de sessio Google OpenID Connect per als usuaris.
 - `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`: credencials d'un client OAuth de tipus **Web application**.
 - `GOOGLE_OAUTH_ALLOWED_DOMAINS`: dominis Google Workspace admesos, separats per comes. El valor unic `*` admet qualsevol compte Google amb correu verificat.
 - `GOOGLE_OAUTH_AUTO_REGISTER`: crea com a pendent un estudiant OAuth desconegut; no rep grup, models ni claus fins que l'administrador l'aprova.
 - `MAX_REQUESTS_PER_MINUTE`: rate limit per usuari.
-- `MAX_TOKENS_PER_REQUEST`: maxim de `max_tokens` de sortida que pot demanar una peticio. Els tokens reals es registren a partir del `usage` del proveidor quan existeix.
+- `MAX_CONCURRENT_REQUESTS_PER_USER`: peticions simultanies per usuari (per defecte 4). Mentre una peticio esta en curs, la seva entrada estimada i el seu `max_tokens` queden reservats dins la quota.
+- `MAX_TOKENS_PER_REQUEST`: maxim de `max_tokens` de sortida que pot demanar una peticio. Si la peticio no l'indica, s'aplica aquest valor; en tots dos casos es redueix fins al limit de sortida del model i a la quota de tokens restant. Els tokens reals es registren a partir del `usage` del proveidor, que el servidor sempre demana en streaming.
+- Les imatges, el video i l'audio s'han d'enviar inline com a URL `data:`; les URL remotes es rebutgen perque el servidor d'inferencia no accedeixi a la xarxa interna.
 - `DEFAULT_DAILY_TOKEN_LIMIT`: limit global per defecte del servidor.
 
 `DEFAULT_PROVIDER_API_KEY`, `DEFAULT_PROVIDER_BASE_URL`, `DEFAULT_PROVIDER_SLUG`, `DEFAULT_PROVIDER_NAME` i `DEFAULT_UPSTREAM_MODEL` nomes s'usen per crear el primer proveidor en una base de dades nova. Un cop creada la base de dades, els proveidors es gestionen des de l'administracio.
@@ -237,7 +242,7 @@ La data `disabled_at` es registra en deshabilitar el compte i es mostra en UTC. 
 
 ## Enllaços d'invitacio
 
-Quan l'administrador crea un usuari, **Enabled** esta seleccionat per defecte i el servidor genera un enllaç d'invitacio individual d'un sol ús. L'enllaç es mostra a la fitxa de l'usuari perquè l'administrador el copiï i el comparteixi manualment. **Regenerate invitation key** invalida l'enllaç anterior i en genera un de nou.
+Quan l'administrador crea un usuari, **Enabled** esta seleccionat per defecte i el servidor genera un enllaç d'invitacio individual d'un sol ús. L'enllaç es mostra a la fitxa de l'usuari una sola vegada, just despres de generar-lo, perquè l'administrador el copiï i el comparteixi manualment; la base de dades nomes en guarda un resum, de manera que un enllaç perdut es substitueix generant-ne un de nou. **Regenerate invitation key** invalida l'enllaç anterior i en genera un de nou.
 
 Quan l'usuari obre l'enllaç i desa la primera contrasenya, la invitacio queda consumida, la sessio es regenera i l'usuari entra directament al portal.
 
@@ -462,4 +467,6 @@ Els fitxers `*.env.example` si que es poden publicar per documentar la configura
 - No publiquis claus de proveidors ni claus d'estudiants.
 - Fes servir HTTPS en produccio.
 - Si una clau real s'ha publicat mai, considera-la compromesa i rota-la.
-- `LOG_REQUEST_BODY=false` hauria de mantenir-se aixi en produccio per evitar guardar prompts o dades sensibles als logs.
+- Els inicis de sessio fallits es limiten per adreça i per adreça i compte; el compte nomes es bloqueja temporalment despres de 50 intents fallits.
+- Els formularis amb sessio rebutgen peticions d'altres origens (capçaleres `Sec-Fetch-Site` i `Origin`).
+- El fitxer SQLite es crea amb permisos `0600`.

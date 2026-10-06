@@ -20,6 +20,10 @@ function recordFailedAttempt({ userId, model, wasStreaming }, error) {
   recordUsage({ userId, model, wasStreaming, providerSlug: error.providerSlug, ...failedAttemptUsage(error), status: 'upstream_retry', errorMessage: error.message });
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function responseIsClosed(res) {
   return res.destroyed || res.writableEnded;
 }
@@ -43,6 +47,7 @@ async function handleChatCompletion(req, res, next) {
   let estimatedInputTokens = 0;
   let timeout;
   let releaseProvider;
+  let releaseQuota;
   let providerSlug = null;
   let providerRequestStarted = false;
   let completeProvider;
@@ -73,16 +78,25 @@ async function handleChatCompletion(req, res, next) {
       throw apiError(400, 'streaming_disabled', 'Streaming is disabled on this server.');
     }
     validateRequestPayload(payload);
-    const { group } = checkQuota({
+    const { group, maxTokens, release: quotaRelease } = checkQuota({
       user,
       model,
       estimatedInputTokens,
       requestedMaxTokens: Number(payload.max_tokens || 0)
     });
+    releaseQuota = quotaRelease;
     timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
 
+    // Always request streamed usage so accounting uses the provider's real token counts.
+    const streamOptions = isPlainObject(payload.stream_options) ? payload.stream_options : {};
+    const upstreamPayload = {
+      ...payload,
+      model,
+      ...(maxTokens ? { max_tokens: maxTokens } : {}),
+      ...(wasStreaming ? { stream_options: { ...streamOptions, include_usage: true } } : {})
+    };
     providerRequestStarted = true;
-    const { upstream, provider, release, complete, fail } = await callChatCompletions({ ...payload, model }, {
+    const { upstream, provider, release, complete, fail } = await callChatCompletions(upstreamPayload, {
       signal: controller.signal,
       providerSlugs: group.provider_slugs,
       conversation: affinityContextFromRequest(req),
@@ -106,6 +120,7 @@ async function handleChatCompletion(req, res, next) {
         controller,
         completeProvider,
         failProvider,
+        forwardUsageChunks: streamOptions.include_usage === true,
         isClientDisconnected: () => clientDisconnected
       });
       return;
@@ -159,10 +174,11 @@ async function handleChatCompletion(req, res, next) {
     req.removeListener('aborted', disconnect);
     res.removeListener('close', disconnect);
     releaseProvider?.();
+    releaseQuota?.();
   }
 }
 
-async function streamResponse({ upstream, res, userId, model, providerSlug, estimatedInputTokens, controller, isClientDisconnected, completeProvider, failProvider }) {
+async function streamResponse({ upstream, res, userId, model, providerSlug, estimatedInputTokens, controller, isClientDisconnected, completeProvider, failProvider, forwardUsageChunks = true }) {
   let reader;
   let inactivityTimer;
   let outputText = '';
@@ -201,12 +217,15 @@ async function streamResponse({ upstream, res, userId, model, providerSlug, esti
       entry.function.arguments += tool.function?.arguments || '';
       toolCalls.set(index, entry);
     }
+    return Boolean(parsed.usage) && Array.isArray(parsed.choices) && parsed.choices.length === 0;
   };
   const writeEvent = (event, separator = '') => {
     if (isClientDisconnected() || responseIsClosed(res)) {
       throw new DOMException('Client disconnected.', 'AbortError');
     }
-    inspectEvent(event);
+    const usageOnlyChunk = inspectEvent(event);
+    // Clients that did not ask for usage do not expect the final chunk with no choices.
+    if (usageOnlyChunk && !forwardUsageChunks) return;
     res.write(normalizeReasoningEvent(event) + separator);
   };
 

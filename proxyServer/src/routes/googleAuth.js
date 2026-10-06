@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const express = require('express');
+const { isAdminSession } = require('../middleware/authAdmin');
 const { oauthRateLimit } = require('../middleware/rateLimit');
 const { resolveGoogleSignIn } = require('../services/oauthIdentityService');
 const { createGoogleOAuthService, safeEqual } = require('../services/googleOAuthService');
@@ -39,7 +40,7 @@ function createGoogleAuthRouter({ oauthService = createGoogleOAuthService(), ide
     try {
       if (!oauthService.isEnabled()) return res.status(404).send('Not found');
       if (req.session?.studentUserId) return res.redirect('/portal');
-      if (req.session?.adminAuthenticated) return res.redirect('/admin');
+      if (isAdminSession(req.session)) return res.redirect('/admin');
       const state = crypto.randomBytes(32).toString('base64url');
       const nonce = crypto.randomBytes(32).toString('base64url');
       const authorization = await oauthService.createAuthorizationRequest({ state, nonce });

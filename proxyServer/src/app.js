@@ -10,6 +10,8 @@ const adminRoutes = require('./routes/admin');
 const studentPortalRoutes = require('./routes/studentPortal');
 const { createGoogleAuthRouter } = require('./routes/googleAuth');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
+const { jsonBody } = require('./middleware/bodyParsers');
+const { rejectCrossSiteRequests } = require('./middleware/sameOrigin');
 const { apiError } = require('./utils/errors');
 const { getSetting } = require('./services/settingsService');
 
@@ -33,11 +35,32 @@ function createApp({ googleOAuthService, googleIdentityResolver } = {}) {
   const sessionStore = new BetterSqlite3Store({ client: getDb(), expired: { clear: true, intervalMs: 900000 } });
 
   app.disable('x-powered-by');
-  app.set('trust proxy', true);
+  app.set('trust proxy', config.trustProxy);
   app.locals.sessionStore = sessionStore;
-  app.use(helmet({ contentSecurityPolicy: false }));
-  app.use(express.json({ limit: Math.ceil((config.maxTotalImageBytes * 4) / 3) + 1048576 }));
+  // Pages still use inline scripts and handlers, so scripts allow 'unsafe-inline'. The other
+  // directives still block loading code from other origins, sending data to them, framing
+  // and plugins.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        formAction: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrcAttr: ["'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        fontSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"]
+      }
+    }
+  }));
+  app.use(jsonBody);
   app.use(express.urlencoded({ extended: false, limit: '128kb' }));
+  app.use(rejectCrossSiteRequests);
   app.use(session({
     name: 'ieti_proxy_sid',
     secret: config.sessionSecret,

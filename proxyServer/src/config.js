@@ -28,7 +28,42 @@ function googleCallbackUrl(publicBaseUrl) {
   }
 }
 
+// Express "trust proxy" value. The default only trusts forwarding headers sent from
+// loopback and private-network addresses, so internet clients cannot spoof their IP.
+function trustProxyEnv(name, fallback) {
+  const value = String(process.env[name] ?? '').trim();
+  if (!value) return fallback;
+  if (['true', 'false'].includes(value.toLowerCase())) return value.toLowerCase() === 'true';
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+}
+
+const DEFAULT_ADMIN_PASSWORD = 'replace_with_a_secure_admin_password';
+const DEFAULT_SESSION_SECRET = 'development_session_secret_change_me';
+const PLACEHOLDER_SECRETS = new Set([
+  DEFAULT_ADMIN_PASSWORD,
+  DEFAULT_SESSION_SECRET,
+  'replace_with_a_strong_password',
+  'replace_with_a_long_random_session_secret'
+]);
+
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || '';
+const adminPassword = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
+const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || '';
+const sessionSecret = process.env.SESSION_SECRET || DEFAULT_SESSION_SECRET;
+
+// An internet-facing server (production mode, or a public HTTPS URL) refuses to start
+// with the publicly known defaults or example placeholders.
+if (process.env.NODE_ENV === 'production' || /^https:\/\//i.test(publicBaseUrl.trim())) {
+  const problems = [];
+  if (!adminPasswordHash && (PLACEHOLDER_SECRETS.has(adminPassword) || adminPassword.length < 12)) {
+    problems.push('ADMIN_PASSWORD must be set to a non-default value of at least 12 characters (or set ADMIN_PASSWORD_HASH)');
+  }
+  if (PLACEHOLDER_SECRETS.has(sessionSecret) || sessionSecret.length < 32) {
+    problems.push('SESSION_SECRET must be set to a random value of at least 32 characters');
+  }
+  if (problems.length) throw new Error(`Refusing to start an internet-facing server: ${problems.join('; ')}.`);
+}
 const googleOAuthEnabled = boolEnv('GOOGLE_OAUTH_ENABLED', false);
 const googleOAuthAllowedDomains = process.env.GOOGLE_OAUTH_ALLOWED_DOMAINS || '';
 
@@ -55,9 +90,10 @@ module.exports = {
   publicModelName: process.env.PUBLIC_MODEL_NAME || process.env.DEFAULT_UPSTREAM_MODEL || 'deepseek-chat',
   publicBaseUrl,
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
-  adminPassword: process.env.ADMIN_PASSWORD || 'replace_with_a_secure_admin_password',
-  adminPasswordHash: process.env.ADMIN_PASSWORD_HASH || '',
-  sessionSecret: process.env.SESSION_SECRET || 'development_session_secret_change_me',
+  adminPassword,
+  adminPasswordHash,
+  sessionSecret,
+  trustProxy: trustProxyEnv('TRUST_PROXY', 'loopback, linklocal, uniquelocal'),
   sessionCookieSecure: publicBaseUrl.trim().toLowerCase().startsWith('https://'),
   googleOAuthEnabled,
   googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
@@ -66,6 +102,7 @@ module.exports = {
   googleOAuthAutoRegister: boolEnv('GOOGLE_OAUTH_AUTO_REGISTER', true),
   googleOAuthCallbackUrl: googleCallbackUrl(publicBaseUrl),
   maxRequestsPerMinute: numberEnv('MAX_REQUESTS_PER_MINUTE', 1000),
+  maxConcurrentRequestsPerUser: numberEnv('MAX_CONCURRENT_REQUESTS_PER_USER', 4),
   maxTokensPerRequest: numberEnv('MAX_TOKENS_PER_REQUEST', 8192),
   defaultDailyTokenLimit: numberEnv('DEFAULT_DAILY_TOKEN_LIMIT', 10000000),
   defaultModelContextLimit: numberEnv('DEFAULT_MODEL_CONTEXT_LIMIT', 90000),
@@ -75,7 +112,6 @@ module.exports = {
   maxTotalImageBytes: numberEnv('MAX_TOTAL_IMAGE_BYTES', 16000000),
   allowVideoInput: boolEnv('ALLOW_VIDEO_INPUT', false),
   enableStreaming: boolEnv('ENABLE_STREAMING', true),
-  logRequestBody: boolEnv('LOG_REQUEST_BODY', false),
   requestTimeoutMs: numberEnv('REQUEST_TIMEOUT_MS', 120000),
   streamInactivityTimeoutMs: numberEnv('STREAM_INACTIVITY_TIMEOUT_MS', 600000)
 };

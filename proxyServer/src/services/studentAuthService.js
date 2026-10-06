@@ -3,21 +3,29 @@ const crypto = require('crypto');
 const config = require('../config');
 const { getDb } = require('../db');
 
+// Request handlers use the async bcrypt functions so a password check never blocks
+// other requests. The synchronous hash remains for seeding and tests.
 function hashPassword(password) {
   return bcrypt.hashSync(password, 12);
 }
 
-function verifyPassword(password, hash) {
+async function verifyPassword(password, hash) {
   if (!password || !hash) return false;
-  return bcrypt.compareSync(password, hash);
+  return bcrypt.compare(password, hash);
 }
 
-function generateInviteToken() {
-  return `ieti_inv_${crypto.randomBytes(32).toString('base64url')}`;
+let dummyPasswordHash;
+
+// Spends the same time as a real check so response timing does not reveal which
+// accounts exist or have a password.
+async function verifyDummyPassword(password) {
+  dummyPasswordHash ||= bcrypt.hash(crypto.randomBytes(16).toString('hex'), 12);
+  await bcrypt.compare(String(password || 'x'), await dummyPasswordHash);
+  return false;
 }
 
-function hashInviteToken(token) {
-  return bcrypt.hashSync(token, 12);
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value), 'utf8').digest('base64url');
 }
 
 function inviteSignature(userId, nonce, expiresAt) {
@@ -60,35 +68,31 @@ function createInviteForUser(userId, { expiresInDays = 14 } = {}) {
     SET invite_token_hash = ?, invite_token_nonce = ?, invite_expires_at = ?, invite_used_at = NULL, locked_until = NULL,
         failed_login_count = 0, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(hashInviteToken(token), nonce, expiresAt, userId);
+  `).run(sha256(token), sha256(nonce), expiresAt, userId);
   return { token, expiresAt };
 }
 
 function findUserByInviteToken(token) {
-  if (!token) return null;
+  // Only signed invites are accepted: they resolve to a single row by id and nonce.
+  // Unsigned tokens would need a bcrypt comparison against every pending invite,
+  // which lets any unauthenticated request block the event loop.
+  // Only a digest of the nonce is stored, so database access does not reveal invite links;
+  // plain nonces written by earlier versions are still accepted until they are used.
   const signedInvite = parseSignedInviteToken(token);
-  if (signedInvite) {
-    const user = getDb().prepare(`
-      SELECT *
-      FROM users
-      WHERE id = ?
-        AND invite_token_nonce = ?
-        AND invite_used_at IS NULL
-    `).get(signedInvite.u, signedInvite.n);
-    if (!user || user.invite_expires_at !== signedInvite.e || new Date(user.invite_expires_at).getTime() <= Date.now()) return null;
-    return user;
-  }
-
-  const users = getDb().prepare(`
+  if (!signedInvite) return null;
+  const user = getDb().prepare(`
     SELECT *
     FROM users
-    WHERE invite_token_hash IS NOT NULL
+    WHERE id = ?
+      AND invite_token_nonce IN (?, ?)
       AND invite_used_at IS NULL
-      AND (invite_expires_at IS NULL OR invite_expires_at > datetime('now'))
-  `).all();
-  return users.find((user) => bcrypt.compareSync(token, user.invite_token_hash));
+  `).get(signedInvite.u, sha256(signedInvite.n), String(signedInvite.n));
+  if (!user || user.invite_expires_at !== signedInvite.e || new Date(user.invite_expires_at).getTime() <= Date.now()) return null;
+  return user;
 }
 
+// Reports whether an unused invite exists. Its link cannot be rebuilt: it is shown once
+// when created, and a lost link is replaced by generating a new invite.
 function getActiveInviteForUser(userId) {
   const user = getDb().prepare(`
     SELECT id, invite_token_nonce, invite_expires_at, invite_used_at
@@ -97,13 +101,11 @@ function getActiveInviteForUser(userId) {
   `).get(userId);
   if (!user?.invite_token_nonce || user.invite_used_at) return null;
   if (!user.invite_expires_at || new Date(user.invite_expires_at).getTime() <= Date.now()) return null;
-  return {
-    token: buildInviteToken(user.id, user.invite_token_nonce, user.invite_expires_at),
-    expiresAt: user.invite_expires_at
-  };
+  return { expiresAt: user.invite_expires_at };
 }
 
-function setPasswordFromInvite(userId, password) {
+async function setPasswordFromInvite(userId, password) {
+  const passwordHash = await bcrypt.hash(password, 12);
   const passwordChangedAt = new Date().toISOString();
   getDb().prepare(`
     UPDATE users
@@ -112,9 +114,11 @@ function setPasswordFromInvite(userId, password) {
         auth_version = auth_version + 1,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(hashPassword(password), passwordChangedAt, userId);
+  `).run(passwordHash, passwordChangedAt, userId);
   return passwordChangedAt;
 }
+
+const ACCOUNT_LOCK_THRESHOLD = 50;
 
 function findUserForLogin(email) {
   return getDb().prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(email);
@@ -127,7 +131,10 @@ function isLocked(user) {
 function recordFailedLogin(userId) {
   const user = getDb().prepare('SELECT failed_login_count FROM users WHERE id = ?').get(userId);
   const count = Number(user?.failed_login_count || 0) + 1;
-  const lockUntil = count >= 8 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+  // Per-address limits stop ordinary guessing; this account-wide lock only catches attempts
+  // spread across many addresses, so its threshold is high enough that a stranger cannot
+  // casually lock a student out.
+  const lockUntil = count >= ACCOUNT_LOCK_THRESHOLD ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
   getDb().prepare(`
     UPDATE users
     SET failed_login_count = ?, locked_until = COALESCE(?, locked_until), updated_at = CURRENT_TIMESTAMP
@@ -142,6 +149,7 @@ function clearFailedLogins(userId) {
 module.exports = {
   hashPassword,
   verifyPassword,
+  verifyDummyPassword,
   createInviteForUser,
   findUserByInviteToken,
   getActiveInviteForUser,

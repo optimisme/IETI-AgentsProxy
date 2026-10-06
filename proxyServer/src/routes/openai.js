@@ -2,6 +2,7 @@ const express = require('express');
 const config = require('../config');
 const { authStudent } = require('../middleware/authStudent');
 const { studentRateLimit } = require('../middleware/rateLimit');
+const { largeJsonBody } = require('../middleware/bodyParsers');
 const { callChatCompletions, getEnabledModelEntries } = require('../services/providerService');
 const { failedAttemptUsage, handleChatCompletion, recordFailedAttempt } = require('../services/chatCompletionService');
 const { affinityContextFromRequest } = require('../services/conversationAffinityService');
@@ -94,9 +95,9 @@ router.get('/v1/model-capabilities', authStudent, studentRateLimit, (req, res) =
   });
 });
 
-router.post('/v1/chat/completions', authStudent, studentRateLimit, handleChatCompletion);
+router.post('/v1/chat/completions', authStudent, studentRateLimit, largeJsonBody, handleChatCompletion);
 
-router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, next) => {
+router.post('/v1/responses', authStudent, studentRateLimit, largeJsonBody, async (req, res, next) => {
   const user = req.student;
   const responsesPayload = req.body || {};
   let chatPayload = {};
@@ -105,6 +106,7 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
   let wasStreaming = Boolean(responsesPayload.stream);
   let timeout;
   let releaseProvider;
+  let releaseQuota;
   let providerSlug = null;
   let completeProvider;
   let failProvider;
@@ -134,12 +136,14 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
     }
     validateRequestPayload(chatPayload);
 
-    const { group } = checkQuota({
+    const { group, maxTokens, release: quotaRelease } = checkQuota({
       user,
       model,
       estimatedInputTokens,
       requestedMaxTokens: Number(chatPayload.max_tokens || 0)
     });
+    releaseQuota = quotaRelease;
+    if (maxTokens) chatPayload.max_tokens = maxTokens;
     timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
 
     providerRequestStarted = true;
@@ -230,6 +234,7 @@ router.post('/v1/responses', authStudent, studentRateLimit, async (req, res, nex
     req.removeListener('aborted', disconnect);
     res.removeListener('close', disconnect);
     releaseProvider?.();
+    releaseQuota?.();
   }
 });
 

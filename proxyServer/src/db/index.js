@@ -14,14 +14,27 @@ const DEFAULT_GROUP_LIMITS = {
 
 function getDb() {
   if (db) return db;
-  fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
+  fs.mkdirSync(path.dirname(config.databasePath), { recursive: true, mode: 0o700 });
   db = new Database(config.databasePath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   initSchema(db);
   migrateSchema(db);
   seedSettings(db);
+  restrictDatabaseFilePermissions(config.databasePath);
   return db;
+}
+
+// The database holds provider API keys and password hashes, so only the server's own
+// account may read it. SQLite creates the WAL and shared-memory files next to it.
+function restrictDatabaseFilePermissions(databasePath) {
+  for (const file of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    try {
+      fs.chmodSync(file, 0o600);
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn(`Could not restrict permissions on ${file}: ${error.message}`);
+    }
+  }
 }
 
 function initSchema(database) {

@@ -120,6 +120,8 @@ function buildPayload(payload, upstreamModel, provider = {}) {
   }
   next.messages = prepareAssistantHistory(next.messages, provider.reasoning_history_field);
   next.model = upstreamModel;
+  const outputLimit = Number(provider.output_limit);
+  if (Number.isFinite(outputLimit) && outputLimit > 0 && Number(next.max_tokens) > outputLimit) next.max_tokens = outputLimit;
   return next;
 }
 
@@ -409,11 +411,17 @@ async function callChatCompletions(payload, { signal, providerSlug = null, provi
         } catch {
           body = { error: { message: text || response.statusText } };
         }
-        const message = body?.error?.message || response.statusText || `${provider.name} request failed.`;
-        const code = response.status === 402 || /balance|insufficient/i.test(message)
+        const upstreamMessage = body?.error?.message || response.statusText || `${provider.name} request failed.`;
+        const code = response.status === 402 || /balance|insufficient/i.test(upstreamMessage)
           ? 'insufficient_provider_balance'
           : 'provider_error';
-        const error = apiError(response.status === 401 ? 502 : response.status, code, message, body);
+        // Credential errors can echo parts of the server's provider key, so students get a
+        // generic message. Other messages (such as context-length errors) stay visible because
+        // clients rely on them, but the raw upstream body is never forwarded.
+        const credentialError = response.status === 401 || response.status === 403;
+        if (credentialError) console.error(`Provider ${provider.slug} rejected the server credentials: ${upstreamMessage}`);
+        const message = credentialError ? 'The upstream provider rejected the server credentials. Contact the course administrator.' : upstreamMessage;
+        const error = apiError(credentialError ? 502 : response.status, code, message);
         error.transient = [429, 502, 503, 504].includes(response.status);
         const retryAfter = response.headers.get('retry-after');
         error.retryAfterMs = Math.max(0, Number(retryAfter) * 1000 || Date.parse(retryAfter) - Date.now() || 0);
