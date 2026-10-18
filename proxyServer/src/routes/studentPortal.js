@@ -648,10 +648,10 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <p class="muted">${escapeHtml(user.email)}</p>
       <div class="panel" style="margin-top:16px">
         <div class="setup-tabs" role="tablist" aria-label="Agent setup">
-          <button type="button" id="setup-tab-opencode" role="tab" aria-selected="true" aria-controls="setup-panel-opencode" data-setup-tab>OpenCode</button>
-          <button type="button" id="setup-tab-deepseek" role="tab" aria-selected="false" aria-controls="setup-panel-deepseek" tabindex="-1" data-setup-tab>DeepSeek</button>
+          <button type="button" id="setup-tab-opencode" role="tab" aria-selected="false" aria-controls="setup-panel-opencode" tabindex="-1" data-setup-tab>OpenCode</button>
+          <button type="button" id="setup-tab-deepseek" role="tab" aria-selected="true" aria-controls="setup-panel-deepseek" data-setup-tab>DeepSeek</button>
         </div>
-        <div id="setup-panel-opencode" role="tabpanel" aria-labelledby="setup-tab-opencode" tabindex="0">
+        <div id="setup-panel-opencode" role="tabpanel" aria-labelledby="setup-tab-opencode" tabindex="0" hidden>
           <h2>OpenCode configuration</h2>
           <ol class="opencode-instructions">
             <li>Install OpenCode Terminal or Desktop from <a href="https://opencode.ai/download" target="_blank" rel="noopener noreferrer">https://opencode.ai/download</a>.</li>
@@ -677,7 +677,7 @@ router.get('/portal', requireStudentSession, (req, res) => {
             </button>
           </div>
         </div>
-        <div id="setup-panel-deepseek" role="tabpanel" aria-labelledby="setup-tab-deepseek" tabindex="0" hidden>
+        <div id="setup-panel-deepseek" role="tabpanel" aria-labelledby="setup-tab-deepseek" tabindex="0">
           <h2>DeepSeek configuration</h2>
           <ol class="setup-instructions">
             <li>Install DeepSeek from <a href="https://www.deepseek.com/en/harness/" target="_blank" rel="noopener noreferrer">https://www.deepseek.com/en/harness/</a>.</li>

@@ -2504,10 +2504,11 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .expect(/set_agents_opencode\.ps1/);
   assert.match(portal.text, /ieti_setup=\$\(curl -fsSL/);
   assert.match(portal.text, /role="tablist" aria-label="Agent setup"/);
-  assert.match(portal.text, /id="setup-tab-opencode" role="tab" aria-selected="true" aria-controls="setup-panel-opencode" data-setup-tab>OpenCode/);
-  assert.match(portal.text, /id="setup-tab-deepseek" role="tab" aria-selected="false" aria-controls="setup-panel-deepseek" tabindex="-1" data-setup-tab>DeepSeek/);
-  const deepSeekPanel = portal.text.match(/<div id="setup-panel-deepseek" role="tabpanel" aria-labelledby="setup-tab-deepseek" tabindex="0" hidden>([\s\S]*?)<\/ol>/)?.[1];
-  assert.ok(deepSeekPanel, 'DeepSeek instructions start in a hidden tab panel');
+  assert.match(portal.text, /id="setup-tab-opencode" role="tab" aria-selected="false" aria-controls="setup-panel-opencode" tabindex="-1" data-setup-tab>OpenCode/);
+  assert.match(portal.text, /id="setup-tab-deepseek" role="tab" aria-selected="true" aria-controls="setup-panel-deepseek" data-setup-tab>DeepSeek/);
+  assert.match(portal.text, /id="setup-panel-opencode" role="tabpanel" aria-labelledby="setup-tab-opencode" tabindex="0" hidden>/);
+  const deepSeekPanel = portal.text.match(/<div id="setup-panel-deepseek" role="tabpanel" aria-labelledby="setup-tab-deepseek" tabindex="0">([\s\S]*?)<\/ol>/)?.[1];
+  assert.ok(deepSeekPanel, 'DeepSeek instructions are visible by default');
   assert.match(deepSeekPanel, /href="https:\/\/www\.deepseek\.com\/en\/harness\/"/);
   assert.match(deepSeekPanel, /Settings &gt; Models/);
   assert.match(deepSeekPanel, /\+ Model Provider/);
