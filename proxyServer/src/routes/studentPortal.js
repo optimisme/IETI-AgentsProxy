@@ -683,13 +683,14 @@ router.get('/portal', requireStudentSession, (req, res) => {
             <li>Install DeepSeek from <a href="https://www.deepseek.com/en/harness/" target="_blank" rel="noopener noreferrer">https://www.deepseek.com/en/harness/</a>.</li>
             <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
             <li>In DeepSeek, open <strong>Settings &gt; Models</strong>, click <strong>+ Model Provider</strong>, and enter these parameters:
-              <dl class="model-config-grid setup-provider">
+              <p class="setup-reference-note">Reference values to enter in DeepSeek.</p>
+              <dl class="setup-provider">
                 <div><dt>Provider type</dt><dd>Custom model API</dd></div>
                 <div><dt>Provider ID</dt><dd><code>agents-ieti</code></dd></div>
-                <div><dt>Display Name</dt><dd>Agents IETI</dd></div>
+                <div><dt>Display name</dt><dd>Agents IETI</dd></div>
                 <div><dt>Base URL</dt><dd><code>${escapeHtml(getNormalizedRequestBaseUrl(req))}</code></dd></div>
-                <div><dt>API Protocol</dt><dd>OpenAI Chat Completions</dd></div>
-                <div><dt>API Key</dt><dd>Use the API key from the <a href="/portal/settings">Settings</a> section.</dd></div>
+                <div><dt>API protocol</dt><dd>OpenAI Chat Completions</dd></div>
+                <div><dt>API key</dt><dd>Use the API key from the <a href="/portal/settings">Settings</a> section.</dd></div>
               </dl>
             </li>
           </ol>

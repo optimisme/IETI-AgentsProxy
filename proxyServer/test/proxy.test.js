@@ -2513,10 +2513,11 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.match(deepSeekPanel, /\+ Model Provider/);
   assert.match(deepSeekPanel, /Custom model API/);
   assert.match(deepSeekPanel, /<dt>Provider ID<\/dt><dd><code>agents-ieti<\/code>/);
-  assert.match(deepSeekPanel, /<dt>Display Name<\/dt><dd>Agents IETI/);
+  assert.match(deepSeekPanel, /<dt>Display name<\/dt><dd>Agents IETI/);
   assert.match(deepSeekPanel, /<dt>Base URL<\/dt><dd><code>https:\/\/course\.example\.test:8443\/v1<\/code>/);
-  assert.match(deepSeekPanel, /<dt>API Protocol<\/dt><dd>OpenAI Chat Completions/);
-  assert.match(deepSeekPanel, /<dt>API Key<\/dt><dd>Use the API key from the <a href="\/portal\/settings">Settings<\/a> section/);
+  assert.match(deepSeekPanel, /<dt>API protocol<\/dt><dd>OpenAI Chat Completions/);
+  assert.match(deepSeekPanel, /<dt>API key<\/dt><dd>Use the API key from the <a href="\/portal\/settings">Settings<\/a> section/);
+  assert.doesNotMatch(deepSeekPanel, /<(?:input|select|textarea)\b|contenteditable\s*=/i);
   const instructions = portal.text.match(/<h2>OpenCode configuration<\/h2>\s*(<ol class="opencode-instructions">[\s\S]*?<\/ol>)/)?.[1];
   assert.ok(instructions, 'OpenCode setup instructions must be a numbered list');
   assert.equal((instructions.match(/<li>/g) || []).length, 5);
