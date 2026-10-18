@@ -647,32 +647,78 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <h1>${escapeHtml(user.name)}</h1>
       <p class="muted">${escapeHtml(user.email)}</p>
       <div class="panel" style="margin-top:16px">
-        <h2>OpenCode configuration</h2>
-        <ol class="opencode-instructions">
-          <li>Install OpenCode Terminal or Desktop from <a href="https://opencode.ai/download" target="_blank" rel="noopener noreferrer">https://opencode.ai/download</a>.</li>
-          <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
-          <li>Run the next command for your operating system to install or update your global OpenCode configuration.</li>
-          <li>Run or restart OpenCode (desktop or terminal).</li>
-          <li>Optionally configure other harnesses manually using your Active Models parameters.</li>
-        </ol>
-        <label>macOS/Linux</label>
-        <div class="command-row">
-          <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>
-          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="ieti-shell-command" data-copy-value="${escapeHtml(shellCommand)}" title="Copy macOS/Linux command" aria-label="Copy macOS/Linux command">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
-            <span class="copy-label">Copy</span>
-          </button>
+        <div class="setup-tabs" role="tablist" aria-label="Agent setup">
+          <button type="button" id="setup-tab-opencode" role="tab" aria-selected="true" aria-controls="setup-panel-opencode" data-setup-tab>OpenCode</button>
+          <button type="button" id="setup-tab-deepseek" role="tab" aria-selected="false" aria-controls="setup-panel-deepseek" tabindex="-1" data-setup-tab>DeepSeek</button>
         </div>
-        <label>Windows PowerShell</label>
-        <div class="command-row">
-          <div class="command-scroll"><pre><code id="ieti-powershell-command">${escapeHtml(powershellCommand)}</code></pre></div>
-          <button type="button" class="copy-command secondary" data-copy-command data-copy-target="ieti-powershell-command" data-copy-value="${escapeHtml(powershellCommand)}" title="Copy Windows PowerShell command" aria-label="Copy Windows PowerShell command">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
-            <span class="copy-label">Copy</span>
-          </button>
+        <div id="setup-panel-opencode" role="tabpanel" aria-labelledby="setup-tab-opencode" tabindex="0">
+          <h2>OpenCode configuration</h2>
+          <ol class="opencode-instructions">
+            <li>Install OpenCode Terminal or Desktop from <a href="https://opencode.ai/download" target="_blank" rel="noopener noreferrer">https://opencode.ai/download</a>.</li>
+            <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
+            <li>Run the next command for your operating system to install or update your global OpenCode configuration.</li>
+            <li>Run or restart OpenCode (desktop or terminal).</li>
+            <li>Optionally configure other harnesses manually using your Active Models parameters.</li>
+          </ol>
+          <label>macOS/Linux</label>
+          <div class="command-row">
+            <div class="command-scroll"><pre><code id="ieti-shell-command">${escapeHtml(shellCommand)}</code></pre></div>
+            <button type="button" class="copy-command secondary" data-copy-command data-copy-target="ieti-shell-command" data-copy-value="${escapeHtml(shellCommand)}" title="Copy macOS/Linux command" aria-label="Copy macOS/Linux command">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
+          <label>Windows PowerShell</label>
+          <div class="command-row">
+            <div class="command-scroll"><pre><code id="ieti-powershell-command">${escapeHtml(powershellCommand)}</code></pre></div>
+            <button type="button" class="copy-command secondary" data-copy-command data-copy-target="ieti-powershell-command" data-copy-value="${escapeHtml(powershellCommand)}" title="Copy Windows PowerShell command" aria-label="Copy Windows PowerShell command">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
+        </div>
+        <div id="setup-panel-deepseek" role="tabpanel" aria-labelledby="setup-tab-deepseek" tabindex="0" hidden>
+          <h2>DeepSeek configuration</h2>
+          <ol class="setup-instructions">
+            <li>Install DeepSeek from <a href="https://www.deepseek.com/en/harness/" target="_blank" rel="noopener noreferrer">https://www.deepseek.com/en/harness/</a>.</li>
+            <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
+            <li>In DeepSeek, open <strong>Settings &gt; Models</strong>, click <strong>+ Model Provider</strong>, and enter these parameters:
+              <dl class="model-config-grid setup-provider">
+                <div><dt>Provider type</dt><dd>Custom model API</dd></div>
+                <div><dt>Provider ID</dt><dd><code>agents-ieti</code></dd></div>
+                <div><dt>Display Name</dt><dd>Agents IETI</dd></div>
+                <div><dt>Base URL</dt><dd><code>${escapeHtml(getNormalizedRequestBaseUrl(req))}</code></dd></div>
+                <div><dt>API Protocol</dt><dd>OpenAI Chat Completions</dd></div>
+                <div><dt>API Key</dt><dd>Use the API key from the <a href="/portal/settings">Settings</a> section.</dd></div>
+              </dl>
+            </li>
+          </ol>
         </div>
         <script>
           (function(){
+            var tabs = Array.from(document.querySelectorAll('[data-setup-tab]'));
+            function selectTab(selected) {
+              tabs.forEach(function(tab){
+                var active = tab === selected;
+                tab.setAttribute('aria-selected', String(active));
+                tab.tabIndex = active ? 0 : -1;
+                document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+              });
+            }
+            tabs.forEach(function(tab, index){
+              tab.addEventListener('click', function(){ selectTab(tab); });
+              tab.addEventListener('keydown', function(event){
+                var next;
+                if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+                else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+                else if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = tabs.length - 1;
+                else return;
+                event.preventDefault();
+                selectTab(tabs[next]);
+                tabs[next].focus();
+              });
+            });
             function copyText(text) {
               if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
               var area = document.createElement('textarea');

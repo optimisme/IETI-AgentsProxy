@@ -2503,6 +2503,20 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .expect(/set_agents_opencode\.sh/)
     .expect(/set_agents_opencode\.ps1/);
   assert.match(portal.text, /ieti_setup=\$\(curl -fsSL/);
+  assert.match(portal.text, /role="tablist" aria-label="Agent setup"/);
+  assert.match(portal.text, /id="setup-tab-opencode" role="tab" aria-selected="true" aria-controls="setup-panel-opencode" data-setup-tab>OpenCode/);
+  assert.match(portal.text, /id="setup-tab-deepseek" role="tab" aria-selected="false" aria-controls="setup-panel-deepseek" tabindex="-1" data-setup-tab>DeepSeek/);
+  const deepSeekPanel = portal.text.match(/<div id="setup-panel-deepseek" role="tabpanel" aria-labelledby="setup-tab-deepseek" tabindex="0" hidden>([\s\S]*?)<\/ol>/)?.[1];
+  assert.ok(deepSeekPanel, 'DeepSeek instructions start in a hidden tab panel');
+  assert.match(deepSeekPanel, /href="https:\/\/www\.deepseek\.com\/en\/harness\/"/);
+  assert.match(deepSeekPanel, /Settings &gt; Models/);
+  assert.match(deepSeekPanel, /\+ Model Provider/);
+  assert.match(deepSeekPanel, /Custom model API/);
+  assert.match(deepSeekPanel, /<dt>Provider ID<\/dt><dd><code>agents-ieti<\/code>/);
+  assert.match(deepSeekPanel, /<dt>Display Name<\/dt><dd>Agents IETI/);
+  assert.match(deepSeekPanel, /<dt>Base URL<\/dt><dd><code>https:\/\/course\.example\.test:8443\/v1<\/code>/);
+  assert.match(deepSeekPanel, /<dt>API Protocol<\/dt><dd>OpenAI Chat Completions/);
+  assert.match(deepSeekPanel, /<dt>API Key<\/dt><dd>Use the API key from the <a href="\/portal\/settings">Settings<\/a> section/);
   const instructions = portal.text.match(/<h2>OpenCode configuration<\/h2>\s*(<ol class="opencode-instructions">[\s\S]*?<\/ol>)/)?.[1];
   assert.ok(instructions, 'OpenCode setup instructions must be a numbered list');
   assert.equal((instructions.match(/<li>/g) || []).length, 5);
@@ -2597,6 +2611,10 @@ test('student portal shows setup commands and serves configuration scripts', asy
     .run('https://configured.example.test/v1', 'public_base_url');
   let configRes;
   try {
+    const configuredPortal = await agent.get('/portal').set('Host', 'course.example.test').expect(200);
+    const configuredDeepSeek = configuredPortal.text.split('id="setup-panel-deepseek"')[1].split('</ol>')[0];
+    assert.match(configuredDeepSeek, /<dt>Base URL<\/dt><dd><code>https:\/\/configured\.example\.test\/v1<\/code>/);
+    assert.doesNotMatch(configuredDeepSeek, /course\.example\.test|\/v1\/v1/);
     configRes = await agent
       .get('/portal/opencode.json')
       .set('Host', 'course.example.test')
