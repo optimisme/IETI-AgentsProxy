@@ -8,7 +8,10 @@ els drafts mostrejats de MiaAI-Lab, sobre el checkpoint MLX 4 bits. Setze
 fluxos a 75k tokens amb KV fp8. En la càrrega d'agent de setze usuaris dona
 107 tokens/s agregats a temperatura 0 (Python 105,1) i 102,8 a temperatura 0,55
 (+8,5% respecte de la build sense drafts mostrejats). El Python continua sent
-millor en el p95 del TTFT dels torns següents (6,6 s davant de 15 s). S'arrenca
+millor en el p95 del TTFT dels torns següents (6,6 s davant de 15 s). Les
+proves de preparació per substituir la 2225 (temperatura 0,1, setze contextos
+de 74k, OpenCode i una hora seguida) donen un empat en tokens/s, un primer torn
+molt més ràpid amb Zig i contextos plens més ràpids amb Python. S'arrenca
 a la 2226 amb `benchmarks/tensorfold-zig-117-20261027/up-117.sh`. Proves,
 patches inclosos i descartats, i dades:
 [l'informe](benchmarks/tensorfold-zig-117-20261027/REPORT.md).
