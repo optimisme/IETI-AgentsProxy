@@ -1,5 +1,18 @@
 # Models Docker
 
+## Flash-Next: millor build TensorFold Zig (28 d'octubre)
+
+El perfil [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
+serveix la millor build: TensorFold 1.1.7 amb el nostre patch, el pas mixt i
+els drafts mostrejats de MiaAI-Lab, sobre el checkpoint MLX 4 bits. Setze
+fluxos a 75k tokens amb KV fp8. En la càrrega d'agent de setze usuaris dona
+107 tokens/s agregats a temperatura 0 (Python 105,1) i 102,8 a temperatura 0,55
+(+8,5% respecte de la build sense drafts mostrejats). El Python continua sent
+millor en el p95 del TTFT dels torns següents (6,6 s davant de 15 s). S'arrenca
+a la 2226 amb `benchmarks/tensorfold-zig-117-20261027/up-117.sh`. Proves,
+patches inclosos i descartats, i dades:
+[l'informe](benchmarks/tensorfold-zig-117-20261027/REPORT.md).
+
 ## Execucio local en un Mac amb Apple Silicon
 
 El perfil `models/qwen35-2b-llamacpp-unsloth-ud-q4_k_xl-local.yml` utilitza
