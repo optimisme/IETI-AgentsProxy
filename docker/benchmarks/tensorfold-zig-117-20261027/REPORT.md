@@ -1,11 +1,15 @@
 # TensorFold Zig 1.1.7: millor build de Flash-Next per a setze alumnes
 
-**La millor build és TensorFold 1.1.7 amb el nostre patch de Flash-Next, el pas
-mixt i els drafts mostrejats de MiaAI-Lab (0007, 0008, 0011). En la càrrega
-d'agent de setze usuaris supera lleugerament el Python en tokens/s agregats
-(107 davant de 105 a temperatura 0) i, a temperatura 0,55, guanya un 8,5%
-respecte de la mateixa build sense els drafts mostrejats.** La resta de patches
-de MiaAI-Lab, el checkpoint NVIDIA NVFP4 i un drafter propi s'han descartat.
+**La millor build (29 d'octubre, `variants/resident7`) és TensorFold 1.1.7 amb
+el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
+(0007, 0008, 0011), els estats de prompt residents, el nou planificador de
+prompts i la lectura HC per files a les rondes de resposta. Iguala o supera el
+Python en la càrrega d'agent, en les rondes de retorn i en el primer token
+mitjà amb contextos de 45k i 74k. Només perd en el temps total de la primera
+ronda freda (un 5–8%) i, a 45k, en el p95 del primer token.** Vegeu
+[Contextos plens: Zig davant de Python](#contextos-plens-zig-davant-de-python-29-doctubre).
+La resta de patches de MiaAI-Lab, el checkpoint NVIDIA NVFP4 i un drafter propi
+s'han descartat.
 
 El model és **Qwen3.8 Flash-Next** amb el checkpoint **MLX 4 bits**
 (`TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP`): pesos enters de 4 bits amb
@@ -16,13 +20,17 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-sampled-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-resident7-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/sampled/fn.patch`](variants/sampled/fn.patch).
+  [`variants/resident7/fn.patch`](variants/resident7/fn.patch). La build
+  anterior (28 d'octubre) és [`variants/sampled/fn.patch`](variants/sampled/fn.patch).
 - Configuració: 16 fluxos, finestra de 75.000 tokens, KV fp8 (files int8),
-  MTP6 amb confiança 0,60, trossos de prompt de 4096 files (2048 mentre es
-  descodifica), cache de prompts elàstica de fins a 12 GiB, visió activada,
-  temperatura per defecte del servidor 0,1.
+  MTP6 amb confiança 0,60, trossos de prompt de 4096 files (també mentre es
+  descodifica), cache de prompts elàstica de fins a 24 GiB amb estats residents
+  (`TF_PROMPT_CACHE_RESIDENT_GIB=2`), planificador de prompts
+  (`TF_FILL_AGING_ROUNDS=1000000`, `TF_FILL_ROUND_STEPS=8`), lectura HC per files
+  fins a 127 files (`TF_TILE_READOUT_ROWS=128`), visió activada, temperatura per
+  defecte del servidor 0,1.
 - Escollir el checkpoint: `TENSORFOLD_MODEL_ID`, `TENSORFOLD_MODEL_REVISION` i
   `TENSORFOLD_CHECKPOINT_VOLUME` (per defecte, MLX 4 bits).
 
@@ -38,9 +46,9 @@ Prompts de 13.900 tokens de mitjana i 21.600 de màxim. 128 peticions, cap error
 | Python (perfil de producció) | 0 | 105,1 | 64,5 s | 3,2 / 6,6 s | 9,0 |
 | Zig 1.1.6 (`tf116-20261026c`) | 0 | 108,4 / 104,9 | 3,0–3,3 s | 3,5 / 14–15 s | 8,1–8,2 |
 | Zig 1.1.7 sense drafts mostrejats | 0 | 110,5 / 107,4 | 3,3 s | 3,5 / 14 s | 8,2 |
-| **Zig millor build** | 0 | **107,1 / 106,9** | 2,7–3,2 s | 3,4–3,6 / 14–15 s | 8,2 |
+| **Zig sampled (28 oct)** | 0 | **107,1 / 106,9** | 2,7–3,2 s | 3,4–3,6 / 14–15 s | 8,2 |
 | Zig 1.1.7 sense drafts mostrejats | 0,55 | 94,8 / 94,7 | 3,2 s | 3,3 / 13,2 s | 7,4 |
-| **Zig millor build** | 0,55 | **102,8 / 102,9** | 3,1 s | 3,75 / 15,3 s | 8,1 |
+| **Zig sampled (28 oct)** | 0,55 | **102,8 / 102,9** | 3,1 s | 3,75 / 15,3 s | 8,1 |
 
 Dues passades per configuració, cadascuna amb el servidor acabat d'arrencar.
 La dispersió entre passades és d'un 1–3%.
@@ -56,9 +64,11 @@ La dispersió entre passades és d'un 1–3%.
 
 Sí: el servidor arrenca amb 16 fluxos a 75.000 tokens i KV fp8, amb el model
 (80,2 GiB) i la cache de prompts a la memòria. Les agulles passen a 16k, 65k i
-74k tokens, i setze peticions de 74.000 tokens acaben totes (48 de 48). Però
-amb contextos plens el Zig és més lent que el Python i el marge de memòria és
-just: vegeu [Proves de preparació](#proves-de-preparació-per-substituir-la-2225).
+74k tokens, i setze peticions de 74.000 tokens acaben totes (48 de 48). Amb la
+build del 29 d'octubre el Zig reaprofita la cache a les rondes de retorn i hi és
+2,6–3,4 vegades més ràpid que el Python; el marge de memòria a 74k és més just
+(7,6 GiB lliures davant de 10,4): vegeu
+[Contextos plens](#contextos-plens-zig-davant-de-python-29-doctubre).
 
 ## Què inclou la millor build
 
@@ -73,6 +83,21 @@ just: vegeu [Proves de preparació](#proves-de-preparació-per-substituir-la-222
    quedaven fora, i el servidor mostreja per defecte (0,1). Cost abans del
    canvi: −10,4% a 0,1 i −13,7% a 0,55. Guany en el cribratge: +12,0%
    (`TF_FLASHNEXT_SAMPLED_HEADS` +10,7%, `TF_FLASHNEXT_SAMPLE_CAND` +1,2%).
+4. **Estats de prompt residents** (29 d'octubre): amb les finestres plenes la
+   cache elàstica no té lloc per copiar un estat. Ara una marca només guarda
+   l'estat DeltaNet (~110 MiB) i les files d'atenció es queden a les caches del
+   flux, que sobreviuen al flux fins que el torn de retorn les reprèn.
+5. **Planificador de prompts** (`lane_host_fill.zig`): el prompt més a prop del
+   final es queda els trossos (`TF_FILL_AGING_ROUNDS`), de manera que els
+   prompts acaben un darrere l'altre i descodifiquen mentre la resta s'omplen;
+   els prompts no començats es comparen pel que els falta des d'on es reprenen;
+   i fins a vuit passos de prompt llarg entre rondes de descodificació
+   (`TF_FILL_ROUND_STEPS`).
+6. **Lectura HC per files a les rondes de resposta**
+   (`cuda_tile_rows.zig`, `TF_TILE_READOUT_ROWS`): a partir de 64 files la
+   lectura feia servir la rajola del prompt, que en una ronda de 64 files costa
+   29,6 ms davant d'11,4. Amb el llindar a 128 una ronda de setze fluxos baixa de
+   232 a 216 ms (+5% de tokens/s en respostes). Els bits són els mateixos.
 
 ## Què s'ha descartat
 
@@ -90,6 +115,44 @@ just: vegeu [Proves de preparació](#proves-de-preparació-per-substituir-la-222
 Les altres patches de MiaAI-Lab no van entrar a la llista curta en comparar els
 dos repositoris i no s'han portat.
 
+## Contextos plens: Zig davant de Python (29 d'octubre)
+
+La mateixa sonda de capacitat (setze peticions alhora, una ronda freda i dues
+de retorn) a 74k i 45k tokens, i la càrrega d'agent de setze usuaris, a la
+2226. El Python són passades aparellades del mateix dia. Script:
+[`resident-check.sh`](resident-check.sh) (`RVAR=resident7`); dades a
+[`results/resident/`](results/resident/) (`summary.txt` té totes les passades,
+també les intermèdies).
+
+| Prova | Python | Zig millor build | Guanya |
+|---|---|---|---|
+| Agent: tokens/s | 110,3 | 112,4 / 114,6 | Zig |
+| Agent: TTFT torns següents p95 | 6,1–7,5 s | 6,05 / 7,59 s | empat |
+| 74k freda: temps total | **637 s** | 672 s | Python (+5%) |
+| 74k freda: TTFT p50 / p95 | 473 / 579 s | **317 / 572 s** | Zig |
+| 74k retorn 1 / 2 | 380 / 386 s | **148 / 113 s** | Zig |
+| 74k memòria lliure mínima | **10,4 GiB** | 7,6 GiB | Python |
+| 45k freda: temps total | **387 s** | 418 s | Python (+8%) |
+| 45k freda: TTFT p50 / p95 | 318 / **323 s** | **188** / 340 s | Zig / Python |
+| 45k retorn 1 / 2 | 79 / 51 s | **74 / 45 s** | Zig |
+| 45k memòria lliure mínima | 12,6 GiB | **16,4 GiB** | Zig |
+
+- Totes les comprovacions d'exactitud donen 8 de 8 i 9 de 9 (greedy junts =
+  sols, agulles, respostes, mostrejades amb llavor) i el reaprofitament de
+  converses dona el mateix text des de còpies i des d'estats residents
+  ([`reuse_check.py`](reuse_check.py)).
+- **On es perd el temps de la ronda freda a 74k:** la càrrega dels prompts ja
+  empata amb el Python (el darrer prompt acaba als ~610 s). La resta és la cua
+  de respostes amb setze fluxos a 74k: rondes de ~216 ms, de les quals ~190 ms
+  verifiquen 64 files i ~25 ms fan drafts
+  ([`results/resident/reply-profile-74000.txt`](results/resident/reply-profile-74000.txt),
+  [`reply_profile.py`](reply_profile.py)). Els experts en prenen 105–130 ms i
+  estan limitats per l'amplada de banda (canviar de kernel no hi fa res,
+  [`results/resident/reply-profile-tiles.txt`](results/resident/reply-profile-tiles.txt));
+  l'atenció a 74k només 35 ms.
+- A les rondes de retorn de 74k encara es desallotgen alguns estats (4 en
+  aquesta passada); per això aquestes xifres varien entre 113 i 157 s.
+
 ## Comprovacions d'exactitud
 
 Cada candidat ha de donar exactament el mateix text que la build de referència:
@@ -104,6 +167,11 @@ Cada candidat ha de donar exactament el mateix text que la build de referència:
   o no; 8 de 8 a totes les builds.
 
 ## Proves de preparació per substituir la 2225
+
+Aquesta secció és de la build anterior (`variants/sampled`). Les rondes de
+contextos plens de la build actual són a
+[Contextos plens](#contextos-plens-zig-davant-de-python-29-doctubre); la prova
+d'una hora, la imatge i OpenCode encara no s'han repetit amb la build actual.
 
 Fetes el 28 d'octubre de 2026 a la 2226 amb [`prod-check.sh`](prod-check.sh) i
 [`zig_probe.py`](zig_probe.py) (la sonda de la campanya de capacitat del Python
@@ -122,7 +190,7 @@ cap error.
 
 | Servidor | tokens/s | TTFT 1r torn p50 | TTFT torns següents p50 / p95 | descodificació per usuari | memòria lliure mínima |
 |---|---|---|---|---|---|
-| Zig millor build | 110,5 / 110,1 | 2,6 / 2,9 s | 3,1 / 15,5 s | 8,0 / 7,9 | 10,5 GiB |
+| Zig sampled (28 oct) | 110,5 / 110,1 | 2,6 / 2,9 s | 3,1 / 15,5 s | 8,0 / 7,9 | 10,5 GiB |
 | Python (perfil de producció) | 110,3 / 109,2 | 46,2 / 51,1 s | 3,1–3,3 / 6,1–7,5 s | 8,5 / 8,9 | 18,6 GiB |
 
 ### Setze usuaris a prop dels 75k
@@ -195,6 +263,14 @@ mateixa prova que el Python i el vLLM van fer a
 - [`sync-build.sh`](sync-build.sh) i [`build-117.sh`](build-117.sh): compilació
   a la 2226; `VARIANT=nom` deixa cada candidat a `variants/<nom>/` i al volum
   `ieti-native117-<nom>-build`.
+- [`resident-check.sh`](resident-check.sh): exactitud, reaprofitament,
+  capacitat a `TOKENS` i agent per a una variant (`RVAR`, `RENV`, `CLABEL`).
+  [`reply_profile.py`](reply_profile.py) resumeix les rondes de resposta d'un
+  registre amb `TF_LANES_PHASES=1 TF_FLASHNEXT_PROFILE=2`;
+  [`decode_load.py`](decode_load.py) i [`tile-sweep.sh`](tile-sweep.sh) són la
+  càrrega curta de respostes i l'escombrada dels llindars `TF_TILE_*_ROWS`;
+  [`cold_one.py`](cold_one.py) i [`profile-batch.sh`](profile-batch.sh) perfilen
+  un sol prompt fred; [`gpu-batch.sh`](gpu-batch.sh) és la tanda amb traça.
 - Els scripts de càrrega (`agent.py`, `greedy_check.py`, `kv8_check.py`) són a
   [`../tensorfold-zig-114-parity-20261024/`](../tensorfold-zig-114-parity-20261024/).
 - Dades: [`results/`](results/) conté el resum de cada etapa
@@ -205,7 +281,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** | 1.1.7 + patch + pas mixt + drafts mostrejats | [`best/best.patch`](best/best.patch) | `ieti-native117-sampled-build` |
+| **best** (variants/resident7) | sampled + estats residents + planificador de prompts + lectura HC per files | [`best/best.patch`](best/best.patch) | `ieti-native117-resident7-build` |
+| variants/sampled | 1.1.7 + patch + pas mixt + drafts mostrejats (millor del 28 d'octubre) | [`variants/sampled/fn.patch`](variants/sampled/fn.patch) | `ieti-native117-sampled-build` |
 | tf117-20261027 | 1.1.7 + patch + pas mixt | [`tf117-20261027/fn.patch`](tf117-20261027/fn.patch) | `ieti-native117-fn-build` |
 | variants/stop | millor + 0017 | [`variants/stop/fn.patch`](variants/stop/fn.patch) | `ieti-native117-stop-build` |
 | variants/decode | millor + 0012 + 0016 (meitat DeltaNet) | [`variants/decode/fn.patch`](variants/decode/fn.patch) | `ieti-native117-decode-build` |

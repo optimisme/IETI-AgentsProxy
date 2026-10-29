@@ -1,5 +1,5 @@
-# Best Flash-Next Zig build (2026-10-28): TensorFold 1.1.7 + our Flash-Next patch, the mixed pass and MiaAI-Lab's
-# sampled drafts (0007, 0008, 0011). Start it with benchmarks/tensorfold-zig-117-20261027/up-117.sh, which supplies the
+# Best Flash-Next Zig build (2026-10-29, variants/resident7): TensorFold 1.1.7 + our Flash-Next patch, the mixed pass,
+# MiaAI-Lab's sampled drafts (0007, 0008, 0011), resident prompt states, the fill scheduler and the reply read-out. Start it with benchmarks/tensorfold-zig-117-20261027/up-117.sh, which supplies the
 # patch digest; tests and results: benchmarks/tensorfold-zig-117-20261027/REPORT.md.
 # 16 streams, 75k context, fp8 (int8-row) KV, MTP6/0.60, vision and an elastic RAM prompt cache.
 # TF_FLASHNEXT_MIXED=1 runs a prompt chunk and the decode round in one pass, experts read once; 0: apart.
@@ -40,13 +40,13 @@ services:
       CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
       PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
       TENSORFOLD_MEMORY_RESERVE_GIB: "${TENSORFOLD_RESERVE_GIB:-10}"
-      TENSORFOLD_PROMPT_CACHE_GIB: "${TENSORFOLD_PROMPT_CACHE_GIB:-12}"
+      TENSORFOLD_PROMPT_CACHE_GIB: "${TENSORFOLD_PROMPT_CACHE_GIB:-24}"
       TENSORFOLD_NO_UPDATE_CHECK: "1"
       TENSORFOLD_CUDA_KERNELS: native
       TF_FLASHNEXT_DRAFTS: "${TENSORFOLD_DRAFT_DEPTH:-6}"
       # Prompt chunk rows while nothing decodes; TF_FLASHNEXT_LIVE_CHUNK caps them while replies decode.
       TF_FLASHNEXT_CHUNK: "${TENSORFOLD_PREFILL_CHUNK:-4096}"
-      TF_FLASHNEXT_LIVE_CHUNK: "${TF_FLASHNEXT_LIVE_CHUNK:-2048}"
+      TF_FLASHNEXT_LIVE_CHUNK: "${TF_FLASHNEXT_LIVE_CHUNK:-4096}"
       DRAFTS_ENABLED: "${TENSORFOLD_DRAFTS_ENABLED:-1}"
       VISION_ENABLED: "${TENSORFOLD_VISION_ENABLED:-1}"
       TF_FLASHNEXT_CONFIDENCE: "${TF_FLASHNEXT_CONFIDENCE:-0.60}"
@@ -72,6 +72,15 @@ services:
       # 1: the prompt cache takes the memory streams leave as they run (up to the asked size), not what full windows leave.
       TF_PROMPT_CACHE_ELASTIC: "${TF_PROMPT_CACHE_ELASTIC:-1}"
       TF_PROMPT_CACHE_MARGIN_GIB: "${TF_PROMPT_CACHE_MARGIN_GIB:-2}"
+      # Resident prompt states (builds that have them): with full windows a mark keeps the DeltaNet state and leaves its
+      # attention rows in the stream's caches until the return turn; the floor resident states copy into.
+      TF_PROMPT_CACHE_RESIDENT_GIB: "${TF_PROMPT_CACHE_RESIDENT_GIB:-2}"
+      # Fill scheduler: the prompt nearest its end keeps the chunks (prompts finish one after another and decode while the
+      # rest fill), and up to 8 long prompt steps run between decode rounds.
+      TF_FILL_AGING_ROUNDS: "${TF_FILL_AGING_ROUNDS:-1000000}"
+      TF_FILL_ROUND_STEPS: "${TF_FILL_ROUND_STEPS:-8}"
+      # Reply rounds (up to 16 x 7 rows) keep the row read-out; its prompt tile is slower there. Bits are the same.
+      TF_TILE_READOUT_ROWS: "${TF_TILE_READOUT_ROWS:-128}"
       # fp8: Flash Next's attention caches as the Python engine's --kv-dtype int8 rows (H32 groups, fp16 scales), half the bytes.
       TENSORFOLD_KV_CACHE: "${TENSORFOLD_KV_CACHE:-fp8}"
       # Experiments: space-separated VAR=value pairs exported before the server starts (any engine knob, no profile edit).
@@ -116,7 +125,7 @@ services:
 volumes:
   patched-runtime:
     external: true
-    name: ${TENSORFOLD_NATIVE_VOLUME:-ieti-native117-sampled-build}
+    name: ${TENSORFOLD_NATIVE_VOLUME:-ieti-native117-resident7-build}
   upstream-runtime:
     external: true
     name: ieti-tensorfold-116-runtime

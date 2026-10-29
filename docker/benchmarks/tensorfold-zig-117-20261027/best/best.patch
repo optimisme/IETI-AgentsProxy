@@ -919,6 +919,93 @@ index 8f6797e0..8df3d56a 100644
      for (jobs[0..n], began[0..n], errs[0..n]) |job, at, err| {
          if (err) |e| {
              _ = h.failedPass(job, e);
+diff --git a/zig/src/core/lane_host_fill.zig b/zig/src/core/lane_host_fill.zig
+index 7401d09a..e01868c1 100644
+--- a/zig/src/core/lane_host_fill.zig
++++ b/zig/src/core/lane_host_fill.zig
+@@ -4,6 +4,31 @@ const LaneHost = @import("lane_host.zig").LaneHost;
+ 
+ pub const preference_rounds = 8;
+ 
++/// Long prompt steps per decode round (TF_FILL_ROUND_STEPS, default 1), when prompt steps owe the decoders nothing.
++fn roundSteps() usize {
++    const Cached = struct {
++        var steps: ?usize = null;
++    };
++    if (Cached.steps) |n| return n;
++    const text = std.mem.span(std.c.getenv("TF_FILL_ROUND_STEPS") orelse "");
++    const n = @max(1, std.fmt.parseInt(usize, text, 10) catch 1);
++    Cached.steps = n;
++    return n;
++}
++
++/// Skipped choices before a fill ages (TF_FILL_AGING_ROUNDS, default `preference_rounds`): a large value lets the
++/// fill nearest its end keep the chunks, so equal prompts finish one after another and decode while the rest fill.
++fn agingRounds() usize {
++    const Cached = struct {
++        var rounds: ?usize = null;
++    };
++    if (Cached.rounds) |r| return r;
++    const text = std.mem.span(std.c.getenv("TF_FILL_AGING_ROUNDS") orelse "");
++    const r = std.fmt.parseInt(usize, text, 10) catch preference_rounds;
++    Cached.rounds = r;
++    return r;
++}
++
+ /// After eight skipped choices, oldest wait wins; each fill runs within eight plus the admitted lane count.
+ pub fn next(h: *const LaneHost) usize {
+     return took(h, pick(h, .all).?);
+@@ -25,8 +50,8 @@ fn pick(h: *const LaneHost, among: enum { all, short, long }) ?usize {
+             continue;
+         };
+         const best = h.filling.items[at];
+-        const aged = j.fill_wait >= preference_rounds;
+-        const best_aged = best.fill_wait >= preference_rounds;
++        const aged = j.fill_wait >= agingRounds();
++        const best_aged = best.fill_wait >= agingRounds();
+         if (aged != best_aged) {
+             if (aged) found = i;
+         } else if (aged) {
+@@ -39,7 +64,9 @@ fn pick(h: *const LaneHost, among: enum { all, short, long }) ?usize {
+ }
+ 
+ fn remaining(h: *const LaneHost, j: *const LaneHost.Job) u64 {
+-    const completed = if (j.fill_began and h.core.backend.vtable.reports_fill)
++    const completed = if (!j.fill_began)
++        @max(j.stream.cached, j.stream.reuse.at) // not begun: its kept state resumes it there, not at its first token
++    else if (h.core.backend.vtable.reports_fill)
+         @max(j.stream.cached, j.stream.fill_at.load(.monotonic))
+     else
+         j.stream.cached;
+@@ -103,7 +130,17 @@ pub fn run(h: *LaneHost) void {
+     }
+     const at = pick(h, .long) orelse return;
+     if (!due(h)) return;
+-    if (h.share.p >= 1) return h.fillAt(took(h, at));
++    if (h.share.p >= 1) {
++        h.fillAt(took(h, at));
++        // more long steps before the next round (TF_FILL_ROUND_STEPS): a burst of prompts waits on fewer decode rounds
++        for (1..roundSteps()) |_| {
++            @import("lane_host_end.zig").takeCancels(h);
++            while (h.admitOne()) {}
++            const more = pick(h, .long) orelse return;
++            h.fillAt(took(h, more));
++        }
++        return;
++    }
+     const decoding = runnable(h) > 0;
+     const t0 = std.Io.Clock.awake.now(h.io);
+     h.fillAt(took(h, at));
+@@ -112,7 +149,8 @@ pub fn run(h: *LaneHost) void {
+ 
+ /// A prompt whose whole pass is at most `short_rows` rows (a long prompt's last rows are not).
+ fn short(j: *const LaneHost.Job) bool {
+-    return j.stream.prompt_len -| j.stream.cached <= Share.short_rows;
++    const from = if (j.fill_began) j.stream.cached else @max(j.stream.cached, j.stream.reuse.at); // not begun: where it resumes
++    return j.stream.prompt_len -| from <= Share.short_rows;
+ }
+ 
+ /// A long prompt's step runs now: none owed, or nothing decoding.
 diff --git a/zig/src/core/lane_host_lone.zig b/zig/src/core/lane_host_lone.zig
 index 89285f6b..de23f66c 100644
 --- a/zig/src/core/lane_host_lone.zig
@@ -1083,15 +1170,41 @@ index 4c4cb585..57e9a087 100644
  
  fn addEach(e: *Engine, ss: []const *Stream, errs: []?anyerror) void {
 diff --git a/zig/src/core/prompt_cache.zig b/zig/src/core/prompt_cache.zig
-index 59a846db..a52812cd 100644
+index 59a846db..2a73a35e 100644
 --- a/zig/src/core/prompt_cache.zig
 +++ b/zig/src/core/prompt_cache.zig
-@@ -148,8 +148,17 @@ pub const Store = struct {
+@@ -56,6 +56,12 @@ pub const Snapshots = struct {
+         forget: ?*const fn (ptr: *anyopaque, dir: [:0]const u8, key: u64) void = null,
+         /// --learn-conversations: the state's image as rows and parts, and copies out of and into kept states.
+         rows: ?*const rows.Image = null,
++        /// A state that copies only what its position fixes (`resident_bytes`) and reads its rows from the owner stream's
++        /// caches, which outlive the stream until it is resumed or dropped (null: none). TF_PROMPT_CACHE_RESIDENT_GIB.
++        save_resident: ?*const fn (ptr: *anyopaque, owner: ?*anyopaque, at: u32) anyerror!Saved = null,
++        resident_bytes: ?*const fn (ptr: *anyopaque) u64 = null,
++        /// Whether `saved` can still be restored (false: a resident state whose rows are gone; null: always).
++        alive: ?*const fn (ptr: *anyopaque, saved: Saved) bool = null,
+     };
+ };
+ 
+@@ -119,6 +125,7 @@ pub const Entry = struct {
+     borrowers: u32 = 0, // outstanding lookups: released by resumed or release, never evicted while borrowed
+     ext: std.ArrayList(*Entry) = .empty, // entries extending its tokens, born later (policy.link): `extended` reads them
+     own: []u32 = &.{}, // the kept prompt's one copy, which `tokens` and at first `last` slice (empty: they own theirs)
++    fixed: u64 = 0, // a resident state's own copy, on the resident floor; its rows (`bytes`, once their stream ends) on the budget
+ };
+ 
+ pub const Counts = struct { hits: u64 = 0, misses: u64 = 0, kept: u64 = 0, evicted: u64 = 0, refused: u64 = 0, failed: u64 = 0 };
+@@ -148,12 +155,74 @@ pub const Store = struct {
      disk: ?*rows.Rows = null, // --learn-conversations: every kept state written behind to disk, read back where it pays
      active_rewind_at: u32 = 0, // the last lookup's rewind state (0: none); hosts keep a pass's states before the next lookup
      links_lost: bool = false, // an allocation failure left the extension links incomplete: `extended` scans
 -
 +    elastic: ?Elastic = null, // null: `budget` stays what startup gave
++    resident_cap: u64 = 0, // TF_PROMPT_CACHE_RESIDENT_GIB: resident states' own copies at most, past the budget (0: none)
++    resident_held: u64 = 0,
++    resident_always: bool = false, // TF_PROMPT_CACHE_RESIDENT_ALWAYS=1 (tests): every mark resident, copies or not
++    resident_prefer: bool = false, // a conversation's own marks resident even where a copy fits (TF_PROMPT_CACHE_RESIDENT_PREFER=0: off)
++    sparing: bool = false, // victims leave resident states alone (a reservation for copies they would not help)
      repeat_log: @import("prompt_cache_repeat.zig").Log = .{},
 +
 +    /// A budget that takes what the streams leave: startup reserved every stream a full window, they hold far less.
@@ -1105,13 +1218,76 @@ index 59a846db..a52812cd 100644
      const SHARED_KEYS = 64;
  
      pub fn init(gpa: Allocator, family: Snapshots, rules: Rules, budget: u64) Store {
-@@ -209,6 +218,24 @@ pub const Store = struct {
+-        return .{ .gpa = gpa, .family = family, .rules = rules, .budget = budget };
++        const cap = if (family.vtable.save_resident != null) residentCap() else 0;
++        const always = if (std.c.getenv("TF_PROMPT_CACHE_RESIDENT_ALWAYS")) |v| std.mem.eql(u8, std.mem.span(v), "1") else false;
++        const prefer = if (std.c.getenv("TF_PROMPT_CACHE_RESIDENT_PREFER")) |v| !std.mem.eql(u8, std.mem.span(v), "0") else true;
++        return .{ .gpa = gpa, .family = family, .rules = rules, .budget = budget, .resident_cap = cap, .resident_always = always and cap > 0, .resident_prefer = prefer and cap > 0 };
++    }
++
++    fn residentCap() u64 {
++        const v = std.c.getenv("TF_PROMPT_CACHE_RESIDENT_GIB") orelse return 0;
++        const g = std.fmt.parseFloat(f64, std.mem.span(v)) catch return 0;
++        return if (g > 0) @intFromFloat(g * (1 << 30)) else 0;
++    }
++
++    /// Whether a mark the budget cannot copy may still keep a resident state.
++    pub fn residentOk(s: *const Store) bool {
++        const f = s.family.vtable.resident_bytes orelse return false;
++        return s.resident_cap >= f(s.family.ptr);
++    }
++
++    /// Whether the state at `at` keeps resident rather than copied: a copy would hold the rows its stream holds too (and
++    /// its ended stream's caches serve the next turn alone), so only shared blocks, which other conversations resume, copy.
++    fn residentMark(s: *const Store, prompt: []const u32, at: u32) bool {
++        if (s.resident_always) return true;
++        if (!s.resident_prefer) return false;
++        const n = @min(prompt.len, @as(usize, at) + s.rules.lookahead);
++        return std.mem.indexOfScalar(u64, s.shared_keys.items, sharedKey(prompt[0..n])) == null;
++    }
++
++    /// A resident state whose rows are gone (its stream's caches went to another state, or were freed).
++    fn gone(s: *const Store, e: *const Entry) bool {
++        const f = s.family.vtable.alive orelse return false;
++        return !f(s.family.ptr, e.saved);
++    }
++
++    /// Resident states' charges follow their rows: none while their stream runs, its caches once it ends; gone ones expire.
++    fn refresh(s: *Store) void {
++        if (s.resident_held == 0) return;
++        const f = s.family.vtable.charged orelse return;
++        for (s.entries.items) |e| if (e.fixed > 0) {
++            if (s.gone(e)) { // its rows went to the stream that resumed it (or freed): it holds nothing past its copy
++                s.held -= e.bytes;
++                e.bytes = 0;
++                e.expired = true;
++                continue;
++            }
++            if (e.expired) continue;
++            const now = f(s.family.ptr, e.saved);
++            s.held = s.held - e.bytes + now;
++            e.bytes = now;
++        };
+     }
+ 
+     pub fn deinit(s: *Store) void {
+@@ -179,6 +248,7 @@ pub const Store = struct {
+         const e = s.entries.orderedRemove(i);
+         policy.unlink(s, e);
+         s.held -= e.bytes;
++        s.resident_held -= e.fixed;
+         if (s.disk) |r| if (!e.expired) rows.write.evicted(r, e); // --spill-gib: an evicted state is written before it goes
+         s.free(e);
+     }
+@@ -209,6 +279,26 @@ pub const Store = struct {
      pub const collectExpired = lifetime.collect;
      pub const release = lifetime.release;
  
 +    /// The elastic budget for a stream about to take `prompt_len` tokens: the room past the streams' live bytes, the
 +    /// next stream's and the margin, evicting kept states least valuable first down to it.
 +    pub fn rebudget(s: *Store, prompt_len: usize) void {
++        s.refresh();
++        s.collectExpired();
 +        const el = s.elastic orelse return;
 +        const streams = el.live() -| s.held -| s.spare();
 +        const next = if (prompt_len > 0) s.family.vtable.bytes(s.family.ptr, @intCast(prompt_len)) else 0;
@@ -1130,7 +1306,27 @@ index 59a846db..a52812cd 100644
      /// What the budget leaves past the kept states and the spare storage: a family readies storage only inside it.
      pub fn room(s: *const Store) u64 {
          return s.budget -| s.held -| s.spare();
-@@ -304,6 +331,7 @@ pub const Store = struct {
+@@ -242,7 +332,7 @@ pub const Store = struct {
+     fn keptNear(s: *const Store, prompt: []const u32, starts: []const u32, spans: []const modes.Span, at: u32) ?u32 {
+         var best: ?u32 = null;
+         for (s.entries.items) |e| {
+-            if (e.expired or e.at > at or at - e.at >= s.rules.min_gap or e.tokens.len > prompt.len or !s.usable(e.at, starts)) continue;
++            if (e.expired or e.at > at or at - e.at >= s.rules.min_gap or e.tokens.len > prompt.len or !s.usable(e.at, starts) or s.gone(e)) continue;
+             if (!std.mem.eql(u32, prompt[0..e.tokens.len], e.tokens) or !modes.equal(e.decode_spans, spans, e.at)) continue;
+             if (best == null or e.at > best.?) best = e.at;
+         }
+@@ -265,6 +355,10 @@ pub const Store = struct {
+             const n = e.tokens.len;
+             if (prompt[n - 1] != e.tokens[n - 1] or !std.mem.eql(u32, prompt[0..n], e.tokens)) continue;
+             if (!modes.equal(e.decode_spans, spans, e.at)) continue;
++            if (s.gone(e)) {
++                e.expired = true;
++                continue;
++            }
+             best = e;
+         }
+         return best;
+@@ -304,6 +398,7 @@ pub const Store = struct {
      /// `lookupRewind` with an explicit last-user end: history may also include later tool or assistant messages.
      pub fn lookupUser(s: *Store, a: Allocator, prompt: []const u32, born: u32, history_len: u32, rewind_len: u32, user_end: u32, shared: []const u32, starts: []const u32, spans: []const modes.Span) !Lookup {
          s.collectExpired();
@@ -1138,7 +1334,35 @@ index 59a846db..a52812cd 100644
          const endpoint = if (s.rules.planned) s.startAt(starts, history_len) else history_len;
          const rewind = if (s.rules.planned) s.startAt(starts, rewind_len -| s.rules.lookahead) else rewind_len -| s.rules.lookahead;
          const endpoint_bytes = if (endpoint > 0 and (endpoint < prompt.len or (s.rules.warm != .off and endpoint == prompt.len)) and endpoint + s.rules.lookahead <= prompt.len) s.family.vtable.bytes(s.family.ptr, endpoint) else 0;
-@@ -457,6 +485,7 @@ pub const Store = struct {
+@@ -343,9 +438,13 @@ pub const Store = struct {
+             const exists = for (s.entries.items) |e| {
+                 if (!e.expired and e.at == at and e.tokens.len == n and n <= prompt.len and std.mem.eql(u32, e.tokens, prompt[0..n]) and modes.equal(e.decode_spans, spans, at)) break true;
+             } else false;
+-            if (!exists) need += s.family.vtable.bytes(s.family.ptr, at);
+-            new += @intFromBool(!exists);
++            const b = s.family.vtable.bytes(s.family.ptr, at);
++            if (exists or ((b > s.budget or s.residentMark(prompt, at)) and s.residentOk())) continue; // kept resident if at all: no room to make
++            need += b;
++            new += 1;
+         }
++        s.sparing = s.resident_cap > 0;
++        defer s.sparing = false;
+         while (s.held + need > s.budget or s.entries.items.len + @min(new, s.most) > s.most) {
+             const i = s.victimBut(from, prompt, born) orelse return;
+             s.remove(i);
+@@ -404,6 +503,11 @@ pub const Store = struct {
+         e.used = s.clock;
+         e.branched = e.branched or s.extended(e); // a turn several continuations share (a re-sent, edited or forked one)
+         s.counts.hits += 1;
++        if (s.gone(e)) { // a resident state hands its rows to the stream that resumed it
++            s.held -= e.bytes;
++            e.bytes = 0;
++            e.expired = true;
++        }
+         const last = s.gpa.dupe(u32, prompt) catch return;
+         if (e.own.len == 0 or e.last.ptr != e.own.ptr) s.gpa.free(e.last); // the first `last` is the tokens' copy
+         e.last = last;
+@@ -457,6 +561,7 @@ pub const Store = struct {
      /// `keep` as a prompt of `born` tokens: a reply's end and its warm pass supersede none of their request's states.
      pub fn keepBorn(s: *Store, prompt: []const u32, born: u32, at: u32, owner: ?*anyopaque, starts: []const u32, spans: []const modes.Span) bool {
          s.collectExpired();
@@ -1146,8 +1370,115 @@ index 59a846db..a52812cd 100644
          const n = @as(usize, at) + s.rules.lookahead;
          if (at == 0 or n > prompt.len) return false;
          s.clock += 1;
+@@ -471,6 +576,12 @@ pub const Store = struct {
+         var owns_decoded = true;
+         defer if (owns_decoded) s.gpa.free(decoded);
+         const bytes = s.family.vtable.bytes(s.family.ptr, at);
++        if ((bytes > s.budget or (s.residentMark(prompt, at) and !shared)) and s.most > 0 and s.residentOk()) {
++            if (s.keepResident(prompt, born, at, owner, decoded, shared)) {
++                owns_decoded = false;
++                return true;
++            }
++        }
+         if (bytes > s.budget or s.most == 0) {
+             s.counts.refused += 1;
+             note("kept nothing at {d} tokens: {d} MiB passes the {d} MiB budget", .{ at, bytes >> 20, s.budget >> 20 });
+@@ -484,7 +595,14 @@ pub const Store = struct {
+                 if (s.family.vtable.trim) |f| f(s.family.ptr, s.budget -| s.held -| bytes); // spare that cannot take this state goes before any state
+                 if (s.spare() < free_) continue;
+             }
+-            s.remove(s.victimBut(null, prompt, born) orelse return s.fail(at, error.CacheBorrowed)); // its storage may come back spare and take this state
++            const victim = s.victimBut(null, prompt, born) orelse { // every state borrowed or resident: keep this one resident
++                if (s.residentOk() and s.keepResident(prompt, born, at, owner, decoded, shared)) {
++                    owns_decoded = false;
++                    return true;
++                }
++                return s.fail(at, error.CacheBorrowed);
++            };
++            s.remove(victim); // its storage may come back spare and take this state
+             s.counts.evicted += 1;
+         }
+         if (s.entries.items.len == 0) if (s.family.vtable.trim) |f| f(s.family.ptr, s.budget -| bytes);
+@@ -514,6 +632,43 @@ pub const Store = struct {
+         return true;
+     }
+ 
++    /// A copy of only what `at` fixes, its rows read from the owner stream's caches (which outlive it), on the resident
++    /// floor: the oldest resident states go to make room. False: none kept (`decoded` stays the caller's).
++    fn keepResident(s: *Store, prompt: []const u32, born: u32, at: u32, owner: ?*anyopaque, decoded: []modes.Span, shared: bool) bool {
++        const fixed = s.family.vtable.resident_bytes.?(s.family.ptr);
++        while (s.resident_held + fixed > s.resident_cap) {
++            var oldest: ?usize = null;
++            for (s.entries.items, 0..) |e, i| if (e.fixed > 0 and e.borrowers == 0 and (oldest == null or e.used < s.entries.items[oldest.?].used)) {
++                oldest = i;
++            };
++            s.remove(oldest orelse return false);
++            s.counts.evicted += 1;
++        }
++        const n = @as(usize, at) + s.rules.lookahead;
++        const e = s.gpa.create(Entry) catch return false;
++        const last = s.gpa.dupe(u32, prompt) catch {
++            s.gpa.destroy(e);
++            return false;
++        };
++        const saved = s.family.vtable.save_resident.?(s.family.ptr, owner, at) catch |err| {
++            s.gpa.free(last);
++            s.gpa.destroy(e);
++            note("keeping {d} tokens resident failed ({s})", .{ at, @errorName(err) });
++            return false;
++        };
++        e.* = .{ .tokens = last[0..n], .decode_spans = decoded, .at = at, .saved = saved, .bytes = 0, .fixed = fixed, .born = born, .used = s.clock, .last = last, .shared = shared, .own = last };
++        s.entries.append(s.gpa, e) catch {
++            s.family.vtable.drop(s.family.ptr, saved);
++            s.gpa.free(last);
++            s.gpa.destroy(e);
++            return false;
++        };
++        policy.link(s, e);
++        s.resident_held += fixed;
++        s.counts.kept += 1;
++        return true;
++    }
++
+     /// A learned state on disk longer than `have`, read back as a shared entry; else `have` (none, or reading failed).
+     fn recall(s: *Store, prompt: []const u32, born: u32, starts: []const u32, spans: []const modes.Span, have: ?*Entry) ?*Entry {
+         const im = s.imprint orelse return have;
+diff --git a/zig/src/core/prompt_cache_fit.zig b/zig/src/core/prompt_cache_fit.zig
+index edef1cf9..b20f86be 100644
+--- a/zig/src/core/prompt_cache_fit.zig
++++ b/zig/src/core/prompt_cache_fit.zig
+@@ -9,7 +9,7 @@ pub fn fitting(s: *pc.Store, a: Allocator, marks_: []const u32) ![]const u32 {
+     var out: std.ArrayList(u32) = .empty;
+     for (marks_) |at| {
+         const bytes = s.family.vtable.bytes(s.family.ptr, at);
+-        if (bytes <= s.budget) try out.append(a, at) else {
++        if (bytes <= s.budget or s.residentOk()) try out.append(a, at) else {
+             s.counts.refused += 1;
+             pc.note("kept nothing at {d} tokens: {d} MiB passes the {d} MiB budget", .{ at, bytes >> 20, s.budget >> 20 });
+         }
+@@ -25,7 +25,7 @@ pub fn fittingRewind(s: *pc.Store, a: Allocator, marks_: []const u32, endpoint:
+     if (endpoint_bytes <= s.budget and endpoint_bytes > 0) {
+         used = endpoint_bytes;
+         if (std.mem.indexOfScalar(u32, marks_, endpoint) != null) try out.append(a, endpoint);
+-    }
++    } else if (endpoint_bytes > 0 and s.residentOk() and std.mem.indexOfScalar(u32, marks_, endpoint) != null) try out.append(a, endpoint); // kept resident
+     if (s.active_rewind_at == rewind and std.mem.indexOfScalar(u32, marks_, rewind) != null) try out.append(a, rewind);
+     if (s.active_rewind_at == rewind) used += s.family.vtable.bytes(s.family.ptr, rewind);
+     for (marks_) |at| {
+diff --git a/zig/src/core/prompt_cache_policy.zig b/zig/src/core/prompt_cache_policy.zig
+index 745b64ba..335964de 100644
+--- a/zig/src/core/prompt_cache_policy.zig
++++ b/zig/src/core/prompt_cache_policy.zig
+@@ -7,6 +7,7 @@ pub fn victimBut(s: *const pc.Store, skip: ?*pc.Entry, prompt: []const u32, born
+     var oldest: ?usize = null;
+     var oldest_rewind = false;
+     for (s.entries.items, 0..) |e, i| { // one prefix compare an entry: the superseded scan and the oldest scan share it
++        if (e.fixed > 0 and (e.bytes == 0 or s.sparing)) continue; // freeing it gives the budget nothing (or nothing wanted)
+         const on = e.tokens.len <= prompt.len and std.mem.eql(u32, prompt[0..e.tokens.len], e.tokens);
+         const rewind = !e.expired and e.at == s.active_rewind_at and on; // the active rewind state goes last
+         if (e.borrowers == 0 and e != skip and (oldest == null or (if (rewind != oldest_rewind) oldest_rewind else e.used < s.entries.items[oldest.?].used))) {
 diff --git a/zig/src/families/flashnext/cuda_batch.zig b/zig/src/families/flashnext/cuda_batch.zig
-index 6066b1ea..02963f1a 100644
+index 6066b1ea..36399e02 100644
 --- a/zig/src/families/flashnext/cuda_batch.zig
 +++ b/zig/src/families/flashnext/cuda_batch.zig
 @@ -18,6 +18,8 @@ const ops = @import("cuda_batch_ops.zig");
@@ -1228,6 +1559,15 @@ index 6066b1ea..02963f1a 100644
          }
  
          /// Prompt rows' read-out on flashnext_hcf.cu's tiles, fn_hc_down's and fn_hc_upmix's bits (K slices folded).
+@@ -212,7 +239,7 @@ pub fn Pass(comptime Tri: type) type {
+                 try self.tri.hcDenseMix(s.hc_up, norm, s.mixed + r0 * dims * 2, s.xsm + r0 * (dims / 32) * 4, n, dims, streams);
+                 return;
+             }
+-            if (n >= 64 and self.tri.readoutTilesOwned() and std.meta.eql(keep, HcKeep{})) return self.readoutTiles(hc_w, r0, n);
++            if (n >= @import("cuda_tile_rows.zig").readout() and self.tri.readoutTilesOwned() and std.meta.eql(keep, HcKeep{})) return self.readoutTiles(hc_w, r0, n);
+             try self.copy(keep.h, h, n * wide * 2);
+             try self.tri.hcDown(h, pss, hc_w.scale.ptr, norm, hc_w.down.w.ptr, hc_w.down.s.ptr, hc_w.down.b.ptr, s.dn, s.hc_part, eps, n, hc_w.n_down, wide, dims, dims / 256, streams, hc_sk);
+             if (keep.v != 0) try self.sumSlices(s.hc_part, keep.v, false, n * hc_w.n_down, hc_sk);
 @@ -255,6 +282,7 @@ pub fn Pass(comptime Tri: type) type {
              const s = self.s;
              const n = self.rows;
@@ -1267,8 +1607,12 @@ index 6066b1ea..02963f1a 100644
              try self.copy(keep.moe_ids, s.picks, pairs * 4);
              try self.copy(keep.moe_wts, s.wts, pairs * 4);
              const e = experts_n + 1;
-@@ -459,9 +493,12 @@ pub fn Pass(comptime Tri: type) type {
-             if (n >= 64) {
+@@ -456,12 +490,15 @@ pub fn Pass(comptime Tri: type) type {
+                 }
+                 return;
+             }
+-            if (n >= 64) {
++            if (n >= @import("cuda_tile_rows.zig").experts()) {
                  // prompt rows on 64-pair factored tiles, expert_rows' bits
                  try self.k.router.route(self.stream, s.picks, pairs, e, tk.fexp_tile, plan);
 +                kt.lap(self.stream, "moe_route");
@@ -2003,7 +2347,7 @@ index 00000000..f7a11e27
 +    try std.testing.expectEqual(@as(usize, 2 * 256 + 2 * 8 * 2), rowBytes());
 +}
 diff --git a/zig/src/families/flashnext/cuda_lanes.zig b/zig/src/families/flashnext/cuda_lanes.zig
-index c6a62a8c..a1016bd0 100644
+index c6a62a8c..1c7a33cc 100644
 --- a/zig/src/families/flashnext/cuda_lanes.zig
 +++ b/zig/src/families/flashnext/cuda_lanes.zig
 @@ -20,6 +20,41 @@ const be = lanes.backend;
@@ -2048,7 +2392,18 @@ index c6a62a8c..a1016bd0 100644
  /// The Triton entry points the pass launches and the head's two more: a captured set replaces our glue with all.
  pub const captured_entries = [_][]const u8{ "_embed", "_hc_writeback", "_qmm_hcdown", "_hc_reduce_act", "_qmm_upmix", "_ple_gate", "_ple_conv", "_attn_prep", "_attn_gate", "_pool", "_scores", "_chunks", "_merge", "_router", "_topk_rows" };
  pub const captured_head_entries = [_][]const u8{ "_rmsnorm", "_add_streams" };
-@@ -50,6 +85,8 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -40,6 +75,10 @@ pub fn Namespace(comptime Tri: type) type {
+         pub const snap_save = snapSave;
+         pub const snap_restore = snapRestore;
+         pub const snap_drop = snapDrop;
++        pub const snap_charged = snapCharged;
++        pub const snap_save_resident = snapSaveResident;
++        pub const snap_resident_bytes = snapResidentBytes;
++        pub const snap_alive = snapAlive;
+         /// TF_FLASHNEXT_KV_PAGES: the pool's lanes, the pages of a request's rows and a drafted window (kvl).
+         pub const window_rows = kvl.window_rows;
+         pub fn attach(p: *anyopaque, streams: u32, count: usize) !void {
+@@ -50,6 +89,8 @@ pub fn Namespace(comptime Tri: type) type {
          pub fn fits(p: *anyopaque, rows: u32, max_tokens: u32) bool {
              return of(p).kv.fits(rows, max_tokens);
          }
@@ -2057,7 +2412,7 @@ index c6a62a8c..a1016bd0 100644
          /// The pass ignores its cuts, so states keep at any token; the MTP head reads one token on (lookahead 1).
          pub const cache_rules = struct {
              pub const lookahead: u32 = 1;
-@@ -57,7 +94,9 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -57,7 +98,9 @@ pub fn Namespace(comptime Tri: type) type {
              pub const min_gap: u32 = 256;
              pub const min_prompt: u32 = 512;
          };
@@ -2068,7 +2423,13 @@ index c6a62a8c..a1016bd0 100644
          /// Living Weights' learner (--slide): lessons put neurons in each layer's pocket beside its shared expert.
          pub const slide = slide_mod.Slide(Tri);
          /// The first file a lesson would rewrite through a link, or null: a teaching copy may hard-link the others.
-@@ -135,6 +174,9 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -131,10 +174,15 @@ pub fn Namespace(comptime Tri: type) type {
+             filled: ?usize = 0,
+             /// Where its caches came from: the pool's lanes, or its own (the one a pool leaves beside it).
+             from: kvl.From = .none,
++            /// Its caches as resident prompt states read them (cuda_snap.Orphan), once one is kept.
++            orphan: ?*snap.Orphan = null,
+         };
  
          const Ops = mtp.Ops(Tri);
  
@@ -2078,7 +2439,7 @@ index c6a62a8c..a1016bd0 100644
          pub const Cuda = struct {
              gpa: std.mem.Allocator,
              context: usize,
-@@ -156,6 +198,8 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -156,6 +204,8 @@ pub fn Namespace(comptime Tri: type) type {
              /// --slide: the pocket's layout, from config.json at load.
              lay: living.Layout = undefined,
              kv: kvl.State = .{},
@@ -2087,7 +2448,7 @@ index c6a62a8c..a1016bd0 100644
  
              pub fn tri(self: *Cuda) Tri {
                  return .{ .set = if (self.set) |*x| x else null, .own = &self.glue, .s = self.stream };
-@@ -190,6 +234,9 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -190,6 +240,9 @@ pub fn Namespace(comptime Tri: type) type {
                      .prefill = prefillFn,
                      .prefill_step = prefillStepFn,
                      .cancel_prefill = cancelPrefillFn,
@@ -2097,7 +2458,7 @@ index c6a62a8c..a1016bd0 100644
                      .first = firstFn,
                      .queue = queueFn,
                      .read = readFn,
-@@ -259,6 +306,9 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -259,6 +312,9 @@ pub fn Namespace(comptime Tri: type) type {
              fn open(self: *Cuda, s: *lanes.Stream) !*Lane {
                  const ids = s.prompt();
                  if (ids.len == 0 or ids.len + s.max_new > self.context) return error.PromptTooLong;
@@ -2107,7 +2468,7 @@ index c6a62a8c..a1016bd0 100644
                  const gop = try self.lanes.getOrPut(self.gpa, s);
                  if (gop.found_existing) dropLane(self, gop.value_ptr);
                  const drafting = self.head != null and s.drafts;
-@@ -270,6 +320,7 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -270,6 +326,7 @@ pub fn Namespace(comptime Tri: type) type {
                  // a window's rows past the reply's last token (its drafts) still need cache slots
                  const cap = @min(ids.len + s.max_new + (if (drafting) mtp.max_rows else 0), prompt.max_tokens);
                  const from = self.kv.choose();
@@ -2115,7 +2476,7 @@ index c6a62a8c..a1016bd0 100644
                  gop.value_ptr.* = .{ .seq = (if (self.ranks) |r| r.create(cap) else if (from == .pool) self.kv.pool.?.open(cap) else self.engine.newSeq(cap)) catch |err| {
                      self.lanes.removeByPtr(gop.key_ptr);
                      return err;
-@@ -281,7 +332,9 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -281,7 +338,9 @@ pub fn Namespace(comptime Tri: type) type {
                      dropLane(self, l);
                      self.lanes.removeByPtr(gop.key_ptr);
                  }
@@ -2125,7 +2486,13 @@ index c6a62a8c..a1016bd0 100644
                  if (s.images.len != 0) {
                      const v = self.vision orelse return error.VisionNotEnabled;
                      l.seq.media = try v.state(ids, s.images);
-@@ -305,6 +358,15 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -300,11 +359,20 @@ pub fn Namespace(comptime Tri: type) type {
+                     l.filled = kept.at;
+                     s.cached = @intCast(kept.at);
+                 } else |err| switch (err) {
+-                    error.SequenceTooShort, error.NoHeadState => s.reuse_failed = true,
++                    error.SequenceTooShort, error.NoHeadState, error.StateGone, error.NoResident => s.reuse_failed = true,
+                     else => return err,
                  }
                  return l;
              }
@@ -2141,7 +2508,7 @@ index c6a62a8c..a1016bd0 100644
              /// One prompt chunk, cut at the next cache mark; true once the last row's scores are in seq.logits.
              fn step(self: *Cuda, s: *lanes.Stream, l: *Lane) !bool {
                  const ids = s.prompt();
-@@ -313,23 +375,79 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -313,23 +381,79 @@ pub fn Namespace(comptime Tri: type) type {
                      s.keepInterruptedPrefill(@intCast(at));
                      return error.Cancelled;
                  }
@@ -2224,7 +2591,16 @@ index c6a62a8c..a1016bd0 100644
              }
          };
          pub fn envUsize(name: [:0]const u8, default: usize) usize {
-@@ -389,11 +507,107 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -372,6 +496,8 @@ pub fn Namespace(comptime Tri: type) type {
+ 
+         fn dropLane(self: *Cuda, l: *Lane) void {
+             cuda.completion.drain(self.engine.driver, self.stream, "flashnext: a failed or closed lane did not drain");
++            if (l.orphan) |o| snap.close(self.gpa, o, &l.seq, if (l.draft) |*d| d else null);
++            l.orphan = null;
+             if (l.draft) |*d| d.deinit();
+             if (self.ranks) |r| r.drop(&l.seq) else if (!self.kv.close(l.from, &l.seq)) l.seq.deinit(self.gpa);
+         }
+@@ -389,11 +515,107 @@ pub fn Namespace(comptime Tri: type) type {
          /// One chunk of the stream's prompt between the other streams' rounds; the first call opens its caches.
          fn prefillStepFn(ptr: *anyopaque, s: *lanes.Stream) anyerror!bool {
              const self = of(ptr);
@@ -2332,7 +2708,7 @@ index c6a62a8c..a1016bd0 100644
              if (of(ptr).lanes.getPtr(s)) |l| if (l.filled) |at| s.keepInterruptedPrefill(@intCast(at));
          }
  
-@@ -463,7 +677,24 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -463,7 +685,24 @@ pub fn Namespace(comptime Tri: type) type {
                  if (w.tokens.len > 0) @memcpy(o.drafts[0..w.tokens.len], w.tokens);
              }
              const cap = @min(@min(envUsize("TF_FLASHNEXT_WINDOW_ROWS", mtp.round_rows), mtp.round_rows), self.engine.chunk);
@@ -2357,7 +2733,7 @@ index c6a62a8c..a1016bd0 100644
              var at: usize = 0;
              while (at < plain) : (at += round_streams) {
                  const n = @min(round_streams, plain - at);
-@@ -488,7 +719,8 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -488,7 +727,8 @@ pub fn Namespace(comptime Tri: type) type {
              const self = of(ptr);
              if (self.head == null) return error.NoDraftHead;
              defer lanes_draft.depthLog(self, requests);
@@ -2367,7 +2743,7 @@ index c6a62a8c..a1016bd0 100644
              var batched: [mtp_ops.max_lanes]bool = @splat(false);
              if (lanes_draft.batchHeads() and requests.len > 1 and requests.len <= mtp_ops.max_lanes) try lanes_draft.batched(self, requests, &batched);
              for (requests, 0..) |r, ri| {
-@@ -534,6 +766,9 @@ pub fn Namespace(comptime Tri: type) type {
+@@ -534,6 +774,9 @@ pub fn Namespace(comptime Tri: type) type {
  
          fn releaseFn(ptr: *anyopaque, s: *lanes.Stream) void {
              const self = of(ptr);
@@ -2377,6 +2753,41 @@ index c6a62a8c..a1016bd0 100644
              if (self.lanes.fetchRemove(s)) |kv| {
                  var l = kv.value;
                  // its rounds drain first, or the process ends: a failed wait never frees what the GPU may still use
+@@ -591,6 +834,34 @@ pub fn Namespace(comptime Tri: type) type {
+             try snap.restore(self.stream, &l.seq, if (l.draft) |*d| d else null, @ptrCast(@alignCast(saved)));
+         }
+ 
++        fn snapCharged(ptr: *anyopaque, saved: *anyopaque) u64 {
++            if (of(ptr).ranks != null) return snap.bytes(@as(*snap.Snap, @ptrCast(@alignCast(saved))).at, of(ptr).head != null);
++            return snap.charged(@ptrCast(@alignCast(saved)));
++        }
++
++        fn snapResidentBytes(_: *anyopaque) u64 {
++            return snap.fixedBytes();
++        }
++
++        fn snapAlive(ptr: *anyopaque, saved: *anyopaque) bool {
++            if (of(ptr).ranks != null) return true;
++            return snap.alive(@ptrCast(@alignCast(saved)));
++        }
++
++        /// The owner stream's fixed state at `at`, its rows left in its caches (which outlive it): a full window's
++        /// return turn resumes without the copy the budget had no room for.
++        fn snapSaveResident(ptr: *anyopaque, owner: ?*anyopaque, at: u32) anyerror!*anyopaque {
++            const self = of(ptr);
++            const s: *lanes.Stream = @ptrCast(@alignCast(owner orelse return error.NoStream));
++            const l = try self.lane(s);
++            if (l.seq.fed != at) return error.NotAtMark;
++            if (self.ranks != null or l.from == .pool) return error.NoResident;
++            const d = if (l.draft) |*x| x else null;
++            const o = l.orphan orelse try snap.orphanOf(self.gpa, &l.seq, d);
++            l.orphan = o;
++            return try snap.saveResident(self.gpa, self.engine.driver, self.stream, &l.seq, d, o);
++        }
++
+         fn snapDrop(ptr: *anyopaque, saved: *anyopaque) void {
+             const self = of(ptr);
+             if (self.ranks) |r| return r.dropSaved(@ptrCast(@alignCast(saved)));
 diff --git a/zig/src/families/flashnext/cuda_lanes_draft.zig b/zig/src/families/flashnext/cuda_lanes_draft.zig
 index 1d6bae4f..95591b16 100644
 --- a/zig/src/families/flashnext/cuda_lanes_draft.zig
@@ -4396,7 +4807,7 @@ index 00000000..07ea5676
 +    try std.testing.expectEqual(@as(usize, (1 << 20) + (1 << 17)), rounded((1 << 20) + 1));
 +}
 diff --git a/zig/src/families/flashnext/cuda_snap.zig b/zig/src/families/flashnext/cuda_snap.zig
-index 13608e73..bfe42f79 100644
+index 13608e73..d92bda49 100644
 --- a/zig/src/families/flashnext/cuda_snap.zig
 +++ b/zig/src/families/flashnext/cuda_snap.zig
 @@ -5,9 +5,20 @@ const cuda = @import("cuda");
@@ -4429,7 +4840,116 @@ index 13608e73..bfe42f79 100644
  }
  
  /// Device bytes a state after `at` tokens takes: the DeltaNet's are fixed, each attention cache grows by the token.
-@@ -39,8 +50,8 @@ const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
+@@ -23,15 +34,108 @@ pub fn bytes(at: usize, head: bool) usize {
+     return wt.linear_n * (conv_bytes + state_bytes) + (wt.attn_n + @intFromBool(head)) * attnBytes(at) + tail_bytes;
+ }
+ 
++/// Device bytes a resident state copies: the DeltaNet's conv windows and states and the n-gram tail, at any position.
++pub fn fixedBytes() usize {
++    return wt.linear_n * (conv_bytes + state_bytes) + tail_bytes;
++}
++
+ /// One kept state; `head`: it holds the MTP head's cache over the same rows, which a drafting stream needs.
++/// A resident one (`src`) copies only `fixedBytes`; its attention rows stay in its stream's caches.
+ pub const Snap = struct {
+     rank_id: u64 = 0,
+     buf: cuda.DeviceBuffer,
+     at: usize,
+     history: [2]i64,
+     head: bool,
++    src: ?*Orphan = null,
++    /// A resident state whose rows went to another: a later one on the same caches, or the stream that resumed it.
++    dead: bool = false,
++};
++
++/// A stream's attention caches (and its head's) that resident states read their rows from: the stream's own while it
++/// runs; when it ends with a live state on them, these buffers alone, freed once that state is resumed or dropped.
++pub const Orphan = struct {
++    gpa: std.mem.Allocator, // the slices' allocator once owned
++    kc: []cuda.DeviceBuffer,
++    vc: []cuda.DeviceBuffer,
++    ikc: []cuda.DeviceBuffer,
++    pooled: []cuda.DeviceBuffer,
++    head: ?[4]cuda.DeviceBuffer = null, // the head's keys, values, indexer keys and pooled rows
++    lane: bool = true, // its stream still runs on them
++    owned: bool = false, // its stream ended and left them here
++    refs: u32 = 0, // states made on them, dead or not
++    anchor: ?*Snap = null, // the one live state on them
++    bytes: u64 = 0, // driver bytes of the buffers it owns
+ };
+ 
++/// Whether `snap` can still be restored: a copy always, a resident state while its rows last.
++pub fn alive(snap: *const Snap) bool {
++    const o = snap.src orelse return true;
++    return !snap.dead and (o.lane or o.owned);
++}
++
++/// The bytes a state holds beyond the resident floor: a copy's, or a resident state's ended stream's caches.
++pub fn charged(snap: *const Snap) u64 {
++    const o = snap.src orelse return bytes(snap.at, snap.head);
++    return if (!snap.dead and o.owned and o.anchor == snap) o.bytes else 0;
++}
++
++/// A stream's caches, for resident states; null when they cannot serve one (pages, a pool lane's head).
++pub fn orphanOf(gpa: std.mem.Allocator, seq: *prompt.Seq, d: ?*Draft) !*Orphan {
++    if (seq.paged != null) return error.NoResident;
++    if (d) |h| if (h.pg.pt != 0) return error.NoResident;
++    const o = try gpa.create(Orphan);
++    o.* = .{ .gpa = gpa, .kc = seq.kc, .vc = seq.vc, .ikc = seq.ikc, .pooled = seq.pooled, .head = if (d) |h| .{ h.kc, h.vc, h.ikc, h.pooled } else null };
++    return o;
++}
++
++/// Its stream ends: with a live state on the caches they stay here (taken out of `seq` and `d`, which free the rest);
++/// without one the orphan goes once no state names it.
++pub fn close(gpa: std.mem.Allocator, o: *Orphan, seq: *prompt.Seq, d: ?*Draft) void {
++    o.lane = false;
++    const live = if (o.anchor) |a| !a.dead else false;
++    if (!live) {
++        if (o.refs == 0) gpa.destroy(o);
++        return;
++    }
++    var n: u64 = 0;
++    for ([_][]cuda.DeviceBuffer{ seq.kc, seq.vc, seq.ikc, seq.pooled }) |bs| for (bs) |b| {
++        n += b.len;
++    };
++    o.kc = seq.kc;
++    o.vc = seq.vc;
++    o.ikc = seq.ikc;
++    o.pooled = seq.pooled;
++    seq.kc = &.{};
++    seq.vc = &.{};
++    seq.ikc = &.{};
++    seq.pooled = &.{};
++    if (d) |h| {
++        o.head = .{ h.kc, h.vc, h.ikc, h.pooled };
++        for (o.head.?) |b| n += b.len;
++        inline for (.{ &h.kc, &h.vc, &h.ikc, &h.pooled }) |b| b.* = .{ .d = b.d, .ptr = 0, .len = 0 };
++    }
++    o.owned = true;
++    o.bytes = n;
++}
++
++/// The ended stream's caches back to the driver (a state resumed them, or the last state on them went).
++fn release(o: *Orphan) void {
++    if (!o.owned) return;
++    for ([_][]cuda.DeviceBuffer{ o.kc, o.vc, o.ikc, o.pooled }) |bs| {
++        for (bs) |*b| recycle.free(b);
++        o.gpa.free(bs);
++    }
++    if (o.head) |*hs| for (hs) |*b| recycle.free(b);
++    o.kc = &.{};
++    o.vc = &.{};
++    o.ikc = &.{};
++    o.pooled = &.{};
++    o.head = null;
++    o.owned = false;
++    o.bytes = 0;
++}
++
+ const Way = enum { save, restore };
+ 
+ const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
+@@ -39,8 +143,8 @@ const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
  /// An attention cache's pieces for `at` rows: complete pooled blocks only (the rest pool again as later rows land).
  fn attnPieces(kc: []cuda.DeviceBuffer, vc: []cuda.DeviceBuffer, ikc: []cuda.DeviceBuffer, pooled: []cuda.DeviceBuffer, at: usize) [4]Piece {
      return .{
@@ -4440,7 +4960,7 @@ index 13608e73..bfe42f79 100644
          .{ .bufs = ikc, .n = at * index_row },
          .{ .bufs = pooled, .n = at / wt.index_ratio * index_row },
      };
-@@ -93,13 +104,16 @@ fn move(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, base: u64, at: usize,
+@@ -93,34 +197,101 @@ fn move(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, base: u64, at: usize,
  pub fn save(gpa: std.mem.Allocator, driver: *const cuda.Driver, stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft) !*Snap {
      const at = seq.fed;
      if (d) |h| if (h.len != at or h.drafted != 0) return error.NotAtMark;
@@ -4455,26 +4975,93 @@ index 13608e73..bfe42f79 100644
      try move(stream, seq, d, snap.buf.ptr, at, .save);
      try stream.synchronize();
 +    if (t0 != 0) std.debug.print("snap save at={d}: alloc {d} us, copy {d} us\n", .{ at, t1 - t0, traceUs() - t1 });
++    return snap;
++}
++
++/// The DeltaNet's conv windows and states and the n-gram tail to or from the buffer at `base`.
++fn moveFixed(stream: cuda.Stream, seq: *prompt.Seq, base: u64, way: Way) !void {
++    const dr = stream.d;
++    var off: u64 = 0;
++    const pieces = [_]Piece{ .{ .bufs = seq.conv, .n = conv_bytes }, .{ .bufs = seq.state, .n = state_bytes }, .{ .bufs = (&seq.tail)[0..1], .n = tail_bytes } };
++    for (pieces) |p| for (p.bufs) |b| {
++        const dst, const src = if (way == .save) .{ base + off, b.ptr } else .{ b.ptr, base + off };
++        try dr.check(dr.api.cuMemcpyDtoDAsync_v2(dst, src, p.n, stream.handle), "cuMemcpyDtoDAsync");
++        off += p.n;
++    };
++    std.debug.assert(off == fixedBytes());
++}
++
++/// A resident state of `seq` after `seq.fed` tokens: its fixed part copied, its rows left in the caches `o` names.
++pub fn saveResident(gpa: std.mem.Allocator, driver: *const cuda.Driver, stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, o: *Orphan) !*Snap {
++    const at = seq.fed;
++    if (d) |h| if (h.len != at or h.drafted != 0) return error.NotAtMark;
++    if (seq.paged != null or (d != null) != (o.head != null) or !o.lane) return error.NoResident;
++    const snap = try gpa.create(Snap);
++    errdefer gpa.destroy(snap);
++    snap.* = .{ .buf = try recycle.alloc(driver, fixedBytes()), .at = at, .history = seq.history, .head = d != null, .src = o };
++    errdefer recycle.free(&snap.buf);
++    errdefer cuda.completion.drain(driver, stream, "a failed resident save did not drain");
++    try moveFixed(stream, seq, snap.buf.ptr, .save);
++    try stream.synchronize();
++    if (o.anchor) |old| old.dead = true;
++    o.anchor = snap;
++    o.refs += 1;
      return snap;
  }
  
-@@ -108,8 +122,10 @@ pub fn restore(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, snap: *const S
++/// A resident state's rows from its caches into `seq` (and the head's, with `d`), its fixed part from its buffer.
++fn restoreResident(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, snap: *const Snap) !void {
++    const o = snap.src.?;
++    if (!alive(snap)) return error.StateGone;
++    if (seq.paged != null) return error.NoResident;
++    if (d) |h| if (h.pg.pt != 0 or o.head == null) return error.NoHeadState;
++    const dr = stream.d;
++    try moveFixed(stream, seq, snap.buf.ptr, .restore);
++    const from = attnPieces(o.kc, o.vc, o.ikc, o.pooled, snap.at);
++    const to = attnPieces(seq.kc, seq.vc, seq.ikc, seq.pooled, snap.at);
++    for (from, to) |f, t| for (f.bufs, t.bufs) |fb, tb| if (f.n > 0) {
++        try dr.check(dr.api.cuMemcpyDtoDAsync_v2(tb.ptr, fb.ptr, f.n, stream.handle), "cuMemcpyDtoDAsync");
++    };
++    if (d) |h| {
++        const hs = o.head.?;
++        const n = [4]usize{ snap.at * prompt.kvRowBytes(), snap.at * prompt.kvRowBytes(), snap.at * index_row, snap.at / wt.index_ratio * index_row };
++        const dst = [4]u64{ h.kc.ptr, h.vc.ptr, h.ikc.ptr, h.pooled.ptr };
++        for (hs, dst, n) |fb, t, k| if (k > 0) try dr.check(dr.api.cuMemcpyDtoDAsync_v2(t, fb.ptr, k, stream.handle), "cuMemcpyDtoDAsync");
++    }
++}
++
+ /// `seq` (and the head's cache, with `d`) becomes `snap`'s state; refused before any copy when it cannot hold it.
++/// A resident state whose stream ended hands its rows over: its caches go back once copied.
+ pub fn restore(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, snap: *const Snap) !void {
      if (snap.at > seq.cap) return error.SequenceTooShort;
      if (d) |h| if (!snap.head or snap.at > h.cap) return error.NoHeadState;
      // a state with the head's rows serves a stream without drafts too: those rows stay in the buffer
+-    try move(stream, seq, d, snap.buf.ptr, snap.at, .restore);
 +    const t0 = traceUs();
-     try move(stream, seq, d, snap.buf.ptr, snap.at, .restore);
++    if (snap.src != null) try restoreResident(stream, seq, d, snap) else try move(stream, seq, d, snap.buf.ptr, snap.at, .restore);
      try stream.synchronize();
 +    if (t0 != 0) std.debug.print("snap restore at={d}: {d} us\n", .{ snap.at, traceUs() - t0 });
      seq.history = snap.history;
      seq.fed = snap.at;
      if (d) |h| {
-@@ -120,7 +136,7 @@ pub fn restore(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, snap: *const S
+         h.reset();
+         h.len = snap.at;
+     }
++    if (snap.src) |o| release(o); // its stream ended: the rows are this one's now, and no state reads them again
+ }
  
  pub fn drop(gpa: std.mem.Allocator, stream: cuda.Stream, snap: *Snap) void {
      cuda.completion.drain(stream.d, stream, "a snapshot drop did not drain");
 -    snap.buf.free();
 +    recycle.free(&snap.buf);
++    if (snap.src) |o| {
++        o.refs -= 1;
++        if (o.anchor == snap) o.anchor = null;
++        if (o.refs == 0 and !o.lane) {
++            release(o);
++            gpa.destroy(o);
++        }
++    }
      gpa.destroy(snap);
  }
  
@@ -4508,8 +5095,40 @@ index edb68ce9..d23500e6 100644
          k.hcf_mod = try cuda.Module.load(d, cuda.kernels.flashnext_hcf);
          errdefer k.hcf_mod.unload();
          k.hcf_down = try k.hcf_mod.function(cubin_hcf_down);
+diff --git a/zig/src/families/flashnext/cuda_tile_rows.zig b/zig/src/families/flashnext/cuda_tile_rows.zig
+new file mode 100644
+index 00000000..c6f6e742
+--- /dev/null
++++ b/zig/src/families/flashnext/cuda_tile_rows.zig
+@@ -0,0 +1,26 @@
++//! Rows from which a pass takes the prompt tiles in place of the row kernels (each bit for bit the other):
++//! TF_TILE_EXPERTS_ROWS, TF_TILE_READOUT_ROWS and TF_TILE_MATMUL_ROWS, default 64 each.
++const std = @import("std");
++
++fn read(comptime name: [:0]const u8) usize {
++    const Cached = struct {
++        var rows: ?usize = null;
++    };
++    if (Cached.rows) |n| return n;
++    const text = std.mem.span(std.c.getenv(name) orelse "");
++    const n = std.fmt.parseInt(usize, text, 10) catch 64;
++    Cached.rows = n;
++    return n;
++}
++
++pub fn experts() usize {
++    return read("TF_TILE_EXPERTS_ROWS");
++}
++
++pub fn readout() usize {
++    return read("TF_TILE_READOUT_ROWS");
++}
++
++pub fn matmul() usize {
++    return read("TF_TILE_MATMUL_ROWS");
++}
 diff --git a/zig/src/families/flashnext/cuda_tiles.zig b/zig/src/families/flashnext/cuda_tiles.zig
-index a623d411..3459593b 100644
+index a623d411..c83ac95b 100644
 --- a/zig/src/families/flashnext/cuda_tiles.zig
 +++ b/zig/src/families/flashnext/cuda_tiles.zig
 @@ -3,6 +3,7 @@ const cuda = @import("cuda");
@@ -4520,6 +5139,15 @@ index a623d411..3459593b 100644
  
  const dims = wt.dims;
  const streams = wt.streams;
+@@ -45,7 +46,7 @@ pub fn matmul(k: *const Kernels, stream: cuda.Stream, x: u64, xs: u64, w: Q4, ou
+         return sk;
+     }
+     // from 64 rows the prompt tile (flashnext_fact.cu), bit for bit the 16-row lane tile
+-    const big = m >= 64;
++    const big = m >= @import("cuda_tile_rows.zig").matmul();
+     const bm: usize = if (big) 64 else 16;
+     const bn: usize = if (big) 128 else 64;
+     var a: cuda.Args = .{};
 @@ -76,7 +77,9 @@ pub fn readout(tri: anytype, k: *const Kernels, stream: cuda.Stream, s: *Scratch
      a.add(eps);
      for ([_]usize{ dims, nc, streams }) |v| a.add(cint(v));
@@ -4583,6 +5211,20 @@ index cfea8821..a0e6d239 100644
          .first = struct {
              fn f(p: *anyopaque, s: *lanes.Stream, position: u64) anyerror!u64 {
                  const x = H.bind(p);
+diff --git a/zig/src/native/cuda_snaps.zig b/zig/src/native/cuda_snaps.zig
+index 52af0c3b..8743ffc8 100644
+--- a/zig/src/native/cuda_snaps.zig
++++ b/zig/src/native/cuda_snaps.zig
+@@ -40,6 +40,9 @@ pub fn Snaps(comptime F: type, comptime image: ?*const api.prompt_cache.rows.Ima
+             .charged = if (@hasDecl(F, "snap_charged")) F.snap_charged else null,
+             .spare = if (@hasDecl(F, "snap_spare")) F.snap_spare else null,
+             .reuses = if (@hasDecl(F, "snap_reuses")) F.snap_reuses else null,
++            .save_resident = if (@hasDecl(F, "snap_save_resident")) F.snap_save_resident else null,
++            .resident_bytes = if (@hasDecl(F, "snap_resident_bytes")) F.snap_resident_bytes else null,
++            .alive = if (@hasDecl(F, "snap_alive")) F.snap_alive else null,
+         };
+     };
+ }
 diff --git a/zig/tests/cuda/flashnext_cand_tests.zig b/zig/tests/cuda/flashnext_cand_tests.zig
 new file mode 100644
 index 00000000..c883068d
