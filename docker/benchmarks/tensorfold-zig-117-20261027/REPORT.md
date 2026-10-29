@@ -1,9 +1,11 @@
 # TensorFold Zig 1.1.7: millor build de Flash-Next per a setze alumnes
 
-**La millor build (29 d'octubre, `variants/resident7`) és TensorFold 1.1.7 amb
+**La millor build (29 d'octubre, `variants/resident11`) és TensorFold 1.1.7 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
-prompts i la lectura HC per files a les rondes de resposta. Iguala o supera el
+prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
+els fluxos d'una ronda en un sol llançament per kernel (un 11% menys per ronda
+de resposta a 74k). Iguala o supera el
 Python en la càrrega d'agent, en les rondes de retorn i en el primer token
 mitjà amb contextos de 45k i 74k. Només perd en el temps total de la primera
 ronda freda (un 5–8%) i, a 45k, en el p95 del primer token.** Vegeu
@@ -20,16 +22,19 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-resident7-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-resident11-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/resident7/fn.patch`](variants/resident7/fn.patch). La build
-  anterior (28 d'octubre) és [`variants/sampled/fn.patch`](variants/sampled/fn.patch).
+  [`variants/resident11/fn.patch`](variants/resident11/fn.patch). Les builds
+  anteriors són [`variants/resident7/fn.patch`](variants/resident7/fn.patch)
+  (29 d'octubre, sense l'atenció en un llançament) i
+  [`variants/sampled/fn.patch`](variants/sampled/fn.patch) (28 d'octubre).
 - Configuració: 16 fluxos, finestra de 75.000 tokens, KV fp8 (files int8),
   MTP6 amb confiança 0,60, trossos de prompt de 4096 files (també mentre es
   descodifica), cache de prompts elàstica de fins a 24 GiB amb estats residents
   (`TF_PROMPT_CACHE_RESIDENT_GIB=2`), planificador de prompts
   (`TF_FILL_AGING_ROUNDS=1000000`, `TF_FILL_ROUND_STEPS=8`), lectura HC per files
-  fins a 127 files (`TF_TILE_READOUT_ROWS=128`), visió activada, temperatura per
+  fins a 127 files (`TF_TILE_READOUT_ROWS=128`), atenció dels fluxos en un
+  llançament (`TF_FLASHNEXT_ATTN_LANES=1`), visió activada, temperatura per
   defecte del servidor 0,1.
 - Escollir el checkpoint: `TENSORFOLD_MODEL_ID`, `TENSORFOLD_MODEL_REVISION` i
   `TENSORFOLD_CHECKPOINT_VOLUME` (per defecte, MLX 4 bits).
@@ -98,6 +103,13 @@ build del 29 d'octubre el Zig reaprofita la cache a les rondes de retorn i hi é
    lectura feia servir la rajola del prompt, que en una ronda de 64 files costa
    29,6 ms davant d'11,4. Amb el llindar a 128 una ronda de setze fluxos baixa de
    232 a 216 ms (+5% de tokens/s en respostes). Els bits són els mateixos.
+7. **Atenció dels fluxos en un llançament** (`TF_FLASHNEXT_ATTN_LANES`): a
+   les rondes compartides cada kernel d'atenció (preparació, agrupació,
+   puntuacions, selecció, trossos i fusió) es llançava un cop per flux. Ara es
+   llança un cop per a totes les files de la ronda i cada fila troba les caches
+   del seu flux en una taula que es puja un cop per ronda, com fa el Python
+   (`attn_multi.py`). Els programes són els mateixos. Vegeu
+   [Atenció en un llançament](#atenció-en-un-llançament-29-doctubre).
 
 ## Què s'ha descartat
 
@@ -152,6 +164,35 @@ també les intermèdies).
   l'atenció a 74k només 35 ms.
 - A les rondes de retorn de 74k encara es desallotgen alguns estats (4 en
   aquesta passada); per això aquestes xifres varien entre 113 i 157 s.
+
+## Atenció en un llançament (29 d'octubre)
+
+Mesurant bloc per bloc (cada bloc sincronitzat) amb 64 files en una ronda de
+setze fluxos, el Zig perdia 23 ms davant del Python. La diferència més gran
+era l'atenció: 12,7 ms davant de 3,8. Script: [`attn-lanes.sh`](attn-lanes.sh);
+dades a [`results/resident/attn-lanes.txt`](results/resident/attn-lanes.txt).
+Mateixa build (`variants/resident11`), interruptor apagat i encès.
+
+| Prova | Apagat | Encès | Python |
+|---|---|---|---|
+| Bloc d'atenció, 64 files (curt) | 12,7 ms | **4,9 ms** | 3,8 ms |
+| Setze respostes curtes: tokens/s | 226,6 | **235,4** (+4%) | ~243 |
+| Curt: verificació / drafts per ronda | 190,4 / 24,7 ms | **183,1 / 23,0 ms** | — |
+| 74k, 16 fluxos: verificació / drafts per ronda | 194,7 / 25,6 ms | **178,6 / 20,8 ms** | ~169 / ~18 ms |
+| 74k, 16 fluxos: ronda sencera | 220,0 ms | **196,1 ms** (−11%) | — |
+| 74k freda: temps total | 674 s | 664 s | 637 s |
+| 74k retorn 1 / 2: tokens/s | 128,0 / 161,8 | 132,7 / 163,3 | 37,7 / 37,1 |
+
+- Els drafts també baixen perquè la capa MTP fa servir la mateixa atenció.
+- La ronda freda i les de retorn de la sonda depenen sobretot de la càrrega dels
+  prompts, que aquest canvi no toca; per això hi canvien poc.
+- Exactitud amb l'interruptor encès: greedy junts = sols 8 de 8 (dues rondes),
+  agulles 9 de 9, respostes iguals a `kvcheck-117` 8 de 8 i mostrejades 8 de 8.
+- Queda per tancar: DeltaNet (~6 ms per ronda) i els experts (~7 ms).
+- La build també porta tres opcions de mesura que no fan res si no s'activen:
+  `TF_FLASHNEXT_ROUND_ROWS` (límit de files per ronda; l'escombrada de 32 a 128
+  no va guanyar res), `TF_DRAFT_TIMES` (temps dels passos de draft) i
+  `TF_DRAFT_PREFIX` (sense efecte).
 
 ## Comprovacions d'exactitud
 
@@ -263,6 +304,8 @@ mateixa prova que el Python i el vLLM van fer a
 - [`sync-build.sh`](sync-build.sh) i [`build-117.sh`](build-117.sh): compilació
   a la 2226; `VARIANT=nom` deixa cada candidat a `variants/<nom>/` i al volum
   `ieti-native117-<nom>-build`.
+- [`attn-lanes.sh`](attn-lanes.sh): temps per bloc, rondes i exactitud amb
+  `TF_FLASHNEXT_ATTN_LANES` apagat i encès.
 - [`resident-check.sh`](resident-check.sh): exactitud, reaprofitament,
   capacitat a `TOKENS` i agent per a una variant (`RVAR`, `RENV`, `CLABEL`).
   [`reply_profile.py`](reply_profile.py) resumeix les rondes de resposta d'un
@@ -281,7 +324,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/resident7) | sampled + estats residents + planificador de prompts + lectura HC per files | [`best/best.patch`](best/best.patch) | `ieti-native117-resident7-build` |
+| **best** (variants/resident11) | resident7 + atenció dels fluxos en un llançament | [`best/best.patch`](best/best.patch) | `ieti-native117-resident11-build` |
+| variants/resident7 | sampled + estats residents + planificador de prompts + lectura HC per files | [`variants/resident7/fn.patch`](variants/resident7/fn.patch) | `ieti-native117-resident7-build` |
 | variants/sampled | 1.1.7 + patch + pas mixt + drafts mostrejats (millor del 28 d'octubre) | [`variants/sampled/fn.patch`](variants/sampled/fn.patch) | `ieti-native117-sampled-build` |
 | tf117-20261027 | 1.1.7 + patch + pas mixt | [`tf117-20261027/fn.patch`](tf117-20261027/fn.patch) | `ieti-native117-fn-build` |
 | variants/stop | millor + 0017 | [`variants/stop/fn.patch`](variants/stop/fn.patch) | `ieti-native117-stop-build` |

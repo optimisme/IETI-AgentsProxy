@@ -1,0 +1,63 @@
+# One-launch lane attention (variants/resident11, TF_FLASHNEXT_ATTN_LANES), 2026-10-29, 2226: attn-lanes.sh then the 74k capacity probe (resident-check.sh STAGES=capacity CLABEL=lanes0/lanes1, TF_LANES_PHASES=1) with reply_profile.py per live-stream count.
+# 2026-10-29T19:28:35+01:00 attn-lanes resident11 stages blocks rounds exact
+== blocks 2026-10-29T19:28:35+01:00
+lanes=0: decode load: 16 streams, wall 56.3 output 12800 tok/s 227.2 / decode load: 16 streams, wall 56.7 output 12800 tok/s 225.7
+  56 rows: 30 passes embed 0.0 ple 0.4 hc 10.8 gdn 33.2 attn 9.0 moe 114.2 head 2.6
+  57 rows: 21 passes embed 0.1 ple 0.4 hc 10.8 gdn 34.5 attn 7.6 moe 117.9 head 2.6
+  58 rows: 24 passes embed 0.1 ple 0.4 hc 11.0 gdn 34.6 attn 8.9 moe 117.9 head 2.6
+  59 rows: 30 passes embed 0.1 ple 0.4 hc 11.1 gdn 34.6 attn 9.6 moe 125.0 head 2.6
+  61 rows: 42 passes embed 0.1 ple 0.4 hc 11.2 gdn 34.7 attn 9.5 moe 127.5 head 2.6
+  62 rows: 30 passes embed 0.1 ple 0.4 hc 11.2 gdn 34.6 attn 8.4 moe 126.3 head 2.6
+  63 rows: 36 passes embed 0.1 ple 0.4 hc 11.4 gdn 34.8 attn 8.3 moe 120.0 head 2.6
+  64 rows: 411 passes embed 0.0 ple 0.4 hc 11.4 gdn 34.5 attn 12.7 moe 129.0 head 2.6
+lanes=1: decode load: 16 streams, wall 54.4 output 12800 tok/s 235.4 / decode load: 16 streams, wall 54.8 output 12800 tok/s 233.7
+  56 rows: 30 passes embed 0.0 ple 0.4 hc 10.8 gdn 33.0 attn 4.5 moe 114.8 head 2.6
+  57 rows: 21 passes embed 0.1 ple 0.4 hc 10.9 gdn 34.6 attn 3.9 moe 118.4 head 2.6
+  58 rows: 24 passes embed 0.0 ple 0.4 hc 11.1 gdn 34.5 attn 4.0 moe 118.2 head 2.6
+  59 rows: 30 passes embed 0.1 ple 0.4 hc 11.1 gdn 34.7 attn 4.1 moe 125.4 head 2.6
+  61 rows: 42 passes embed 0.1 ple 0.4 hc 11.2 gdn 34.7 attn 4.2 moe 127.5 head 2.6
+  62 rows: 30 passes embed 0.1 ple 0.4 hc 11.3 gdn 34.7 attn 4.0 moe 127.0 head 2.6
+  63 rows: 36 passes embed 0.1 ple 0.4 hc 11.4 gdn 35.0 attn 3.9 moe 120.2 head 2.6
+  64 rows: 411 passes embed 0.0 ple 0.4 hc 11.4 gdn 34.6 attn 4.9 moe 129.3 head 2.6
+== rounds 2026-10-29T19:42:06+01:00
+lanes=0: decode load: 16 streams, wall 56.2 output 12800 tok/s 227.8 / decode load: 16 streams, wall 56.8 output 12800 tok/s 225.5
+  16 streams:   609 rounds  gap 0.0 plan 0.0 verify 190.4 conclude 0.0 draft 24.7 keep 0.0  rows 64  total 215.4
+lanes=1: decode load: 16 streams, wall 54.1 output 12800 tok/s 236.7 / decode load: 16 streams, wall 54.7 output 12800 tok/s 234.1
+  16 streams:   609 rounds  gap 0.0 plan 0.0 verify 183.1 conclude 0.0 draft 23.0 keep 0.0  rows 64  total 205.8
+== exact 2026-10-29T19:55:37+01:00
+# 2026-10-29T19:55:37+01:00 resident-check resident11 TF_PROMPT_CACHE_RESIDENT_GIB=2 TF_FLASHNEXT_ATTN_LANES=1 cache 24 GiB tokens 74000 stages exact
+== exact 2026-10-29T19:55:37+01:00
+extra env: TF_PROMPT_CACHE_RESIDENT_GIB=2 TF_FLASHNEXT_ATTN_LANES=1
+round 0: 8/8 identical
+round 1: 8/8 identical
+needles passed 9 of 9
+answers equal to kvcheck-117: 8 of 8
+drafted alone = undrafted: 8 of 8
+together = alone: 8 of 8
+plain = ~/docker/benchmarks/tensorfold-zig-117-20261027/variants/sampled/sampled-on.json: 8 of 8
+alone = ~/docker/benchmarks/tensorfold-zig-117-20261027/variants/sampled/sampled-on.json: 8 of 8
+together = ~/docker/benchmarks/tensorfold-zig-117-20261027/variants/sampled/sampled-on.json: 8 of 8
+resident-check-done
+attn-lanes-done
+# 2026-10-29T20:32:37+01:00 resident-check resident11 TF_PROMPT_CACHE_RESIDENT_GIB=2 TF_LANES_PHASES=1 TF_FLASHNEXT_ATTN_LANES=0 cache 24 GiB tokens 74000 stages capacity
+== capacity 2026-10-29T20:32:37+01:00
+resident11-lanes0 cold16 wall 674.1 tok/s 21.3 ttft p50/p95 316.5 571.6 prompt 74017 cached 0 overlap 16 min free 7.3 swap pages 432
+resident11-lanes0 return1-16 wall 112.0 tok/s 128.0 ttft p50/p95 1.4 10.8 prompt 74057 cached 1110156 overlap 16 min free 7.1 swap pages 0
+resident11-lanes0 return2-16 wall 88.6 tok/s 161.8 ttft p50/p95 1.3 11.0 prompt 74097 cached 1110755 overlap 16 min free 7.2 swap pages 1
+resident-check-done
+lanes0   12 streams:    93 rounds  gap 0.0 plan 0.0 verify 163.8 conclude 0.0 draft 23.1 keep 0.0  rows 40  total 188.5
+lanes0   13 streams:    27 rounds  gap 0.0 plan 0.0 verify 183.5 conclude 0.0 draft 24.2 keep 0.0  rows 54  total 222.2
+lanes0   14 streams:    13 rounds  gap 3.4 plan 0.0 verify 179.6 conclude 0.0 draft 23.8 keep 0.0  rows 49  total 220.9
+lanes0   15 streams:    18 rounds  gap 7927.6 plan 0.0 verify 177.9 conclude 0.1 draft 24.2 keep 0.0  rows 60  total 8109.8
+lanes0   16 streams:   655 rounds  gap 0.0 plan 0.0 verify 194.7 conclude 0.0 draft 25.6 keep 0.0  rows 64  total 220.0
+# 2026-10-29T20:51:32+01:00 resident-check resident11 TF_PROMPT_CACHE_RESIDENT_GIB=2 TF_LANES_PHASES=1 TF_FLASHNEXT_ATTN_LANES=1 cache 24 GiB tokens 74000 stages capacity
+== capacity 2026-10-29T20:51:32+01:00
+resident11-lanes1 cold16 wall 664.3 tok/s 21.6 ttft p50/p95 316.1 570.6 prompt 74017 cached 0 overlap 16 min free 7.5 swap pages 1103
+resident11-lanes1 return1-16 wall 108.1 tok/s 132.7 ttft p50/p95 1.3 10.7 prompt 74057 cached 1110156 overlap 16 min free 7.3 swap pages 0
+resident11-lanes1 return2-16 wall 87.8 tok/s 163.3 ttft p50/p95 1.4 10.7 prompt 74097 cached 1110755 overlap 16 min free 7.3 swap pages 1
+resident-check-done
+lanes1   12 streams:    41 rounds  gap 0.0 plan 0.0 verify 170.5 conclude 0.0 draft 19.9 keep 0.0  rows 49  total 193.6
+lanes1   13 streams:    10 rounds  gap 1298.5 plan 0.0 verify 163.6 conclude 0.1 draft 20.2 keep 0.0  rows 42  total 2508.7
+lanes1   14 streams:    14 rounds  gap 3.3 plan 0.0 verify 183.8 conclude 0.0 draft 21.9 keep 0.0  rows 62  total 220.2
+lanes1   15 streams:    95 rounds  gap 0.0 plan 0.0 verify 178.9 conclude 0.0 draft 22.7 keep 0.0  rows 56  total 204.5
+lanes1   16 streams:   576 rounds  gap 0.0 plan 0.0 verify 178.6 conclude 0.0 draft 20.8 keep 0.0  rows 64  total 196.1
