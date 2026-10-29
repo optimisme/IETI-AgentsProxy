@@ -6,6 +6,7 @@ const config = require('./config');
 const { getDb } = require('./db');
 const healthRoutes = require('./routes/health');
 const openaiRoutes = require('./routes/openai');
+const anthropicRoutes = require('./routes/anthropic');
 const adminRoutes = require('./routes/admin');
 const studentPortalRoutes = require('./routes/studentPortal');
 const { createGoogleAuthRouter } = require('./routes/googleAuth');
@@ -91,6 +92,7 @@ function createApp({ googleOAuthService, googleIdentityResolver } = {}) {
   app.use(studentPortalRoutes);
   app.use(adminRoutes);
   app.use(openaiRoutes);
+  app.use(anthropicRoutes);
   app.use(notFound);
   app.use(errorHandler);
 
