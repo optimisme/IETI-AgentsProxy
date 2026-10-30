@@ -17,8 +17,8 @@ desallotja menys estats de la cache de prompts: les rondes de retorn a 74k baixe
 de 140 / 120 s a 109 / 82 s (el Python, 380 / 386 s). Iguala o supera el
 Python en la càrrega d'agent, en les rondes de retorn, en el primer token mitjà
 amb contextos de 45k i 74k i, des de tf119d, en la ronda freda de 74k: 627 s
-davant de 637 s. A 45k perd en el p95 del primer token, i tf119d encara no s'hi
-ha mesurat.** Vegeu
+davant de 637 s. A 45k empata en el temps total de la ronda freda (389 s davant de
+387 s) i ja va per davant en el p95 del primer token (318 s davant de 323 s).** Vegeu
 [Contextos plens: Zig davant de Python](#contextos-plens-zig-davant-de-python-29-doctubre).
 La resta de patches de MiaAI-Lab, el checkpoint NVIDIA NVFP4 i un drafter propi
 s'han descartat.
@@ -345,8 +345,10 @@ passa els trossos sols de 64 files o més (`TF_FLASHNEXT_PROMPT_GEMM=0` ho desac
 - **Ronda de retorn 2:** la prova ignora el final de resposta, i a tots els motors
   (Python inclòs) les 16 respostes acaben repetint text. Aquesta velocitat no és
   comparable.
+- **45k:** ronda freda de 389 s davant de 387 s del Python (empat), primer token
+  p50 / p95 de 176 / 318 s davant de 318 / 323 s, retorn 1 de 66 s davant de 79 s.
 - **Queda per fer:** per 4096 files, HC 393 davant de 340 ms i atenció 434 davant de
-  397 ms; mesurar tf119d a 45k.
+  397 ms.
 
 ## Comprovacions d'exactitud
 
