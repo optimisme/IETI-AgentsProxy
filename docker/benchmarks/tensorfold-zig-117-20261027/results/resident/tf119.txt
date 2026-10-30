@@ -1,0 +1,44 @@
+# 2026-10-30T04:36:37+01:00 tf119-check
+# 2026-10-30T04:36:37+01:00 resident-check tf119 TF_PROMPT_CACHE_RESIDENT_GIB=2 cache 24 GiB tokens 74000 stages exact reuse
+== exact 2026-10-30T04:36:37+01:00
+extra env: TF_PROMPT_CACHE_RESIDENT_GIB=2
+info: prompt cache: elastic, up to 24.0 GiB of 27.2 GiB room past the streams' live bytes and a 2.0 GiB margin; 24.0 GiB now
+round 0: 8/8 identical
+round 1: 8/8 identical
+needles passed 9 of 9
+answers equal to kvcheck-117: 8 of 8
+drafted alone = undrafted: 8 of 8
+together = alone: 8 of 8
+plain = ~/docker/benchmarks/tensorfold-zig-117-20261027/variants/sampled/sampled-on.json: 8 of 8
+alone = ~/docker/benchmarks/tensorfold-zig-117-20261027/variants/sampled/sampled-on.json: 8 of 8
+together = ~/docker/benchmarks/tensorfold-zig-117-20261027/variants/sampled/sampled-on.json: 8 of 8
+== reuse 2026-10-30T04:43:38+01:00
+turn 2 prompt tokens [13357, 13324, 13378, 13346, 13352, 13373, 13333, 13338] cached [13322, 13289, 13343, 13311, 13317, 13338, 13298, 13303]
+turn 2 prompt tokens [13357, 13324, 13378, 13346, 13352, 13373, 13333, 13338] cached [13322, 13289, 13343, 13311, 13317, 13338, 13298, 13303]
+turn 1 = ~/docker/benchmarks/tensorfold-zig-117-20261027/resident/reuse-copies.json: 8 of 8
+turn 2 = ~/docker/benchmarks/tensorfold-zig-117-20261027/resident/reuse-copies.json: 8 of 8
+# info: prompt cache: 13378 tokens, resumed at 13343, kept 1; 8 states, 1672 MiB and 0 MiB spare of 22612 MiB (hits 8, misses 8, evicted 0, refused 0, failed 0)
+resident-check-done
+== short resident12 2026-10-30T04:52:57+01:00
+resident12: decode load: 16 streams, wall 52.9 output 12800 tok/s 241.8 / decode load: 16 streams, wall 53.5 output 12800 tok/s 239.2
+  16 streams:   609 rounds  gap 0.0 plan 0.0 verify 178.7 conclude 0.0 draft 23.0 keep 0.0  rows 64  total 201.4
+== short tf119 2026-10-30T04:59:30+01:00
+tf119: decode load: 16 streams, wall 52.9 output 12800 tok/s 241.8 / decode load: 16 streams, wall 53.5 output 12800 tok/s 239.3
+  16 streams:   609 rounds  gap 0.0 plan 0.0 verify 178.7 conclude 0.0 draft 23.1 keep 0.0  rows 64  total 201.2
+# 2026-10-30T05:06:09+01:00 resident-check resident12 TF_PROMPT_CACHE_RESIDENT_GIB=2 TF_LANES_PHASES=1 cache 24 GiB tokens 74000 stages capacity
+== capacity 2026-10-30T05:06:09+01:00
+resident12-phases cold16 wall 664.2 tok/s 21.6 ttft p50/p95 316.3 570.9 prompt 74016 cached 0 overlap 16 min free 7.5 swap pages 620
+resident12-phases return1-16 wall 140.4 tok/s 102.1 ttft p50/p95 1.3 48.0 prompt 74056 cached 1036132 overlap 16 min free 7.5 swap pages 0
+resident12-phases return2-16 wall 120.2 tok/s 119.3 ttft p50/p95 1.3 48.4 prompt 74096 cached 1036691 overlap 16 min free 7.2 swap pages 1
+# info: prompt cache: 74097 tokens, resumed at 0, kept 18; 17 states, 0 MiB and 0 MiB spare of 0 MiB (hits 28, misses 20, evicted 4, refused 0, failed 0)
+resident-check-done
+  16 streams:   644 rounds  gap 0.0 plan 0.0 verify 166.4 conclude 0.0 draft 21.1 keep 0.0  rows 64  total 188.4
+# 2026-10-30T05:25:14+01:00 resident-check tf119 TF_PROMPT_CACHE_RESIDENT_GIB=2 TF_LANES_PHASES=1 cache 24 GiB tokens 74000 stages capacity
+== capacity 2026-10-30T05:25:14+01:00
+tf119-phases cold16 wall 665.7 tok/s 21.5 ttft p50/p95 317.1 572.9 prompt 74017 cached 0 overlap 16 min free 7.3 swap pages 36625
+tf119-phases return1-16 wall 108.6 tok/s 132.0 ttft p50/p95 1.5 11.2 prompt 74057 cached 1110156 overlap 16 min free 7.2 swap pages 0
+tf119-phases return2-16 wall 82.1 tok/s 174.7 ttft p50/p95 1.3 10.9 prompt 74097 cached 1110756 overlap 16 min free 7.2 swap pages 0
+# info: prompt cache: 74097 tokens, resumed at 0, kept 17; 17 states, 0 MiB and 0 MiB spare of 0 MiB (hits 30, misses 18, evicted 2, refused 0, failed 0)
+resident-check-done
+  16 streams:   606 rounds  gap 0.0 plan 0.0 verify 163.2 conclude 0.0 draft 21.0 keep 0.0  rows 64  total 183.4
+tf119-check-done

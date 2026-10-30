@@ -1,11 +1,13 @@
-# TensorFold Zig 1.1.7: millor build de Flash-Next per a setze alumnes
+# TensorFold Zig 1.1.7 i 1.1.9: millor build de Flash-Next per a setze alumnes
 
-**La millor build (30 d'octubre, `variants/resident12`) és TensorFold 1.1.7 amb
+**La millor build (30 d'octubre, `variants/tf119`) és TensorFold 1.1.9 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
 els fluxos d'una ronda en un sol llançament per kernel (un 11% menys per ronda
-de resposta a 74k), i el mateix per a les capes DeltaNet (un 2% més). Iguala o supera el
+de resposta a 74k), i el mateix per a les capes DeltaNet (un 2% més). La 1.1.9
+desallotja menys estats de la cache de prompts: les rondes de retorn a 74k baixen
+de 140 / 120 s a 109 / 82 s (el Python, 380 / 386 s). Iguala o supera el
 Python en la càrrega d'agent, en les rondes de retorn i en el primer token
 mitjà amb contextos de 45k i 74k. Només perd en el temps total de la primera
 ronda freda (un 5–8%) i, a 45k, en el p95 del primer token.** Vegeu
@@ -22,10 +24,13 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-resident12-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-tf119-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/resident12/fn.patch`](variants/resident12/fn.patch). Les builds
-  anteriors són [`variants/resident11/fn.patch`](variants/resident11/fn.patch)
+  [`variants/tf119/fn.patch`](variants/tf119/fn.patch) (diferència respecte de
+  `v1.1.9`). Les builds anteriors, sobre la 1.1.7, són
+  [`variants/resident12/fn.patch`](variants/resident12/fn.patch)
+  (30 d'octubre, la mateixa feina sobre la 1.1.7),
+  [`variants/resident11/fn.patch`](variants/resident11/fn.patch)
   (29 d'octubre, sense DeltaNet en un llançament),
   [`variants/resident7/fn.patch`](variants/resident7/fn.patch)
   (29 d'octubre, sense l'atenció en un llançament) i
@@ -235,6 +240,37 @@ build (`variants/resident12`), interruptor apagat i encès.
 - Queda per tancar: els drafts (~23 ms per ronda davant de ~17 al Python) i els
   experts (un 3% per darrere, limitats per l'amplada de banda de memòria).
 
+## TensorFold 1.1.9 (30 d'octubre)
+
+resident12 traslladada a la 1.1.9 (`variants/tf119`, `BASE=v1.1.9
+sync-build.sh`). La 1.1.9 porta un índex de la cache de prompts per posició, un
+nivell de disc per als estats, la pressió de memòria a l'admissió i un
+pressupost de files de prompt al planificador. Script:
+[`tf119-check.sh`](tf119-check.sh); dades a
+[`results/resident/tf119.txt`](results/resident/tf119.txt).
+
+| Prova | resident12 (1.1.7) | tf119 (1.1.9) | Python |
+|---|---|---|---|
+| Setze respostes curtes: tokens/s | 241,8 / 239,2 | 241,8 / 239,3 | ~243 |
+| Setze respostes curtes: ronda | 201,4 ms | 201,2 ms | — |
+| 74k freda: temps total | 664 s | 666 s | **637 s** |
+| 74k freda: TTFT p50 / p95 | 316 / 571 s | 317 / 573 s | 473 / 579 s |
+| 74k retorn 1 / 2 | 140 / 120 s | **109 / 82 s** | 380 / 386 s |
+| 74k retorn: TTFT p95 | 48 s | **11 s** | — |
+| 74k: estats desallotjats, tokens reaprofitats | 4, 1,04 M | **2, 1,11 M** | — |
+| 74k: ronda de setze fluxos | 188,4 ms | 183,4 ms | — |
+
+- Exactitud: greedy junts = sols 8 de 8 (dues rondes), agulles 9 de 9,
+  respostes 8 de 8, mostrejades 8 de 8, i el reaprofitament en dos torns dona el
+  mateix text 8 de 8.
+- **Error trobat en el trasllat.** L'índex de la 1.1.9 suposa que cada estat de
+  la cache hi entra a través seu; el nostre camí d'estats residents l'afegia
+  directament a la llista i la primera cerca aturava el servidor
+  (`reached unreachable code`). Ara passa per l'índex.
+- A la ronda freda de 74k la 1.1.9 envia unes 36.600 pàgines a swap (la 1.1.7,
+  620), sense que la memòria lliure baixi de 7,3 GiB ni que s'alenteixi.
+- La ronda freda no canvia: el Zig encara hi perd uns 28 s.
+
 ## Comprovacions d'exactitud
 
 Cada candidat ha de donar exactament el mateix text que la build de referència:
@@ -365,7 +401,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/resident12) | resident11 + DeltaNet dels fluxos en un llançament + caches dels llindars separades | [`best/best.patch`](best/best.patch) | `ieti-native117-resident12-build` |
+| **best** (variants/tf119) | resident12 traslladada a TensorFold 1.1.9 | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119-build` |
+| variants/resident12 | resident11 + DeltaNet dels fluxos en un llançament + caches dels llindars separades | [`variants/resident12/fn.patch`](variants/resident12/fn.patch) | `ieti-native117-resident12-build` |
 | variants/resident11 | resident7 + atenció dels fluxos en un llançament | [`variants/resident11/fn.patch`](variants/resident11/fn.patch) | `ieti-native117-resident11-build` |
 | variants/resident7 | sampled + estats residents + planificador de prompts + lectura HC per files | [`variants/resident7/fn.patch`](variants/resident7/fn.patch) | `ieti-native117-resident7-build` |
 | variants/sampled | 1.1.7 + patch + pas mixt + drafts mostrejats (millor del 28 d'octubre) | [`variants/sampled/fn.patch`](variants/sampled/fn.patch) | `ieti-native117-sampled-build` |
@@ -376,4 +413,4 @@ mateixa prova que el Python i el vLLM van fer a
 | tf114-20261026b | 1.1.4 + patch | `../tensorfold-zig-114-parity-20261024/tf114-20261026b.patch` | `ieti-native114-tf20261026b` |
 
 Els arxius `source.tar` (61 MB, còpia del codi de TensorFold) no es versionen;
-cada build es pot refer aplicant el seu patch a TensorFold 1.1.7.
+cada build es pot refer aplicant el seu patch a TensorFold 1.1.7 (tf119: 1.1.9).

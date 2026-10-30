@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # Local helper: ship the patched 1.1.7 Flash-Next tree to 2226 and build it there.
 # VARIANT=name builds a candidate beside the best (variants/<name>/, volume ieti-native117-<name>-build); start it with VARIANT=name up-117.sh.
+# BASE=v1.1.9 cuts the patch from another release tag (default v1.1.7) and builds with that version.
 # The test machine's SSH port and user@host come from ../ssh.env (local, not versioned; see ../ssh.env.example).
 set -euo pipefail
 SRC=${SRC:?working copy}
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../ssh.env"
 V=${VARIANT:-}
+BASE=${BASE:-v1.1.7}
 SUB=tensorfold-zig-117-20261027${V:+/variants/$V}
 mkdir -p "$HERE${V:+/variants/$V}"
 OUT="$HERE${V:+/variants/$V}"
 cd "$SRC"
-git diff v1.1.7 > "$OUT/fn.patch"
+git diff "$BASE" > "$OUT/fn.patch"
 git ls-files -c -o --exclude-standard | grep -v -E '^(app|docs|assets)/' | COPYFILE_DISABLE=1 tar -cf "$OUT/source.tar" -T -
 cd "$OUT"
-cp "$HERE/build-117.sh" .
+sed "s/1\.1\.7/${BASE#v}/g" "$HERE/build-117.sh" > build-117.sh
 ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p ~/docker/benchmarks/$SUB"
 scp -P "$SSH_PORT" -q fn.patch source.tar build-117.sh "$SSH_TARGET":docker/benchmarks/$SUB/
 # the remote side gets the subdirectory and volume as arguments (single-quoted script, no local expansion inside)

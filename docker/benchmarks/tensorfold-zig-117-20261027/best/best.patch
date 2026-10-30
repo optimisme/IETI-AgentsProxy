@@ -1,16 +1,16 @@
 diff --git a/zig/kernels/cuda/flashnext_attn.cu b/zig/kernels/cuda/flashnext_attn.cu
-index 09aa10ca..f61b3a29 100644
+index ff4f7aab..1c74a00c 100644
 --- a/zig/kernels/cuda/flashnext_attn.cu
 +++ b/zig/kernels/cuda/flashnext_attn.cu
 @@ -8,6 +8,7 @@
  
- #include "glue_math.cuh"
- #include "qmm_frag.cuh"
+ #include "common/glue_math.cuh"
+ #include "common/qmm_frag.cuh"
 +#include "flashnext_kv8.cuh"
  
  using namespace tf_glue;
  
-@@ -59,14 +60,32 @@ __device__ __forceinline__ int partner(int d, int half) {
+@@ -54,14 +55,32 @@ __device__ __forceinline__ int partner(int d, int half) {
  
  using namespace fn_attn;
  
@@ -45,7 +45,7 @@ index 09aa10ca..f61b3a29 100644
  __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
                                                                 const float* __restrict__ QW, const float* __restrict__ KW,
                                                                 const float* __restrict__ IW, const float* __restrict__ INV,
-@@ -97,7 +116,16 @@ __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restric
+@@ -92,7 +111,16 @@ __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restric
      const float xpn = rbf(__fmul_rn(__fmul_rn(bf(P[src + p]), rinv), w[p]));
      const __nv_bfloat16 out = __float2bfloat16_rn(rope(xn, xpn, d, HALF, media_pos(pos, d, HALF, rope3, n, delta), INV));
      if (head < NQ) {
@@ -63,7 +63,7 @@ index 09aa10ca..f61b3a29 100644
      } else if (!index) {
          const long long slot = static_cast<long long>(pos) * NKV + head - NQ;
          const long long at = PAGED ? page_row(pg, pos, pg.ptok, NKV * HD) + (head - NQ) * HD : slot * HD;
-@@ -119,6 +147,27 @@ extern "C" __global__ void __launch_bounds__(256) fn_attn_prep(const __nv_bfloat
+@@ -114,6 +142,27 @@ extern "C" __global__ void __launch_bounds__(256) fn_attn_prep(const __nv_bfloat
                               0, Pg{});
  }
  
@@ -91,7 +91,7 @@ index 09aa10ca..f61b3a29 100644
  extern "C" __global__ void __launch_bounds__(256) fn_attn_prep_media(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
                                                                 const float* __restrict__ QW, const float* __restrict__ KW,
                                                                 const float* __restrict__ IW, const float* __restrict__ INV,
-@@ -152,6 +201,36 @@ extern "C" __global__ void __launch_bounds__(256)
+@@ -147,6 +196,36 @@ extern "C" __global__ void __launch_bounds__(256)
                              delta, pg);
  }
  
@@ -128,7 +128,7 @@ index 09aa10ca..f61b3a29 100644
  // glue._attn_gate, program (row, head) of HD threads: bf16(o / (1 + e^-gate)) and its 32-group sums.
  extern "C" __global__ void __launch_bounds__(256) fn_attn_gate(const __nv_bfloat16* __restrict__ O, const __nv_bfloat16* __restrict__ P,
                                                                 __nv_bfloat16* __restrict__ OUT, float* __restrict__ XS, int PW, int NQ) {
-@@ -221,6 +300,15 @@ extern "C" __global__ void __launch_bounds__(128)
+@@ -216,6 +295,15 @@ extern "C" __global__ void __launch_bounds__(128)
      fn_qsa_pool_body<true>(IKC, POOLED, POS0, W, INV, eps, R, DI, HALF, RATIO, rope3, n, delta, pg);
  }
  
@@ -144,7 +144,7 @@ index 09aa10ca..f61b3a29 100644
  // attention._scores, program (row, 64 blocks): the heads' sum of relu(q . k) / sqrt(DI), rows past TOP (DI 128).
  extern "C" __global__ void __launch_bounds__(256) fn_qsa_scores(const __nv_bfloat16* __restrict__ IQ, const __nv_bfloat16* __restrict__ POOLED,
                                                                  const int* __restrict__ POS0, float* __restrict__ SC, int NB, int HI,
-@@ -257,7 +345,9 @@ extern "C" __global__ void __launch_bounds__(256) fn_qsa_scores(const __nv_bfloa
+@@ -252,7 +340,9 @@ extern "C" __global__ void __launch_bounds__(256) fn_qsa_scores(const __nv_bfloa
  }
  
  // A row, KV head and chunk: stage its key addresses once a tile, then retain the online softmax and partials.
@@ -155,7 +155,7 @@ index 09aa10ca..f61b3a29 100644
  __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ KC,
                                              const __nv_bfloat16* __restrict__ VC, const int* __restrict__ POS0,
                                              float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
-@@ -269,7 +359,11 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -264,7 +354,11 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
      Row* qs = reinterpret_cast<Row*>(smem_raw);                  // [QR] the row's query heads
      Row* tiles_kv = qs + QR;                                     // [NB][2][TK] each buffer's keys, then values
      // ONE: one [TK] buffer, the tile's keys and then, once the scores are taken, its values (fewer bytes, more blocks)
@@ -168,7 +168,7 @@ index 09aa10ca..f61b3a29 100644
      __shared__ float red_m[4][QR], red_l[4][QR];
      __shared__ int key_ids[NB][TK];
      __shared__ long long key_at[PAGED ? NB : 1][PAGED ? TK : 1];
-@@ -289,6 +383,26 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -284,6 +378,26 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
          const int i = e / (HD / 8), v = e % (HD / 8);
          qmm_frag::cp16z(&qs[i][8 * v], Q + (static_cast<long long>(r) * H + hk * G + min(i, G - 1)) * HD + 8 * v, i < G);
      }
@@ -195,7 +195,7 @@ index 09aa10ca..f61b3a29 100644
      // a tile's key ids, then its keys and values staged as two cp.async groups
      auto load = [&](int t0, int buf) {
          if (threadIdx.x < TK) {
-@@ -300,10 +414,14 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -295,10 +409,14 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
          __syncthreads();
          for (int pass = 0; pass < 2; ++pass) {
              const __nv_bfloat16* src = pass == 0 ? KC : VC;
@@ -214,7 +214,7 @@ index 09aa10ca..f61b3a29 100644
              }
              qmm_frag::commit();
          }
-@@ -311,9 +429,13 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -306,9 +424,13 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
      // ONE: the keys (pass 0) or the values (pass 1) of the tile whose ids are in key_ids[0], into the one buffer
      auto load_one = [&](int pass) {
          const __nv_bfloat16* src = pass == 0 ? KC : VC;
@@ -231,7 +231,7 @@ index 09aa10ca..f61b3a29 100644
          }
          qmm_frag::commit();
      };
-@@ -340,12 +462,16 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -335,12 +457,16 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
              if (NB == 1) load(t0, 0);
              if (ahead) load(t0 + TK, buf ^ 1);
          }
@@ -249,7 +249,7 @@ index 09aa10ca..f61b3a29 100644
          constexpr int JT = TK / 32;  // a warp's 8-key tiles
          float s[JT][4] = {};
  #pragma unroll 4
-@@ -408,6 +534,10 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -403,6 +529,10 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
          }
          if (ONE) qmm_frag::wait<0>(); else if (ahead) qmm_frag::wait<2>(); else qmm_frag::wait<0>();
          __syncthreads();
@@ -260,7 +260,7 @@ index 09aa10ca..f61b3a29 100644
  #pragma unroll
          for (int h = 0; h < 2; ++h) {
              const int row = g + 8 * h;
-@@ -466,6 +596,49 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -461,6 +591,49 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
      }
      if constexpr (FUSE) {                                  // o / l, rounded once, as fn_attn_merge writes OUT
          __nv_bfloat16* OUT = reinterpret_cast<__nv_bfloat16*>(PO);
@@ -310,7 +310,7 @@ index 09aa10ca..f61b3a29 100644
  #pragma unroll
          for (int h = 0; h < 2; ++h) {
              const int i = g + 8 * h;
-@@ -475,7 +648,7 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+@@ -470,7 +643,7 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
              for (int q = 0; q < 8; ++q)
  #pragma unroll
                  for (int e = 0; e < 2; ++e)
@@ -319,7 +319,7 @@ index 09aa10ca..f61b3a29 100644
          }
      }
  }
-@@ -549,12 +722,62 @@ extern "C" __global__ void __launch_bounds__(128)
+@@ -544,12 +717,62 @@ extern "C" __global__ void __launch_bounds__(128)
                                         pg);
  }
  
@@ -387,7 +387,7 @@ index 09aa10ca..f61b3a29 100644
      const int r = blockIdx.x, head = blockIdx.y, d = threadIdx.x;
      int n = POS0[0] + r + 1;
      if (QSA && SPR[r] != 0) n = NKR[r];
-@@ -572,10 +795,46 @@ extern "C" __global__ void __launch_bounds__(256) fn_attn_merge(const float* __r
+@@ -567,10 +790,46 @@ extern "C" __global__ void __launch_bounds__(256) fn_attn_merge(const float* __r
              l = __fmaf_rn(cl, b, __fmul_rn(l, a));
              m = next;
          }
@@ -435,7 +435,7 @@ index 09aa10ca..f61b3a29 100644
  #include "flashnext_qsa_tile.cuh"
  
  // The indexer scores 8 rows a block, every head, the sums in fn_qsa_scores' order (its bits).
-@@ -589,3 +848,15 @@ extern "C" __global__ void __launch_bounds__(256)
+@@ -584,3 +843,15 @@ extern "C" __global__ void __launch_bounds__(256)
                          Pg pg) {
      qsa_tile::scores_body<8, 4, true>(IQ, POOLED, POS0, SC, NB, RATIO, TOP, rows, pg);
  }
@@ -623,7 +623,7 @@ index 0451fa3b..b4cda309 100644
 +    const uint4* __restrict__, int, int, const int* __restrict__, const int* __restrict__, const int* __restrict__,
 +    void* __restrict__, int, float);
 diff --git a/zig/kernels/cuda/flashnext_hc.cu b/zig/kernels/cuda/flashnext_hc.cu
-index 9d3de8a1..62f18137 100644
+index 925506cb..43b8d730 100644
 --- a/zig/kernels/cuda/flashnext_hc.cu
 +++ b/zig/kernels/cuda/flashnext_hc.cu
 @@ -64,11 +64,15 @@ __device__ __forceinline__ float block_sum(float v, float* scratch) {
@@ -1104,18 +1104,18 @@ index 1ac2e6fa..1e76c82b 100644
 +    if (t == 0) flags[r] = 0;
 +}
 diff --git a/zig/src/core/lane_host.zig b/zig/src/core/lane_host.zig
-index 0dde950c..24e25ad1 100644
+index e2bd3fea..1d5090c2 100644
 --- a/zig/src/core/lane_host.zig
 +++ b/zig/src/core/lane_host.zig
-@@ -11,6 +11,7 @@ const admit = @import("lane_host_admit.zig");
- const recalls = @import("lane_host_recall.zig");
+@@ -12,6 +12,7 @@ const recalls = @import("lane_host_recall.zig");
  const ends = @import("lane_host_end.zig");
  const rows_host = @import("lane_host_rows.zig");
+ const pressure = @import("lane_host_pressure.zig");
 +const trace = @import("lane_host_trace.zig");
  const Allocator = std.mem.Allocator;
  const Id = api.Id;
  const Request = api.Request;
-@@ -175,6 +176,7 @@ pub const LaneHost = struct {
+@@ -180,6 +181,7 @@ pub const LaneHost = struct {
              h.gpa.destroy(job);
              return error.Busy;
          };
@@ -1123,7 +1123,7 @@ index 0dde950c..24e25ad1 100644
          h.wake.signal(h.io);
      }
  
-@@ -290,6 +292,7 @@ pub const LaneHost = struct {
+@@ -295,6 +297,7 @@ pub const LaneHost = struct {
              .job => |j| j,
          };
          const began = h.setup(job) orelse return true;
@@ -1139,7 +1139,7 @@ index 0dde950c..24e25ad1 100644
          const first = !job.fill_began;
          job.fill_began = true;
          const done = h.core.fillStreamCommitted(&job.stream, first, .{ .ptr = job, .call = firstCommitted }) catch |e| {
-@@ -534,6 +538,7 @@ pub const LaneHost = struct {
+@@ -538,6 +542,7 @@ pub const LaneHost = struct {
              rows_host.answer(h);
              scoring.answer(h);
              learn.refuse(h);
@@ -1147,7 +1147,7 @@ index 0dde950c..24e25ad1 100644
              while (h.admitOne()) {}
              fill.run(h);
              h.core.sweep() catch |err| {
-@@ -573,6 +578,7 @@ pub const LaneHost = struct {
+@@ -577,6 +582,7 @@ pub const LaneHost = struct {
              h.unlock();
              const owed = h.share.debt_ns > 0; // a round is timed only while it pays a prompt step's debt down
              const r0 = if (owed) std.Io.Clock.awake.now(h.io) else std.Io.Timestamp.zero;
@@ -1156,13 +1156,13 @@ index 0dde950c..24e25ad1 100644
                  ends.failAll(h, @errorName(e));
                  continue;
 diff --git a/zig/src/core/lane_host_admit.zig b/zig/src/core/lane_host_admit.zig
-index 8f6797e0..8df3d56a 100644
+index 67e527c1..8b12a19b 100644
 --- a/zig/src/core/lane_host_admit.zig
 +++ b/zig/src/core/lane_host_admit.zig
-@@ -4,6 +4,31 @@ const LaneHost = @import("lane_host.zig").LaneHost;
- const Job = LaneHost.Job;
- const lanes = @import("lanes");
+@@ -6,6 +6,31 @@ const lanes = @import("lanes");
  const prefix = @import("lane_host_prefix.zig");
+ const fetch = @import("lane_host_fetch.zig");
+ const pressure = @import("lane_host_pressure.zig");
 +const trace = @import("lane_host_trace.zig");
 +const std = @import("std");
 +
@@ -1189,9 +1189,9 @@ index 8f6797e0..8df3d56a 100644
 +    return true;
 +}
  
- /// The queued job to admit (its index), or null to hold; the caller holds the lock and a lane is free.
+ /// The queued job to admit (its index), or null to hold; the caller holds the lock.
  pub fn pick(h: *LaneHost) ?usize {
-@@ -64,6 +89,7 @@ pub fn many(h: *LaneHost) bool {
+@@ -81,6 +106,7 @@ pub fn many(h: *LaneHost) bool {
          took = true;
          const at = h.setup(job) orelse continue;
          if (h.startsAlone(job) or (h.core.fills() and !h.core.batchable(&job.stream))) { // long, image, resumed: filled
@@ -1199,7 +1199,7 @@ index 8f6797e0..8df3d56a 100644
              _ = h.launch(job, at);
              continue;
          }
-@@ -75,7 +101,9 @@ pub fn many(h: *LaneHost) bool {
+@@ -92,7 +118,9 @@ pub fn many(h: *LaneHost) bool {
      var streams: [lanes.Engine.max_together]*lanes.Stream = undefined;
      for (jobs[0..n], 0..) |job, i| streams[i] = &job.stream;
      var errs: [lanes.Engine.max_together]?anyerror = undefined;
@@ -1210,7 +1210,7 @@ index 8f6797e0..8df3d56a 100644
          if (err) |e| {
              _ = h.failedPass(job, e);
 diff --git a/zig/src/core/lane_host_fill.zig b/zig/src/core/lane_host_fill.zig
-index 7401d09a..e01868c1 100644
+index 934b6346..3bdd2851 100644
 --- a/zig/src/core/lane_host_fill.zig
 +++ b/zig/src/core/lane_host_fill.zig
 @@ -4,6 +4,31 @@ const LaneHost = @import("lane_host.zig").LaneHost;
@@ -1267,26 +1267,29 @@ index 7401d09a..e01868c1 100644
          @max(j.stream.cached, j.stream.fill_at.load(.monotonic))
      else
          j.stream.cached;
-@@ -103,7 +130,17 @@ pub fn run(h: *LaneHost) void {
-     }
+@@ -125,12 +152,19 @@ pub fn run(h: *LaneHost) void {
      const at = pick(h, .long) orelse return;
      if (!due(h)) return;
--    if (h.share.p >= 1) return h.fillAt(took(h, at));
-+    if (h.share.p >= 1) {
-+        h.fillAt(took(h, at));
-+        // more long steps before the next round (TF_FILL_ROUND_STEPS): a burst of prompts waits on fewer decode rounds
-+        for (1..roundSteps()) |_| {
-+            @import("lane_host_end.zig").takeCancels(h);
-+            while (h.admitOne()) {}
-+            const more = pick(h, .long) orelse return;
-+            h.fillAt(took(h, more));
-+        }
-+        return;
+     _ = longStep(h, at);
++    // more long steps before the next round (TF_FILL_ROUND_STEPS) when none is owed: a burst of prompts waits on fewer
++    // decode rounds
++    if (h.share.p < 1 or budget > 0) return;
++    for (1..roundSteps()) |_| {
++        between(h);
++        _ = longStep(h, pick(h, .long) orelse return);
 +    }
-     const decoding = runnable(h) > 0;
-     const t0 = std.Io.Clock.awake.now(h.io);
-     h.fillAt(took(h, at));
-@@ -112,7 +149,8 @@ pub fn run(h: *LaneHost) void {
+ }
+ 
+-/// The long prompt `pick` takes, once it has waited `preference_rounds` choices; null otherwise.
++/// The long prompt `pick` takes, once it has aged (`agingRounds` choices waited); null otherwise.
+ fn agedLong(h: *const LaneHost) ?usize {
+     const at = pick(h, .long) orelse return null;
+-    return if (h.filling.items[at].fill_wait >= preference_rounds) at else null;
++    return if (h.filling.items[at].fill_wait >= agingRounds()) at else null;
+ }
+ 
+ /// Between two prompt calls: cancels, then queued requests into free lanes.
+@@ -166,7 +200,8 @@ fn longStep(h: *LaneHost, at: usize) u64 {
  
  /// A prompt whose whole pass is at most `short_rows` rows (a long prompt's last rows are not).
  fn short(j: *const LaneHost.Job) bool {
@@ -1495,10 +1498,10 @@ index fd7ffec9..8163256a 100644
      }
      const untimed: @import("table.zig").Table = .{};
 diff --git a/zig/src/core/prompt_cache.zig b/zig/src/core/prompt_cache.zig
-index 59a846db..2a73a35e 100644
+index 252b90c8..6300fef8 100644
 --- a/zig/src/core/prompt_cache.zig
 +++ b/zig/src/core/prompt_cache.zig
-@@ -56,6 +56,12 @@ pub const Snapshots = struct {
+@@ -58,6 +58,12 @@ pub const Snapshots = struct {
          forget: ?*const fn (ptr: *anyopaque, dir: [:0]const u8, key: u64) void = null,
          /// --learn-conversations: the state's image as rows and parts, and copies out of and into kept states.
          rows: ?*const rows.Image = null,
@@ -1511,7 +1514,7 @@ index 59a846db..2a73a35e 100644
      };
  };
  
-@@ -119,6 +125,7 @@ pub const Entry = struct {
+@@ -123,6 +129,7 @@ pub const Entry = struct {
      borrowers: u32 = 0, // outstanding lookups: released by resumed or release, never evicted while borrowed
      ext: std.ArrayList(*Entry) = .empty, // entries extending its tokens, born later (policy.link): `extended` reads them
      own: []u32 = &.{}, // the kept prompt's one copy, which `tokens` and at first `last` slice (empty: they own theirs)
@@ -1519,17 +1522,17 @@ index 59a846db..2a73a35e 100644
  };
  
  pub const Counts = struct { hits: u64 = 0, misses: u64 = 0, kept: u64 = 0, evicted: u64 = 0, refused: u64 = 0, failed: u64 = 0 };
-@@ -148,12 +155,74 @@ pub const Store = struct {
-     disk: ?*rows.Rows = null, // --learn-conversations: every kept state written behind to disk, read back where it pays
+@@ -154,12 +161,75 @@ pub const Store = struct {
      active_rewind_at: u32 = 0, // the last lookup's rewind state (0: none); hosts keep a pass's states before the next lookup
      links_lost: bool = false, // an allocation failure left the extension links incomplete: `extended` scans
--
+     hold: bool = false, // memory pressure: lookups plan no marks and keeps refuse, so no new state is kept
 +    elastic: ?Elastic = null, // null: `budget` stays what startup gave
 +    resident_cap: u64 = 0, // TF_PROMPT_CACHE_RESIDENT_GIB: resident states' own copies at most, past the budget (0: none)
 +    resident_held: u64 = 0,
 +    resident_always: bool = false, // TF_PROMPT_CACHE_RESIDENT_ALWAYS=1 (tests): every mark resident, copies or not
 +    resident_prefer: bool = false, // a conversation's own marks resident even where a copy fits (TF_PROMPT_CACHE_RESIDENT_PREFER=0: off)
 +    sparing: bool = false, // victims leave resident states alone (a reservation for copies they would not help)
+ 
      repeat_log: @import("prompt_cache_repeat.zig").Log = .{},
 +
 +    /// A budget that takes what the streams leave: startup reserved every stream a full window, they hold far less.
@@ -1572,7 +1575,7 @@ index 59a846db..2a73a35e 100644
 +    }
 +
 +    /// A resident state whose rows are gone (its stream's caches went to another state, or were freed).
-+    fn gone(s: *const Store, e: *const Entry) bool {
++    pub fn gone(s: *const Store, e: *const Entry) bool {
 +        const f = s.family.vtable.alive orelse return false;
 +        return !f(s.family.ptr, e.saved);
 +    }
@@ -1596,15 +1599,15 @@ index 59a846db..2a73a35e 100644
      }
  
      pub fn deinit(s: *Store) void {
-@@ -179,6 +248,7 @@ pub const Store = struct {
+@@ -188,6 +258,7 @@ pub const Store = struct {
          const e = s.entries.orderedRemove(i);
          policy.unlink(s, e);
          s.held -= e.bytes;
 +        s.resident_held -= e.fixed;
-         if (s.disk) |r| if (!e.expired) rows.write.evicted(r, e); // --spill-gib: an evicted state is written before it goes
+         if (s.disk) |r| if (!e.expired) rows.write.evicted(r, e); // --spill-gib: stage an owned copy before the entry goes
          s.free(e);
      }
-@@ -209,6 +279,26 @@ pub const Store = struct {
+@@ -218,6 +289,26 @@ pub const Store = struct {
      pub const collectExpired = lifetime.collect;
      pub const release = lifetime.release;
  
@@ -1631,7 +1634,7 @@ index 59a846db..2a73a35e 100644
      /// What the budget leaves past the kept states and the spare storage: a family readies storage only inside it.
      pub fn room(s: *const Store) u64 {
          return s.budget -| s.held -| s.spare();
-@@ -242,7 +332,7 @@ pub const Store = struct {
+@@ -251,7 +342,7 @@ pub const Store = struct {
      fn keptNear(s: *const Store, prompt: []const u32, starts: []const u32, spans: []const modes.Span, at: u32) ?u32 {
          var best: ?u32 = null;
          for (s.entries.items) |e| {
@@ -1640,18 +1643,7 @@ index 59a846db..2a73a35e 100644
              if (!std.mem.eql(u32, prompt[0..e.tokens.len], e.tokens) or !modes.equal(e.decode_spans, spans, e.at)) continue;
              if (best == null or e.at > best.?) best = e.at;
          }
-@@ -265,6 +355,10 @@ pub const Store = struct {
-             const n = e.tokens.len;
-             if (prompt[n - 1] != e.tokens[n - 1] or !std.mem.eql(u32, prompt[0..n], e.tokens)) continue;
-             if (!modes.equal(e.decode_spans, spans, e.at)) continue;
-+            if (s.gone(e)) {
-+                e.expired = true;
-+                continue;
-+            }
-             best = e;
-         }
-         return best;
-@@ -304,6 +398,7 @@ pub const Store = struct {
+@@ -302,6 +393,7 @@ pub const Store = struct {
      /// `lookupRewind` with an explicit last-user end: history may also include later tool or assistant messages.
      pub fn lookupUser(s: *Store, a: Allocator, prompt: []const u32, born: u32, history_len: u32, rewind_len: u32, user_end: u32, shared: []const u32, starts: []const u32, spans: []const modes.Span) !Lookup {
          s.collectExpired();
@@ -1659,7 +1651,7 @@ index 59a846db..2a73a35e 100644
          const endpoint = if (s.rules.planned) s.startAt(starts, history_len) else history_len;
          const rewind = if (s.rules.planned) s.startAt(starts, rewind_len -| s.rules.lookahead) else rewind_len -| s.rules.lookahead;
          const endpoint_bytes = if (endpoint > 0 and (endpoint < prompt.len or (s.rules.warm != .off and endpoint == prompt.len)) and endpoint + s.rules.lookahead <= prompt.len) s.family.vtable.bytes(s.family.ptr, endpoint) else 0;
-@@ -343,9 +438,13 @@ pub const Store = struct {
+@@ -341,9 +433,13 @@ pub const Store = struct {
              const exists = for (s.entries.items) |e| {
                  if (!e.expired and e.at == at and e.tokens.len == n and n <= prompt.len and std.mem.eql(u32, e.tokens, prompt[0..n]) and modes.equal(e.decode_spans, spans, at)) break true;
              } else false;
@@ -1675,7 +1667,7 @@ index 59a846db..2a73a35e 100644
          while (s.held + need > s.budget or s.entries.items.len + @min(new, s.most) > s.most) {
              const i = s.victimBut(from, prompt, born) orelse return;
              s.remove(i);
-@@ -404,6 +503,11 @@ pub const Store = struct {
+@@ -403,6 +499,11 @@ pub const Store = struct {
          e.used = s.clock;
          e.branched = e.branched or s.extended(e); // a turn several continuations share (a re-sent, edited or forked one)
          s.counts.hits += 1;
@@ -1687,15 +1679,15 @@ index 59a846db..2a73a35e 100644
          const last = s.gpa.dupe(u32, prompt) catch return;
          if (e.own.len == 0 or e.last.ptr != e.own.ptr) s.gpa.free(e.last); // the first `last` is the tokens' copy
          e.last = last;
-@@ -457,6 +561,7 @@ pub const Store = struct {
+@@ -459,6 +560,7 @@ pub const Store = struct {
      /// `keep` as a prompt of `born` tokens: a reply's end and its warm pass supersede none of their request's states.
      pub fn keepBorn(s: *Store, prompt: []const u32, born: u32, at: u32, owner: ?*anyopaque, starts: []const u32, spans: []const modes.Span) bool {
          s.collectExpired();
 +        s.rebudget(0);
          const n = @as(usize, at) + s.rules.lookahead;
-         if (at == 0 or n > prompt.len) return false;
+         if (at == 0 or n > prompt.len or s.hold) return false;
          s.clock += 1;
-@@ -471,6 +576,12 @@ pub const Store = struct {
+@@ -473,6 +575,12 @@ pub const Store = struct {
          var owns_decoded = true;
          defer if (owns_decoded) s.gpa.free(decoded);
          const bytes = s.family.vtable.bytes(s.family.ptr, at);
@@ -1708,7 +1700,7 @@ index 59a846db..2a73a35e 100644
          if (bytes > s.budget or s.most == 0) {
              s.counts.refused += 1;
              note("kept nothing at {d} tokens: {d} MiB passes the {d} MiB budget", .{ at, bytes >> 20, s.budget >> 20 });
-@@ -484,7 +595,14 @@ pub const Store = struct {
+@@ -486,7 +594,14 @@ pub const Store = struct {
                  if (s.family.vtable.trim) |f| f(s.family.ptr, s.budget -| s.held -| bytes); // spare that cannot take this state goes before any state
                  if (s.spare() < free_) continue;
              }
@@ -1724,7 +1716,7 @@ index 59a846db..2a73a35e 100644
              s.counts.evicted += 1;
          }
          if (s.entries.items.len == 0) if (s.family.vtable.trim) |f| f(s.family.ptr, s.budget -| bytes);
-@@ -514,6 +632,43 @@ pub const Store = struct {
+@@ -516,6 +631,43 @@ pub const Store = struct {
          return true;
      }
  
@@ -1753,7 +1745,7 @@ index 59a846db..2a73a35e 100644
 +            return false;
 +        };
 +        e.* = .{ .tokens = last[0..n], .decode_spans = decoded, .at = at, .saved = saved, .bytes = 0, .fixed = fixed, .born = born, .used = s.clock, .last = last, .shared = shared, .own = last };
-+        s.entries.append(s.gpa, e) catch {
++        index.add(s, e) catch {
 +            s.family.vtable.drop(s.family.ptr, saved);
 +            s.gpa.free(last);
 +            s.gpa.destroy(e);
@@ -1769,19 +1761,19 @@ index 59a846db..2a73a35e 100644
      fn recall(s: *Store, prompt: []const u32, born: u32, starts: []const u32, spans: []const modes.Span, have: ?*Entry) ?*Entry {
          const im = s.imprint orelse return have;
 diff --git a/zig/src/core/prompt_cache_fit.zig b/zig/src/core/prompt_cache_fit.zig
-index edef1cf9..b20f86be 100644
+index ebc7a919..d340918c 100644
 --- a/zig/src/core/prompt_cache_fit.zig
 +++ b/zig/src/core/prompt_cache_fit.zig
-@@ -9,7 +9,7 @@ pub fn fitting(s: *pc.Store, a: Allocator, marks_: []const u32) ![]const u32 {
-     var out: std.ArrayList(u32) = .empty;
+@@ -10,7 +10,7 @@ pub fn fitting(s: *pc.Store, a: Allocator, marks_: []const u32) ![]const u32 {
      for (marks_) |at| {
+         if (s.hold) break; // memory pressure: the pass keeps nothing new, so none is planned
          const bytes = s.family.vtable.bytes(s.family.ptr, at);
 -        if (bytes <= s.budget) try out.append(a, at) else {
 +        if (bytes <= s.budget or s.residentOk()) try out.append(a, at) else {
              s.counts.refused += 1;
              pc.note("kept nothing at {d} tokens: {d} MiB passes the {d} MiB budget", .{ at, bytes >> 20, s.budget >> 20 });
          }
-@@ -25,7 +25,7 @@ pub fn fittingRewind(s: *pc.Store, a: Allocator, marks_: []const u32, endpoint:
+@@ -26,7 +26,7 @@ pub fn fittingRewind(s: *pc.Store, a: Allocator, marks_: []const u32, endpoint:
      if (endpoint_bytes <= s.budget and endpoint_bytes > 0) {
          used = endpoint_bytes;
          if (std.mem.indexOfScalar(u32, marks_, endpoint) != null) try out.append(a, endpoint);
@@ -1790,6 +1782,21 @@ index edef1cf9..b20f86be 100644
      if (s.active_rewind_at == rewind and std.mem.indexOfScalar(u32, marks_, rewind) != null) try out.append(a, rewind);
      if (s.active_rewind_at == rewind) used += s.family.vtable.bytes(s.family.ptr, rewind);
      for (marks_) |at| {
+diff --git a/zig/src/core/prompt_cache_index.zig b/zig/src/core/prompt_cache_index.zig
+index c28acc84..cc645ad1 100644
+--- a/zig/src/core/prompt_cache_index.zig
++++ b/zig/src/core/prompt_cache_index.zig
+@@ -11,6 +11,10 @@ pub fn find(s: *pc.Store, prompt: []const u32, starts: []const u32, spans: []con
+         const n = e.tokens.len;
+         if (prompt[n - 1] != e.tokens[n - 1] or !std.mem.eql(u32, prompt[0..n], e.tokens)) continue;
+         if (!modes.equal(e.decode_spans, spans, e.at)) continue;
++        if (s.gone(e)) { // a resident state whose rows went elsewhere: it restores nothing now
++            e.expired = true;
++            continue;
++        }
+         return e;
+     }
+     return null;
 diff --git a/zig/src/core/prompt_cache_policy.zig b/zig/src/core/prompt_cache_policy.zig
 index 745b64ba..335964de 100644
 --- a/zig/src/core/prompt_cache_policy.zig
@@ -2555,6 +2562,38 @@ index 98faec84..7ec5177c 100644
          var row0: usize = 0;
          for (g.lanes) |l| {
              g.ngram.rows(l.seq.history[0..], g.ids[row0..][0..l.rows], g.emb[row0 * dims ..][0 .. l.rows * dims], g.xs[row0 * (dims / 32) ..][0 .. l.rows * (dims / 32)]) catch |err| {
+diff --git a/zig/src/families/flashnext/cuda_disk.zig b/zig/src/families/flashnext/cuda_disk.zig
+index ab8bcda0..cdf3ae67 100644
+--- a/zig/src/families/flashnext/cuda_disk.zig
++++ b/zig/src/families/flashnext/cuda_disk.zig
+@@ -23,7 +23,8 @@ pub fn partsOf(at: u32, head: bool, out: *std.ArrayList(rows.image.Part), a: All
+ 
+ /// As cuda_snap.zig's move lays them: every layer's keys, then values, indexer keys, and pooled rows of `ratio`.
+ fn attention(at: u32, layers: usize, out: *std.ArrayList(rows.image.Part), a: Allocator) !void {
+-    for (0..2 * layers) |_| try out.append(a, .{ .bytes = @as(u64, at) * sh.kv_row, .row = sh.kv_row });
++    const kv_row: u32 = @intCast(@import("cuda_prompt.zig").kvRowBytes()); // int8 rows under --kv-cache fp8
++    for (0..2 * layers) |_| try out.append(a, .{ .bytes = @as(u64, at) * kv_row, .row = kv_row });
+     for (0..layers) |_| try out.append(a, .{ .bytes = @as(u64, at) * sh.index_row, .row = sh.index_row });
+     for (0..layers) |_| try out.append(a, .{ .bytes = @as(u64, at / sh.ratio) * sh.index_row, .row = sh.index_row, .per = sh.ratio });
+ }
+@@ -88,14 +89,15 @@ pub fn Kept(comptime F: type) type {
+             const head = c.head != null;
+             const st = try c.gpa.create(snap.Snap);
+             errdefer c.gpa.destroy(st);
+-            st.* = .{ .buf = try cuda.DeviceBuffer.alloc(c.engine.driver, snap.bytes(at, head)), .at = at, .history = .{ 0, 0 }, .head = head };
++            st.* = .{ .buf = try @import("cuda_recycle.zig").alloc(c.engine.driver, snap.bytes(at, head)), .at = at, .history = .{ 0, 0 }, .head = head };
+             return @ptrCast(st);
+         }
+ 
+         /// A state from a stream that did not draft lacks the head's rows this server's parts name: it stays off disk.
++        /// So does a resident one, whose attention rows are in its stream's caches, not its buffer.
+         fn whole(ptr: *anyopaque, saved: api.prompt_cache.Saved) bool {
+             const st: *const snap.Snap = @ptrCast(@alignCast(saved));
+-            return st.head == (of(ptr).head != null) and st.rank_id == 0;
++            return st.head == (of(ptr).head != null) and st.rank_id == 0 and st.src == null;
+         }
+ 
+         /// A fixed prompt's state at a mark inside its last chunk, hashed, and the prompt rate it took.
 diff --git a/zig/src/families/flashnext/cuda_draft_times.zig b/zig/src/families/flashnext/cuda_draft_times.zig
 new file mode 100644
 index 00000000..cb6ce673
@@ -3102,10 +3141,10 @@ index 00000000..f7a11e27
 +    try std.testing.expectEqual(@as(usize, 2 * 256 + 2 * 8 * 2), rowBytes());
 +}
 diff --git a/zig/src/families/flashnext/cuda_lanes.zig b/zig/src/families/flashnext/cuda_lanes.zig
-index c6a62a8c..2d6cfbd4 100644
+index 5fe5814d..b3b51b8a 100644
 --- a/zig/src/families/flashnext/cuda_lanes.zig
 +++ b/zig/src/families/flashnext/cuda_lanes.zig
-@@ -20,6 +20,41 @@ const be = lanes.backend;
+@@ -19,6 +19,41 @@ const be = lanes.backend;
  const ring = 1024;
  /// Streams a round takes at most (a round with more live streams takes them in turns).
  const round_streams = 32;
@@ -3148,9 +3187,9 @@ index c6a62a8c..2d6cfbd4 100644
  pub const captured_entries = [_][]const u8{ "_embed", "_hc_writeback", "_qmm_hcdown", "_hc_reduce_act", "_qmm_upmix", "_ple_gate", "_ple_conv", "_attn_prep", "_attn_gate", "_pool", "_scores", "_chunks", "_merge", "_router", "_topk_rows" };
  pub const captured_head_entries = [_][]const u8{ "_rmsnorm", "_add_streams" };
 @@ -40,6 +75,10 @@ pub fn Namespace(comptime Tri: type) type {
-         pub const snap_save = snapSave;
          pub const snap_restore = snapRestore;
          pub const snap_drop = snapDrop;
+         pub const kept_disk = @import("cuda_disk.zig").Kept(@This()); // their disk image, as qwen3_5 declares its own
 +        pub const snap_charged = snapCharged;
 +        pub const snap_save_resident = snapSaveResident;
 +        pub const snap_resident_bytes = snapResidentBytes;
@@ -3656,10 +3695,10 @@ index 1d6bae4f..95591b16 100644
 +    try std.testing.expect(sampledHeads());
 +}
 diff --git a/zig/src/families/flashnext/cuda_lanes_load.zig b/zig/src/families/flashnext/cuda_lanes_load.zig
-index 344aa852..e4e35f64 100644
+index 508ce51c..7f2cc545 100644
 --- a/zig/src/families/flashnext/cuda_lanes_load.zig
 +++ b/zig/src/families/flashnext/cuda_lanes_load.zig
-@@ -23,6 +23,9 @@ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cu
+@@ -24,6 +24,9 @@ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cu
      if (o.slide and captured != null) return error.TrainingOnCapturedGlue;
      const page_tokens = try @import("cuda_kv_lanes.zig").paging();
      if (page_tokens > 0 and (o.tp != 1 or o.slide or captured != null)) return error.FlashNextPagesUnsupported;
@@ -3669,7 +3708,7 @@ index 344aa852..e4e35f64 100644
      const driver: *cuda.Driver = @constCast(ctx.d);
      const own = try gpa.create(Cuda);
      errdefer gpa.destroy(own);
-@@ -56,7 +59,7 @@ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cu
+@@ -57,7 +60,7 @@ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cu
      errdefer own.engine.deinit();
      if (o.vision) |limits| {
          if (own.set != null) return error.VisionCapturedSetUnsupported;
@@ -3722,7 +3761,7 @@ index d921a2a5..56c9ad4c 100644
      }
  }
 diff --git a/zig/src/families/flashnext/cuda_launch.zig b/zig/src/families/flashnext/cuda_launch.zig
-index 15ae2f07..7316f178 100644
+index fb3fce8d..fd209e66 100644
 --- a/zig/src/families/flashnext/cuda_launch.zig
 +++ b/zig/src/families/flashnext/cuda_launch.zig
 @@ -91,6 +91,12 @@ pub const Tri = struct {
@@ -3748,7 +3787,7 @@ index 15ae2f07..7316f178 100644
              p("H", "*bf16", h),
              p("HOUT", "*bf16", hout),
 diff --git a/zig/src/families/flashnext/cuda_mtp.zig b/zig/src/families/flashnext/cuda_mtp.zig
-index 16c66f99..408ab322 100644
+index 2d822aa8..59df8eb8 100644
 --- a/zig/src/families/flashnext/cuda_mtp.zig
 +++ b/zig/src/families/flashnext/cuda_mtp.zig
 @@ -35,8 +35,20 @@ pub const default_depth: usize = 6;
@@ -4001,7 +4040,7 @@ index 16c66f99..408ab322 100644
  
      pub fn init(gpa: std.mem.Allocator, io: std.Io, driver: *cuda.Driver, stream: *cuda.Stream, dir: []const u8) !*Head {
          if (!cuda.kernels.available) return error.BuiltWithoutKernels;
-@@ -195,6 +380,12 @@ pub const Head = struct {
+@@ -196,6 +381,12 @@ pub const Head = struct {
          h.module = try cuda.Module.load(driver, cuda.kernels.flashnext_mtp);
          errdefer h.module.unload();
          h.best_fn = try h.module.function("fn_row_best");
@@ -4014,7 +4053,7 @@ index 16c66f99..408ab322 100644
          return h;
      }
  
-@@ -204,6 +395,7 @@ pub const Head = struct {
+@@ -205,6 +396,7 @@ pub const Head = struct {
      }
  
      pub fn deinit(h: *Head) void {
@@ -4022,7 +4061,7 @@ index 16c66f99..408ab322 100644
          h.module.unload();
          h.draft.free();
          h.artifact.deinit();
-@@ -230,6 +422,24 @@ pub const Head = struct {
+@@ -231,6 +423,24 @@ pub const Head = struct {
          _ = try pass.lane(input, sums, h.draft, out, pass.s.dummy, rows, 1);
      }
  
@@ -4047,7 +4086,7 @@ index 16c66f99..408ab322 100644
      /// fn_row_best over `rows` rows of `v` scores `ld` apart: [rows, 4] fp32 at `out` (best, log-sum-exp, id bits).
      pub fn best(h: *const Head, stream: cuda.Stream, scores: u64, v: usize, ld: usize, rows: usize, out: u64) !void {
          var a: cuda.Args = .{};
-@@ -255,6 +465,10 @@ pub const Draft = @import("cuda_mtp_draft.zig").Draft;
+@@ -256,6 +466,10 @@ pub const Draft = @import("cuda_mtp_draft.zig").Draft;
  pub const Ops = @import("cuda_mtp_ops.zig").Ops;
  pub const check = @import("cuda_mtp_check.zig").check;
  
@@ -4058,7 +4097,7 @@ index 16c66f99..408ab322 100644
  test "the draft vocabulary is 79,591 sorted ids under the vocabulary" {
      const ids = try draftIds(std.testing.allocator);
      defer std.testing.allocator.free(ids);
-@@ -287,6 +501,145 @@ test "a keyed draw over the top-k columns is the draw over every column" {
+@@ -288,6 +502,145 @@ test "a keyed draw over the top-k columns is the draw over every column" {
      try std.testing.expectEqual(@as(u32, @intCast(argmaxRow(&row))), try drawRow(gpa, &row, null, 0, null));
  }
  
@@ -5254,7 +5293,7 @@ index 00000000..c9a3031f
 +    }
 +}
 diff --git a/zig/src/families/flashnext/cuda_prompt.zig b/zig/src/families/flashnext/cuda_prompt.zig
-index d9283d79..883f1f90 100644
+index ed2d82c9..a57e32d3 100644
 --- a/zig/src/families/flashnext/cuda_prompt.zig
 +++ b/zig/src/families/flashnext/cuda_prompt.zig
 @@ -1,5 +1,6 @@
@@ -5305,7 +5344,7 @@ index d9283d79..883f1f90 100644
      /// Block scores for the sparse rows of an attention block, grown to the longest sequence's need.
      scores: ?cuda.DeviceBuffer = null,
      /// Rows a batched chunk takes at most (chunkRows).
-@@ -223,6 +237,9 @@ pub const Engine = struct {
+@@ -222,6 +236,9 @@ pub const Engine = struct {
          errdefer e.ngram.deinit();
          e.batch_k = try batch.Kernels.load(driver);
          e.batch_s = null;
@@ -5315,7 +5354,7 @@ index d9283d79..883f1f90 100644
          e.scores = null;
          e.chunk = chunk;
          return e;
-@@ -232,6 +249,7 @@ pub const Engine = struct {
+@@ -231,6 +248,7 @@ pub const Engine = struct {
          e.round_graph.clear();
          e.pockets.deinit();
          if (e.batch_s) |*bs| bs.free(e.gpa);
@@ -5323,7 +5362,7 @@ index d9283d79..883f1f90 100644
          if (e.scores) |*b| b.free();
          e.batch_k.deinit();
          e.ngram.deinit();
-@@ -320,11 +338,11 @@ pub const Engine = struct {
+@@ -319,11 +337,11 @@ pub const Engine = struct {
          seq.logits = try e.gpa.alloc(u8, vocab * 2);
          seq.conv = try zeros(e.gpa, e.driver, e.stream.*, linear_n, (gdn.taps - 1) * gdn.conv_dim * 2);
          seq.state = try zeros(e.gpa, e.driver, e.stream.*, linear_n, state_n * 4);
@@ -5338,7 +5377,7 @@ index d9283d79..883f1f90 100644
          try seq.tail.fill8(0, e.stream.handle);
          return seq;
      }
-@@ -383,8 +401,26 @@ pub const Engine = struct {
+@@ -382,8 +400,26 @@ pub const Engine = struct {
          return &e.batch_s.?;
      }
  
@@ -5365,7 +5404,7 @@ index d9283d79..883f1f90 100644
          if (ids.len == 0 or seq.fed + ids.len > seq.cap) return error.UnexpectedTensor;
          if ((hooks.keep != null or hooks.logits == .all) and ids.len > e.chunk) return error.UnexpectedTensor;
          const s = try e.reserve(@min(ids.len, e.chunk));
-@@ -407,6 +443,7 @@ pub const Engine = struct {
+@@ -406,6 +442,7 @@ pub const Engine = struct {
              e.ngram.warmAhead(ids, at + n, @min(ids.len, at + n + s.cap));
              p.hooks.logits = if (last) hooks.logits else .none;
              p.hooks.streams = if (hooks.streams != 0) hooks.streams + at * wide * 2 else 0;
@@ -5373,7 +5412,7 @@ index d9283d79..883f1f90 100644
              try p.chunk(ids[at..][0..n], seq.fed + at, if (last and hooks.logits != .none) seq.logits else null);
              at += n;
          }
-@@ -416,6 +453,7 @@ pub const Engine = struct {
+@@ -415,6 +452,7 @@ pub const Engine = struct {
      /// A stream's window in a shared pass and the pass over several (cuda_prompt_windows.zig).
      pub const Window = @import("cuda_prompt_windows.zig").Window;
      pub const windows = @import("cuda_prompt_windows.zig").windows;
@@ -5381,7 +5420,7 @@ index d9283d79..883f1f90 100644
  
      /// One decode round: each of `seqs` takes its token of `ids` in one batched pass; scores as if alone.
      pub fn round(e: *Engine, comptime Tri: type, tri: Tri, seqs: []const *Seq, ids: []const u32, out: u64) !void {
-@@ -516,13 +554,13 @@ pub const Seq = struct {
+@@ -515,13 +553,13 @@ pub const Seq = struct {
          gpa.free(s.ikc);
          gpa.free(s.pooled);
          if (s.paged) |*p| p.deinit(gpa);
@@ -5639,7 +5678,7 @@ index 00000000..07ea5676
 +    try std.testing.expectEqual(@as(usize, (1 << 20) + (1 << 17)), rounded((1 << 20) + 1));
 +}
 diff --git a/zig/src/families/flashnext/cuda_snap.zig b/zig/src/families/flashnext/cuda_snap.zig
-index 13608e73..d92bda49 100644
+index 7db8fe40..aa546be4 100644
 --- a/zig/src/families/flashnext/cuda_snap.zig
 +++ b/zig/src/families/flashnext/cuda_snap.zig
 @@ -5,9 +5,20 @@ const cuda = @import("cuda");
@@ -5663,7 +5702,7 @@ index 13608e73..d92bda49 100644
  const conv_bytes = (gdn.taps - 1) * gdn.conv_dim * 2;
  const state_bytes = wt.state_n * 4;
  const index_row = wt.index_dim * 2;
-@@ -15,7 +26,7 @@ const tail_bytes = wt.ple_tail_n * wt.wide * 2;
+@@ -18,7 +29,7 @@ pub const shape = .{ .linear = wt.linear_n, .attn = wt.attn_n, .conv = conv_byte
  
  /// One attention cache's first `at` key, value and indexer-key rows, and the pooled blocks they complete.
  fn attnBytes(at: usize) usize {
@@ -5672,7 +5711,7 @@ index 13608e73..d92bda49 100644
  }
  
  /// Device bytes a state after `at` tokens takes: the DeltaNet's are fixed, each attention cache grows by the token.
-@@ -23,15 +34,108 @@ pub fn bytes(at: usize, head: bool) usize {
+@@ -26,15 +37,108 @@ pub fn bytes(at: usize, head: bool) usize {
      return wt.linear_n * (conv_bytes + state_bytes) + (wt.attn_n + @intFromBool(head)) * attnBytes(at) + tail_bytes;
  }
  
@@ -5780,19 +5819,19 @@ index 13608e73..d92bda49 100644
 +
  const Way = enum { save, restore };
  
- const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
-@@ -39,8 +143,8 @@ const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
+ /// A piece `move` copies: `layers` buffers of `n` bytes, rows of `row` bytes (0: whole) a `per`-position block each.
+@@ -54,8 +158,8 @@ pub fn order(at: usize, head: bool) struct { p: [11]Piece, len: usize } {
  /// An attention cache's pieces for `at` rows: complete pooled blocks only (the rest pool again as later rows land).
- fn attnPieces(kc: []cuda.DeviceBuffer, vc: []cuda.DeviceBuffer, ikc: []cuda.DeviceBuffer, pooled: []cuda.DeviceBuffer, at: usize) [4]Piece {
+ fn attnOrder(layers: usize, at: usize) [4]Piece {
      return .{
--        .{ .bufs = kc, .n = at * prompt.kv_row_bytes },
--        .{ .bufs = vc, .n = at * prompt.kv_row_bytes },
-+        .{ .bufs = kc, .n = at * prompt.kvRowBytes() },
-+        .{ .bufs = vc, .n = at * prompt.kvRowBytes() },
-         .{ .bufs = ikc, .n = at * index_row },
-         .{ .bufs = pooled, .n = at / wt.index_ratio * index_row },
+-        .{ .layers = layers, .n = at * prompt.kv_row_bytes, .row = prompt.kv_row_bytes },
+-        .{ .layers = layers, .n = at * prompt.kv_row_bytes, .row = prompt.kv_row_bytes },
++        .{ .layers = layers, .n = at * prompt.kvRowBytes(), .row = prompt.kvRowBytes() },
++        .{ .layers = layers, .n = at * prompt.kvRowBytes(), .row = prompt.kvRowBytes() },
+         .{ .layers = layers, .n = at * index_row, .row = index_row },
+         .{ .layers = layers, .n = at / wt.index_ratio * index_row, .row = index_row, .per = wt.index_ratio },
      };
-@@ -93,34 +197,101 @@ fn move(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, base: u64, at: usize,
+@@ -106,34 +210,102 @@ fn move(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, base: u64, at: usize,
  pub fn save(gpa: std.mem.Allocator, driver: *const cuda.Driver, stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft) !*Snap {
      const at = seq.fed;
      if (d) |h| if (h.len != at or h.drafted != 0) return error.NotAtMark;
@@ -5807,14 +5846,14 @@ index 13608e73..d92bda49 100644
      try move(stream, seq, d, snap.buf.ptr, at, .save);
      try stream.synchronize();
 +    if (t0 != 0) std.debug.print("snap save at={d}: alloc {d} us, copy {d} us\n", .{ at, t1 - t0, traceUs() - t1 });
-+    return snap;
-+}
-+
+     return snap;
+ }
+ 
 +/// The DeltaNet's conv windows and states and the n-gram tail to or from the buffer at `base`.
 +fn moveFixed(stream: cuda.Stream, seq: *prompt.Seq, base: u64, way: Way) !void {
 +    const dr = stream.d;
 +    var off: u64 = 0;
-+    const pieces = [_]Piece{ .{ .bufs = seq.conv, .n = conv_bytes }, .{ .bufs = seq.state, .n = state_bytes }, .{ .bufs = (&seq.tail)[0..1], .n = tail_bytes } };
++    const pieces = [_]struct { bufs: []cuda.DeviceBuffer, n: usize }{ .{ .bufs = seq.conv, .n = conv_bytes }, .{ .bufs = seq.state, .n = state_bytes }, .{ .bufs = (&seq.tail)[0..1], .n = tail_bytes } };
 +    for (pieces) |p| for (p.bufs) |b| {
 +        const dst, const src = if (way == .save) .{ base + off, b.ptr } else .{ b.ptr, base + off };
 +        try dr.check(dr.api.cuMemcpyDtoDAsync_v2(dst, src, p.n, stream.handle), "cuMemcpyDtoDAsync");
@@ -5838,9 +5877,9 @@ index 13608e73..d92bda49 100644
 +    if (o.anchor) |old| old.dead = true;
 +    o.anchor = snap;
 +    o.refs += 1;
-     return snap;
- }
- 
++    return snap;
++}
++
 +/// A resident state's rows from its caches into `seq` (and the head's, with `d`), its fixed part from its buffer.
 +fn restoreResident(stream: cuda.Stream, seq: *prompt.Seq, d: ?*Draft, snap: *const Snap) !void {
 +    const o = snap.src.?;
@@ -5849,10 +5888,11 @@ index 13608e73..d92bda49 100644
 +    if (d) |h| if (h.pg.pt != 0 or o.head == null) return error.NoHeadState;
 +    const dr = stream.d;
 +    try moveFixed(stream, seq, snap.buf.ptr, .restore);
-+    const from = attnPieces(o.kc, o.vc, o.ikc, o.pooled, snap.at);
-+    const to = attnPieces(seq.kc, seq.vc, seq.ikc, seq.pooled, snap.at);
-+    for (from, to) |f, t| for (f.bufs, t.bufs) |fb, tb| if (f.n > 0) {
-+        try dr.check(dr.api.cuMemcpyDtoDAsync_v2(tb.ptr, fb.ptr, f.n, stream.handle), "cuMemcpyDtoDAsync");
++    const ps = attnOrder(wt.attn_n, snap.at);
++    const from = [4][]cuda.DeviceBuffer{ o.kc, o.vc, o.ikc, o.pooled };
++    const to = [4][]cuda.DeviceBuffer{ seq.kc, seq.vc, seq.ikc, seq.pooled };
++    for (ps, from, to) |p, fs, ts| for (fs, ts) |fb, tb| if (p.n > 0) {
++        try dr.check(dr.api.cuMemcpyDtoDAsync_v2(tb.ptr, fb.ptr, p.n, stream.handle), "cuMemcpyDtoDAsync");
 +    };
 +    if (d) |h| {
 +        const hs = o.head.?;
@@ -6005,10 +6045,10 @@ index a623d411..c83ac95b 100644
  
  /// The grouped experts on flashnext_fexp.cu's 64-pair tiles (expert_rows' bits), wn column blocks a CTA.
 diff --git a/zig/src/native/cuda.zig b/zig/src/native/cuda.zig
-index 72909c72..bf21edd1 100644
+index ab6a6e94..b6b9bb3b 100644
 --- a/zig/src/native/cuda.zig
 +++ b/zig/src/native/cuda.zig
-@@ -418,6 +418,12 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
+@@ -420,6 +420,12 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
              h.store = null;
          }
          try kv_pages.store(F, store, loaded.target, kept); // its snapshot slots, before a disk probe takes one
@@ -6019,9 +6059,9 @@ index 72909c72..bf21edd1 100644
 +            std.log.info("prompt cache: elastic, up to {d:.1} GiB of {d:.1} GiB room past the streams' live bytes and a {d:.1} GiB margin; {d:.1} GiB now", .{ toGib(store.elastic.?.cap), toGib(room), toGib(margin), toGib(store.budget) });
 +        };
          h.store = store;
-         if (F == nemotron.native and o.learn_conversations) {
-             if (o.learn) |root| try cuda_disk.attach(a, io, &g.ctx, o, root, kernels, loaded, store);
-@@ -547,3 +553,11 @@ test "Save recovery: real native close drains the accepted trainer before any ch
+         if (o.learn_conversations) if (o.learn) |root| {
+             if (F == nemotron.native) try cuda_disk.attach(a, io, &g.ctx, o, root, kernels, loaded, store);
+@@ -553,3 +559,11 @@ test "Save recovery: real native close drains the accepted trainer before any ch
  test "Save recovery: real native close drains the dense trainer before any child or parent is released" {
      try @import("dense_trainer_close_test.zig").run(Host, Host.serve, Host.close);
  }
@@ -6046,10 +6086,10 @@ index cfea8821..a0e6d239 100644
              fn f(p: *anyopaque, s: *lanes.Stream, position: u64) anyerror!u64 {
                  const x = H.bind(p);
 diff --git a/zig/src/native/cuda_snaps.zig b/zig/src/native/cuda_snaps.zig
-index 52af0c3b..8743ffc8 100644
+index 35a5785f..a11d626c 100644
 --- a/zig/src/native/cuda_snaps.zig
 +++ b/zig/src/native/cuda_snaps.zig
-@@ -40,6 +40,9 @@ pub fn Snaps(comptime F: type, comptime image: ?*const api.prompt_cache.rows.Ima
+@@ -41,6 +41,9 @@ pub fn Snaps(comptime F: type, comptime image: ?*const api.prompt_cache.rows.Ima
              .charged = if (@hasDecl(F, "snap_charged")) F.snap_charged else null,
              .spare = if (@hasDecl(F, "snap_spare")) F.snap_spare else null,
              .reuses = if (@hasDecl(F, "snap_reuses")) F.snap_reuses else null,
@@ -6293,10 +6333,10 @@ index d3b4ee86..741a6bca 100644
 +    return alone_chains;
  }
 diff --git a/zig/tests/cuda/main.zig b/zig/tests/cuda/main.zig
-index 52c547d4..065b3ac3 100644
+index 2d37fc73..66eec674 100644
 --- a/zig/tests/cuda/main.zig
 +++ b/zig/tests/cuda/main.zig
-@@ -91,6 +91,7 @@ const lane_half_tests = @import("lane_half_tests.zig");
+@@ -95,6 +95,7 @@ const lane_half_tests = @import("lane_half_tests.zig");
  const flashnext_dense_hc_tests = @import("flashnext_dense_hc_tests.zig");
  const flashnext_hc_tests = @import("flashnext_hc_tests.zig");
  const flashnext_attn_tests = @import("flashnext_attn_tests.zig");
@@ -6304,7 +6344,7 @@ index 52c547d4..065b3ac3 100644
  const ggml_tests = @import("ggml_tests.zig");
  const paged_tests = @import("paged_tests.zig");
  const glm_loader_gate = @import("glm_loader_gate.zig");
-@@ -133,6 +134,7 @@ const usage =
+@@ -137,6 +138,7 @@ const usage =
      \\  flashnext-hc              Flash Next's own hyper-connection and n-gram glue against float64 (synthetic rows)
      \\  flashnext-attn            Flash Next's own attention glue, pooling and block scores against float64 (synthetic)
      \\  flashnext-pages           the attention glue's caches through a page table: paged == contiguous, float64, controls
@@ -6312,7 +6352,7 @@ index 52c547d4..065b3ac3 100644
      \\  info                      driver, device and library versions
      \\  smoke                     copies, fills, launches, argument packing, module globals
      \\  shared-context            Context.shared and Stream.borrowed as a library inside a host's process sees them
-@@ -325,6 +327,7 @@ fn run(gpu: check.Gpu, cmd: []const u8, rest: []const [:0]const u8) !void {
+@@ -334,6 +336,7 @@ fn run(gpu: check.Gpu, cmd: []const u8, rest: []const [:0]const u8) !void {
      if (std.mem.eql(u8, cmd, "flashnext-hc")) return flashnext_hc_tests.run(gpu);
      if (std.mem.eql(u8, cmd, "flashnext-attn")) return flashnext_attn_tests.run(gpu);
      if (std.mem.eql(u8, cmd, "flashnext-pages")) return @import("contract_fn_pages.zig").run(gpu);
