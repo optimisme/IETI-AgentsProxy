@@ -17,7 +17,7 @@ def _patch():
     last = {}
 
     blocks = {}
-    if os.environ.get('IETI_BLOCK_TIMES') == '1':  # each block synchronized before and after (as Zig's PROFILE=2)
+    if os.environ.get('IETI_BLOCK_TIMES') in ('1', '2'):  # each block synchronized before and after (as Zig's PROFILE=2)
         f = sys.modules['tensorfold.families.qwen4_exp.cuda.forward']
 
         def timed_block(name, fn):
@@ -34,6 +34,30 @@ def _patch():
 
         for name in ('hc_block', 'gdn_block', 'attn_block', 'moe_block', 'ple_block', 'finish', '_writeback'):
             setattr(f, name, timed_block(name, getattr(f, name)))
+
+        if os.environ['IETI_BLOCK_TIMES'] == '2':  # each kernel step too (as Zig's PROFILE=3); matmuls named by shape
+            mm = f._mm
+            timed_mms = {}
+
+            def named_mm(x, q, xs, out, b, **kw):
+                key = f'mm{getattr(q, "n", 0)}x{getattr(q, "k", 0)}'
+                fn = timed_mms.setdefault(key, timed_block(key, mm))
+                return fn(x, q, xs, out, b, **kw)
+
+            f._mm = named_mm
+            fuser = f._hc_fuser
+
+            def named_fuser(*a, **k):
+                got = fuser(*a, **k)
+                return None if got is None else timed_block('hc_upmix' if k.get('upmix') else 'hc_fused', got)
+
+            f._hc_fuser = named_fuser
+            f._prefill_chain = timed_block('gdn_chain', f._prefill_chain)
+            for name in ('hc_writeback', 'hc_normed', 'hc_act', 'hc_reduce_act', 'hc_mix', 'attn_prep', 'attn_gate'):
+                if hasattr(f.glue, name):
+                    setattr(f.glue, name, timed_block(name, getattr(f.glue, name)))
+            for name in ('qsa_pool', 'qsa_rows', 'attention'):
+                setattr(f.attn_mod, name, timed_block(name, getattr(f.attn_mod, name)))
 
     def timed_compute(fn, mixed):
         def wrap(*a, **k):
