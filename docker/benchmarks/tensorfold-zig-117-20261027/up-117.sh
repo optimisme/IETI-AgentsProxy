@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # On 2226: (re)start Flash-Next on the 1.1.7 build volume (our patch, the mixed pass); extra env passes through.
-# Default: the best build, variants/tf119b (2026-10-30, our work on 1.1.9). VARIANT=name starts another candidate (variants/<name>/, volume
+# Default: the best build, variants/tf119c (2026-10-30, our work on 1.1.9). VARIANT=name starts another candidate (variants/<name>/, volume
 # ieti-native117-<name>-build); VARIANT= (empty) the plain 1.1.7 rebase (tf117-20261027).
 # Stops the 1.1.4 PLE build and the 27B experiment first: one model on the GPU at a time.
 set -euo pipefail
 cd ~/docker
 docker stop qwen38_flash_next_tensorfold_114_ple_cuda qwen38_27b_tensorfold_116_cuda > /dev/null 2>&1 || true
-V=${VARIANT-tf119b}
+V=${VARIANT-tf119c}
 export TENSORFOLD_NATIVE_VOLUME=${TENSORFOLD_NATIVE_VOLUME:-ieti-native117-${V:-fn}-build}
 export TENSORFOLD_NATIVE_PATCH_SHA256=$(sha256sum benchmarks/tensorfold-zig-117-20261027/${V:+variants/$V/}fn.patch | cut -d" " -f1)
 export TENSORFOLD_PREFILL_CHUNK=${TENSORFOLD_PREFILL_CHUNK:-4096} TENSORFOLD_KV_CACHE=${TENSORFOLD_KV_CACHE:-fp8} \

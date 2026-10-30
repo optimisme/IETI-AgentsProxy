@@ -1,12 +1,11 @@
 # TensorFold Zig 1.1.7 i 1.1.9: millor build de Flash-Next per a setze alumnes
 
-> **Avís (30 d'octubre).** Les builds resident7, resident11, resident12 i tf119
-> tenen un error greu amb els prompts d'uns 74–136 tokens: vegeu
+> **Avís (30 d'octubre).** resident12 i tf119 tenen un error greu amb els prompts
+> d'uns 74–136 tokens, i s'espera el mateix des de resident7: vegeu
 > [Respostes corrompudes](#respostes-corrompudes-amb-trossos-de-64127-files-30-doctubre).
-> No s'han de desplegar. `variants/tf119b` el corregeix i és la millor build
-> provisional; encara falta tancar cinc respostes que difereixen de la referència.
+> No s'han de desplegar. `variants/tf119c` el corregeix i és la millor build.
 
-**La millor build (30 d'octubre, `variants/tf119b`) és TensorFold 1.1.9 amb
+**La millor build (30 d'octubre, `variants/tf119c`) és TensorFold 1.1.9 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
@@ -30,9 +29,9 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-tf119b-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-tf119c-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) (diferència respecte de
+  [`variants/tf119c/fn.patch`](variants/tf119c/fn.patch) (diferència respecte de
   `v1.1.9`). Les builds anteriors són
   [`variants/tf119/fn.patch`](variants/tf119/fn.patch) (30 d'octubre, sense la
   correcció) i, sobre la 1.1.7,
@@ -295,13 +294,24 @@ malament i el model principal quedava corromput.
   llindar a 128 és al perfil des de resident7, de manera que s'hi espera des
   d'aleshores; resident7 i resident11 no s'han provat. Les comprovacions
   d'exactitud no cobrien aquesta franja.
-- **Correcció (`variants/tf119b`):** el format segueix el mateix llindar que els
-  experts. Prova: [`short_sweep.py`](short_sweep.py); dades a
-  [`results/resident/tf119b.txt`](results/resident/tf119b.txt). Ni un error 500
-  a les passades curtes, 4 de 4 a 74k a temperatura 0 i exactitud de 8 de 8 i
-  9 de 9.
-- **Queda obert:** 5 de 65 respostes (les mateixes cinc a totes dues
-  temperatures) difereixen de les del llindar a 64. El Python fa d'àrbitre.
+- **Primera correcció (`variants/tf119b`):** el format segueix el mateix llindar
+  que els experts. Elimina l'error, però 5 de 65 respostes difereixen de les del
+  llindar a 64. Dades a [`results/resident/tf119b.txt`](results/resident/tf119b.txt).
+- **Correcció definitiva (`variants/tf119c`):** un tros de prompt que va sol fa
+  servir les rajoles dels experts des de 64 files, el camí que escriu bf16, i el
+  format es queda a `n >= 64`, com a la versió original. Les rondes conserven el
+  llindar de 128. Es tria perquè segueix el camí original, no perquè el Python
+  doni la raó: a temperatura 0 Python coincideix 44 de 50 amb tf119b i 43 de 50
+  amb el llindar a 64, i difereix també fora de la franja, de manera que no pot
+  fer d'àrbitre bit a bit.
+- **Prova:** [`short_sweep.py`](short_sweep.py); dades a
+  [`results/resident/tf119c.txt`](results/resident/tf119c.txt). 65 de 65 i 50 de
+  50 iguals que el llindar a 64, cap error 500, 4 de 4 a 74k a temperatura 0,
+  exactitud de 8 de 8 i 9 de 9, reutilització de 8 de 8. Ronda freda de 74k en
+  662 s, respostes curtes a 241 tok/s i càrrega d'agents a 117,7 tok/s sense
+  errors: no perd velocitat respecte de tf119.
+- **Prova ràpida:** `resident-check.sh` comença per l'etapa `quick`, les passades
+  curtes contra les respostes de tf119c, i s'atura a la primera diferència.
 
 ## Comprovacions d'exactitud
 
@@ -433,7 +443,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/tf119b) | tf119 + correcció de les respostes corrompudes (provisional) | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119b-build` |
+| **best** (variants/tf119c) | tf119 + correcció definitiva de les respostes corrompudes | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119c-build` |
+| variants/tf119b | tf119 + primera correcció, substituïda per tf119c | [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) | `ieti-native117-tf119b-build` |
 | variants/tf119 | resident12 traslladada a TensorFold 1.1.9 (amb l'error) | [`variants/tf119/fn.patch`](variants/tf119/fn.patch) | `ieti-native117-tf119-build` |
 | variants/resident12 | resident11 + DeltaNet dels fluxos en un llançament + caches dels llindars separades | [`variants/resident12/fn.patch`](variants/resident12/fn.patch) | `ieti-native117-resident12-build` |
 | variants/resident11 | resident7 + atenció dels fluxos en un llançament | [`variants/resident11/fn.patch`](variants/resident11/fn.patch) | `ieti-native117-resident11-build` |

@@ -3,6 +3,10 @@
 # mark keeps only the DeltaNet state (~110 MiB) and its rows stay in the stream's caches, which outlive the stream
 # until a return turn resumes them. Stages (STAGES, default all but the baselines):
 #   exact      greedy together vs alone, needles and answers, sampled replies against the best build's
+#   quick      about a minute once the server is up, first by default: the band's short prompts at both temperatures. Any
+#              error or changed reply stops the run here
+#   band       short prompts through the 64-127 row chunks (74-136 tokens) and four 74k prompts at temperature 0: no
+#              errors, replies as variants/tf119c/band-*.json
 #   reuse      two-turn conversations resumed from copies, then from resident states (TF_PROMPT_CACHE_RESIDENT_ALWAYS=1):
 #              the replies must be the same (reuse_check.py)
 #   capacity   16 requests near TOKENS (default 74000) and two return turns (the Python campaign's probe)
@@ -23,7 +27,7 @@ RV=${RVAR:-resident2}
 T=${TOKENS:-74000}
 mkdir -p "$D"
 EXTRA="TF_PROMPT_CACHE_RESIDENT_GIB=${RESIDENT_GIB:-2}${RENV:+ $RENV}"
-echo "# $(date -Is) resident-check $RV $EXTRA cache ${CACHE_GIB:-24} GiB tokens $T stages ${STAGES:-exact reuse capacity agent}" >> "$S"
+echo "# $(date -Is) resident-check $RV $EXTRA cache ${CACHE_GIB:-24} GiB tokens $T stages ${STAGES:-quick exact reuse capacity agent}" >> "$S"
 
 up() { docker stop $PY > /dev/null 2>&1; env $EXTRA TF_EXTRA_ENV="$EXTRA${1:+ $1}" TENSORFOLD_PROMPT_CACHE_GIB=${CACHE_GIB:-24} VARIANT=$RV bash $H/up-117.sh | tail -1; }
 errs() { docker logs $C 2>&1 | grep -i -E "panic|segfault|CudaFailed|out of memory|resident failed" | head -3 | sed "s/^/# /" | tee -a "$S"; }
@@ -47,7 +51,23 @@ for n in ('cold16', 'return1-16', 'return2-16'):
 EOF
 }
 
-for stage in ${STAGES:-exact reuse capacity agent}; do
+sweeps() { # the short prompts at both temperatures against the reference: non-zero on an error or a changed reply
+  local bad=0 t n f
+  for t in 0 0.1; do
+    n=${t/./}; [ $t = 0 ] && f=40 || f=10
+    python3 $H/short_sweep.py http://127.0.0.1:8007 $f 140 2 $t $D/band-$n.json 2>&1 | tail -1 | cut -c1-200 | tee -a "$S"
+    python3 -c "import json, sys
+a=json.load(open('$H/variants/tf119c/band-t$n.json')); b=json.load(open('$D/band-$n.json'))
+same=sum(a[k]==b.get(k) for k in a)
+print('band temperature $t: equal to tf119c', same, 'of', len(a))
+sys.exit(same != len(a))" | tee -a "$S"
+    [ "${PIPESTATUS[0]}" = 0 ] || bad=1
+  done
+  errs
+  return $bad
+}
+
+for stage in ${STAGES:-quick exact reuse capacity agent}; do
   echo "== $stage $(date -Is)" | tee -a "$S"
   case $stage in
     exact)
@@ -58,6 +78,14 @@ for stage in ${STAGES:-exact reuse capacity agent}; do
 a=json.load(open('$P/kvcheck-117/answers.json')); b=json.load(open('$P/kvcheck-resident/answers.json'))
 print('answers equal to kvcheck-117:', sum(a[k]==b.get(k) for k in a), 'of', len(a))" | tee -a "$S"
       python3 $H/sampled_check.py http://127.0.0.1:8007 $D/sampled $H/variants/sampled/sampled-on.json 2>&1 | tee -a "$S"
+      errs ;;
+    quick)
+      up || exit 1
+      sweeps || exit 1 ;;
+    band)
+      up || exit 1
+      sweeps || exit 1
+      python3 $H/cold_many.py http://127.0.0.1:8007 $(( $(date +%s) % 100000 * 10 )) 4 74000 8 2>&1 | tee -a "$S"
       errs ;;
     reuse)
       docker stop $PY > /dev/null 2>&1

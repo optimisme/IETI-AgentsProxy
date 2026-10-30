@@ -1810,7 +1810,7 @@ index 745b64ba..335964de 100644
          const rewind = !e.expired and e.at == s.active_rewind_at and on; // the active rewind state goes last
          if (e.borrowers == 0 and e != skip and (oldest == null or (if (rewind != oldest_rewind) oldest_rewind else e.used < s.entries.items[oldest.?].used))) {
 diff --git a/zig/src/families/flashnext/cuda_batch.zig b/zig/src/families/flashnext/cuda_batch.zig
-index 6066b1ea..54e6f2f8 100644
+index 6066b1ea..5d3b10c5 100644
 --- a/zig/src/families/flashnext/cuda_batch.zig
 +++ b/zig/src/families/flashnext/cuda_batch.zig
 @@ -18,6 +18,8 @@ const ops = @import("cuda_batch_ops.zig");
@@ -2114,12 +2114,13 @@ index 6066b1ea..54e6f2f8 100644
              try self.copy(keep.moe_ids, s.picks, pairs * 4);
              try self.copy(keep.moe_wts, s.wts, pairs * 4);
              const e = experts_n + 1;
-@@ -456,12 +649,15 @@ pub fn Pass(comptime Tri: type) type {
+@@ -456,12 +649,16 @@ pub fn Pass(comptime Tri: type) type {
                  }
                  return;
              }
 -            if (n >= 64) {
-+            if (n >= @import("cuda_tile_rows.zig").experts()) {
++            // a lone prompt chunk from 64 rows always (its bf16 slots are this path's); a round's rows from the threshold
++            if ((self.lanes.len == 0 and n >= 64) or n >= @import("cuda_tile_rows.zig").experts()) {
                  // prompt rows on 64-pair factored tiles, expert_rows' bits
                  try self.k.router.route(self.stream, s.picks, pairs, e, tk.fexp_tile, plan);
 +                kt.lap(self.stream, "moe_route");
@@ -2132,7 +2133,7 @@ index 6066b1ea..54e6f2f8 100644
                  return;
              }
              try self.k.router.route(self.stream, s.picks, pairs, e, rows_tile, plan);
-@@ -486,6 +682,8 @@ pub fn Pass(comptime Tri: type) type {
+@@ -486,6 +683,8 @@ pub fn Pass(comptime Tri: type) type {
              @memset(pos, 0);
              for (0..blocks) |b| pos[4 * b] = @intCast(if (self.lanes.len > 0) self.lanes[b].pos else self.pos0 + b * att_rows);
              try self.upload(s.pos, std.mem.sliceAsBytes(pos));
@@ -2141,7 +2142,7 @@ index 6066b1ea..54e6f2f8 100644
              if (!self.prepared) try s.uploaded();
          }
  
-@@ -501,58 +699,101 @@ pub fn Pass(comptime Tri: type) type {
+@@ -501,58 +700,100 @@ pub fn Pass(comptime Tri: type) type {
              if (n == 0 or n > s.cap) return error.UnexpectedTensor;
              if (self.lanes.len > 0) {
                  // shared rounds read every row's scores; a lane keeps its own rollback and hidden rows, nothing else
@@ -2233,9 +2234,8 @@ index 6066b1ea..54e6f2f8 100644
 +                kt.lap(self.stream, "hc_wb_mix");
                  try self.readoutKeep(lw.mlp_hc, 0, n, keep.mlp_hc);
 +                lap(self, timed, &spent, &mark, .hc);
-+                // nothing reads these slots but the write-back: a lone prompt chunk keeps them in bf16 (the tile path's
-+                // down kernel writes them, so the same rows as moeBlockKeep's tiles)
-+                self.y16 = y16_prompt and self.lanes.len == 0 and n >= @import("cuda_tile_rows.zig").experts() and lw.native_experts == null and self.addAt(layer) == null and keep.moe_branch == 0;
++                // nothing reads these slots but the write-back: a lone prompt chunk keeps them in bf16
++                self.y16 = y16_prompt and self.lanes.len == 0 and n >= 64 and lw.native_experts == null and self.addAt(layer) == null and keep.moe_branch == 0;
                  try self.moeBlockKeep(lw, keep);
                  try self.moeAdds(layer, keep);
 +                lap(self, timed, &spent, &mark, .moe);
