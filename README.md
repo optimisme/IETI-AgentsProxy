@@ -7,7 +7,6 @@ L'objectiu és que l'alumnat pugui treballar amb eines compatibles amb OpenAI, c
 ## Funcionalitats
 
 - API compatible amb OpenAI per a `GET /v1/models`, `POST /v1/chat/completions` i `POST /v1/responses`.
-- API compatible amb l'Anthropic Messages API (`POST /v1/messages`) perque Claude Code pugui fer servir directament els models del proxy.
 - Suport per respostes normals JSON i streaming SSE.
 - Portal web per a estudiants amb inici de sessio, gestio de clau API i descarrega dels llançadors d'OpenCode per Bash i PowerShell.
 - Backoffice d'administracio per crear usuaris, grups, proveidors, quotes i configuracio del servidor.
@@ -367,46 +366,6 @@ No cal configurar manualment `model_context_window`, `model_auto_compact_token_l
 
 Cada `public_model` es publica una sola vegada. El balanceig es fa entre tots els endpoints assignats al grup que publiquen el mateix `public_model`; cada endpoint pot traduir-lo a un `upstream_model` diferent. El context publicat es el minim segur del pool, mentre que les capacitats de text, imatge, eines, raonament i eines paral.leles s'agreguen. En cada peticio, el proxy descarta els endpoints que no suporten les capacitats requerides abans d'aplicar el balanceig.
 
-## Us amb Claude Code
-
-El servidor publica una entrada compatible amb l'Anthropic Messages API a `POST /v1/messages` (i `POST /v1/messages/count_tokens`). Cada peticio es tradueix a Chat Completions i passa pel mateix encaminament, quotes i registre d'us que la resta d'entrades; la resposta es torna en format Anthropic, amb streaming SSE real. El proxy no reenvia res a l'API d'Anthropic ni gestiona credencials d'Anthropic: nomes serveix els models propis del grup de l'usuari.
-
-Claude Code afegeix `/v1/messages` a la URL base, per tant la base es el domini sense `/v1`:
-
-```bash
-export ANTHROPIC_BASE_URL="https://agents.ieti.site"
-export ANTHROPIC_AUTH_TOKEN="ieti_sk_..."
-export ANTHROPIC_MODEL="deepseek-v4-flash"   # un dels models de GET /v1/models
-# Claude Code tambe fa crides auxiliars amb els alias opus/sonnet/haiku i amb els subagents:
-export ANTHROPIC_DEFAULT_OPUS_MODEL="$ANTHROPIC_MODEL"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="$ANTHROPIC_MODEL"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="$ANTHROPIC_MODEL"
-export CLAUDE_CODE_SUBAGENT_MODEL="$ANTHROPIC_MODEL"
-# Claude Code no coneix la finestra de context dels models del proxy i suposa 200k tokens.
-# Feu servir el context_window que publica GET /v1/model-capabilities per al model triat:
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS=131072
-claude
-```
-
-Tambe es pot triar el model en cada execucio amb `claude --model <id>`. Els identificadors son els mateixos que publica `GET /v1/models`. La clau s'accepta tant a `Authorization: Bearer` (`ANTHROPIC_AUTH_TOKEN`) com a `x-api-key` (`ANTHROPIC_API_KEY`).
-
-Traduccio:
-
-- `system`, text, imatges base64, `tool_use`, `tool_result` (text i imatges), `tools`, `tool_choice`, `temperature`, `top_p` i `stop_sequences` es converteixen als camps equivalents de Chat Completions. Les imatges retornades per una eina s'envien com un missatge d'usuari despres del missatge `tool`.
-- El raonament de l'upstream (`reasoning_content` o `reasoning`) es torna com un bloc `thinking`. La seva `signature` conte el mateix raonament codificat; quan Claude Code torna aquest bloc abans d'un `tool_use`, el proxy el restaura com `reasoning_content` en aquell missatge d'assistent, de manera que els bucles d'eines en mode thinking (estil DeepSeek) funcionen entre torns i despres de recarregar una sessio.
-- `finish_reason` es mapeja a `stop_reason`: `stop` -> `end_turn`, `length` -> `max_tokens`, `tool_calls` -> `tool_use`. L'us de tokens en cache de l'upstream es retorna com `cache_read_input_tokens`.
-- Els errors es retornen en format Anthropic (`{"type":"error","error":{"type":...,"message":...}}`) amb el codi HTTP corresponent. Un model que el proxy no serveix, inclosos els `claude-*`, retorna `404 not_found_error` amb la llista de models disponibles.
-
-Limits:
-
-- `max_tokens` es retalla a `MAX_TOKENS_PER_REQUEST` i a la quota restant en lloc de fallar (Claude Code demana molts mes tokens dels que permeten les quotes del curs).
-- El parametre `thinking` i el pressupost de raonament s'ignoren: el raonament depen de la configuracio del model a l'upstream. Els blocs `thinking` de torns sense eines no es tornen a enviar.
-- `cache_control`, `metadata`, `top_k`, les capçaleres `anthropic-version` / `anthropic-beta`, els blocs desconeguts (per exemple documents PDF) i les eines de servidor d'Anthropic (web search, code execution, ...) s'ignoren sense error.
-- `count_tokens` es una estimacio per caracters, com la resta de quotes del proxy.
-- Les imatges han de ser base64; les URL remotes es rebutgen com a la resta d'entrades.
-- En streaming nomes l'espera de les capçaleres de l'upstream esta limitada per `REQUEST_TIMEOUT_MS`; un cop comença la resposta, nomes la talla `STREAM_INACTIVITY_TIMEOUT_MS`, i el servidor envia `ping` cada 15 s perque els intermediaris no tanquin la connexio. Les respostes sense streaming continuen limitades per `REQUEST_TIMEOUT_MS`.
-- El limit `MAX_REQUESTS_PER_MINUTE` s'aplica igual: Claude Code fa diverses crides per torn, i un valor molt baix el fara esperar i reintentar.
-
 ## API
 
 Autenticacio d'usuari:
@@ -422,8 +381,6 @@ Endpoints principals:
 - `GET /v1/models?client_version=...`: cataleg dinamic de models virtuals i capacitats per a Codex.
 - `POST /v1/chat/completions`: entrada Chat Completions usada per OpenCode.
 - `POST /v1/responses`: entrada Responses API usada per Codex; es tradueix al mateix encaminament intern de Chat Completions.
-- `POST /v1/messages`: entrada Anthropic Messages API usada per Claude Code; tambe accepta la clau a `x-api-key`.
-- `POST /v1/messages/count_tokens`: estimacio de tokens d'entrada en format Anthropic.
 
 ## Balanceig i afinitat de conversa
 

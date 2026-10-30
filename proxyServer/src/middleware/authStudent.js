@@ -8,14 +8,9 @@ function extractBearer(req) {
   return match ? match[1].trim() : null;
 }
 
-// Anthropic clients send the key in x-api-key unless configured with an auth token.
-function extractApiKey(req) {
-  return extractBearer(req) || String(req.get('x-api-key') || '').trim() || null;
-}
-
 async function authStudent(req, res, next) {
   try {
-    const apiKey = extractApiKey(req);
+    const apiKey = extractBearer(req);
     if (!apiKey) throw apiError(401, 'missing_api_key', 'Missing Authorization bearer token.');
 
     const db = getDb();

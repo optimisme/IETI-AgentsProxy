@@ -48,7 +48,6 @@
 |--------|------|-------------|
 | `routes/health.js` | `GET /health` | Health check |
 | `routes/openai.js` | `GET /v1/models`, `POST /v1/chat/completions` | OpenAI-compatible API proxy (with streaming SSE support) |
-| `routes/anthropic.js` | `POST /v1/messages`, `POST /v1/messages/count_tokens` | Anthropic Messages API for Claude Code, translated to chat completions (`services/anthropicService.js`) |
 | `routes/studentPortal.js` | `/`, `/login`, `/logout`, `/portal/*` | Student self-service web UI |
 | `routes/admin.js` | `/admin/*` | Admin backoffice (users, groups, providers, settings) |
 
