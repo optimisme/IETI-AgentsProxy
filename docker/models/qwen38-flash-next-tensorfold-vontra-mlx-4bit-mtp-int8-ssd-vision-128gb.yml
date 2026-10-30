@@ -4,12 +4,22 @@
 # Model weights are pinned to the previously validated checkpoint revision.
 # Flash-Next CUDA vision is upstream through PR #146.
 # Two local Python patches are applied before pip install and verified afterward:
-# 1. Retained text-prefix snapshots: upstream KEEP=8 becomes KEEP=32 by default.
-#    TENSORFOLD_PROMPT_SNAPSHOTS accepts integers 1–32. This was the "16 hack",
-#    now set to 32; it is separate from --parallel 16. Snapshots are shared by
+# 1. Retained text-prefix snapshots: upstream KEEP=8 becomes KEEP=64 by default.
+#    TENSORFOLD_PROMPT_SNAPSHOTS accepts integers 1–64. This was the "16 hack",
+#    now set to 64; it is separate from --parallel 16. Snapshots are shared by
 #    the server, and one conversation may retain several. More retention costs
 #    memory; image requests bypass this text-prefix reuse. Planning and runtime
-#    both use the patched KEEP. This does not guarantee 32 cached conversations.
+#    both use the patched KEEP. This does not guarantee 64 cached conversations.
+#    October 11 MLX 4-bit / KV int8 test: 16 synthetic programming histories
+#    (8 short, 7 ~7400 tokens, 1 ~65000) compared KEEP=32/48/64. Returning to
+#    the previous turn hit 0/3/16 cached prefixes, respectively; TTFT p50 was
+#    18.54/12.56/2.96 s and p95 51.87/47.63/3.81 s. The ~65k request fell
+#    from 74.81 to 1.99 s with KEEP=64. Normal append-only turns already reused
+#    prefixes at KEEP=32; cold prefill and decode showed no established gain.
+#    KEEP=64 raised the startup memory estimate by ~3.45 GiB versus KEEP=32.
+#    One campaign per setting; 288 measured requests completed, and all 192
+#    paired full text/reasoning hashes matched. That campaign did not test sixteen
+#    full 75k contexts. Data: docker/benchmarks/tensorfold-snapshots-20261011/.
 # 2. SSD batching: forward.stage concatenates affine n-gram IDs in stream order
 #    and gathers once per layer, rather than once per layer per stream. Histories,
 #    row order, model math, CUDA events and the EXL3 path are preserved. No native
@@ -51,6 +61,11 @@
 # Default profile: sixteen concurrent streams, a 75000-token request context limit,
 # int8 KV and SSD n-gram reads. KV capacity grows as needed; this is not a promise
 # that sixteen full 75k contexts fit together in unified memory.
+# October 23 full-context GPU test completed 48/48 requests (three 16-request
+# rounds, ~74k input +896 output), with no OOM or new swap-out. Output overlap
+# peaked at 13/11/10, with engine admission/queueing below sixteen active streams.
+# This validates queued completion, not sixteen simultaneously generating full
+# contexts. See docker/benchmarks/tensorfold-python-capacity16-20261023/ASSESSMENT.md.
 # Thinking stays enabled with low reasoning effort and a 1024-token budget,
 # preserving the rest of the reply allowance for answers and tool calls.
 # Temperature 0.1 reduces sampling randomness. Requests can override defaults.
@@ -69,7 +84,8 @@
 # Shared-prefix and short-request admission improved; decode speedups were not
 # established. Cold overlapping 4x16k prefills still exceeded 10s TTFT.
 # With vision enabled, upstream uses 2048-row idle prefill pieces, not 4096.
-# All sixteen full 75k windows at once remain unverified.
+# Sixteen simultaneously generating near-full 75k windows were not demonstrated
+# in the October 23 test; the configured maximum alone does not prove capacity.
 # The checkpoint download is about 114 GB; leave at least 160 GB free disk.
 # Do not run alongside another large model on a 128 GB Spark.
 # Sources: https://github.com/ashhart/TensorFold/releases/tag/v0.6.5
@@ -144,7 +160,7 @@ services:
       # Upstream --parallel value, not a source patch. Override via TENSORFOLD_STREAMS.
       PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
       # Custom snapshot patch setting; independent of concurrent stream count.
-      TENSORFOLD_PROMPT_SNAPSHOTS: "${TENSORFOLD_PROMPT_SNAPSHOTS:-32}"
+      TENSORFOLD_PROMPT_SNAPSHOTS: "${TENSORFOLD_PROMPT_SNAPSHOTS:-64}"
       # Custom SSD patch switch: exactly 1=batched, 0=stock v0.6.5 staging.
       TENSORFOLD_SSD_BATCH_GATHER: "${TENSORFOLD_SSD_BATCH_GATHER:-1}"
     # Preserve NVIDIA's entrypoint and its CUDA compatibility initialization.
@@ -177,8 +193,8 @@ services:
         import sys
 
         value = os.environ['TENSORFOLD_PROMPT_SNAPSHOTS']
-        if not re.fullmatch(r'[0-9]{1,2}', value) or not 1 <= int(value) <= 32:
-            raise SystemExit('TENSORFOLD_PROMPT_SNAPSHOTS must be an integer from 1 to 32')
+        if not re.fullmatch(r'[0-9]{1,2}', value) or not 1 <= int(value) <= 64:
+            raise SystemExit('TENSORFOLD_PROMPT_SNAPSHOTS must be an integer from 1 to 64')
         path = Path(sys.argv[1])
         source = path.read_text()
         expected = 'KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from'
