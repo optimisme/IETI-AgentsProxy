@@ -1,6 +1,12 @@
 # TensorFold Zig 1.1.7 i 1.1.9: millor build de Flash-Next per a setze alumnes
 
-**La millor build (30 d'octubre, `variants/tf119`) és TensorFold 1.1.9 amb
+> **Avís (30 d'octubre).** Les builds resident7, resident11, resident12 i tf119
+> tenen un error greu amb els prompts d'uns 74–136 tokens: vegeu
+> [Respostes corrompudes](#respostes-corrompudes-amb-trossos-de-64127-files-30-doctubre).
+> No s'han de desplegar. `variants/tf119b` el corregeix i és la millor build
+> provisional; encara falta tancar cinc respostes que difereixen de la referència.
+
+**La millor build (30 d'octubre, `variants/tf119b`) és TensorFold 1.1.9 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
@@ -24,10 +30,12 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-tf119-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-tf119b-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/tf119/fn.patch`](variants/tf119/fn.patch) (diferència respecte de
-  `v1.1.9`). Les builds anteriors, sobre la 1.1.7, són
+  [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) (diferència respecte de
+  `v1.1.9`). Les builds anteriors són
+  [`variants/tf119/fn.patch`](variants/tf119/fn.patch) (30 d'octubre, sense la
+  correcció) i, sobre la 1.1.7,
   [`variants/resident12/fn.patch`](variants/resident12/fn.patch)
   (30 d'octubre, la mateixa feina sobre la 1.1.7),
   [`variants/resident11/fn.patch`](variants/resident11/fn.patch)
@@ -271,6 +279,30 @@ pressupost de files de prompt al planificador. Script:
   620), sense que la memòria lliure baixi de 7,3 GiB ni que s'alenteixi.
 - La ronda freda no canvia: el Zig encara hi perd uns 28 s.
 
+## Respostes corrompudes amb trossos de 64–127 files (30 d'octubre)
+
+Un tros de prompt de 64 files o més desa la sortida dels experts en bf16, però
+només el camí de rajoles escriu aquest format. El codi decidia el format amb
+`n >= 64` fix, i des de `TF_TILE_EXPERTS_ROWS=128` els experts de 64–127 files
+feien servir el camí de files, que escriu fp32. Els valors es llegien
+malament i el model principal quedava corromput.
+
+- **Efecte:** amb prompts d'uns 74–136 tokens, 27 de 27 respostes a temperatura
+  0,1 eren `!!!!!!!!!!!!`, sense cap error, i a temperatura 0 el servidor tornava
+  un error 500 (`ProposalPaddingPick`). Amb prompts llargs passa quan el darrer
+  tros cau a la mateixa franja (per exemple, 73.803–73.864 tokens).
+- **Abast:** `ProposalPaddingPick` s'ha reproduït a tf119 i a resident12. El
+  llindar a 128 és al perfil des de resident7, de manera que s'hi espera des
+  d'aleshores; resident7 i resident11 no s'han provat. Les comprovacions
+  d'exactitud no cobrien aquesta franja.
+- **Correcció (`variants/tf119b`):** el format segueix el mateix llindar que els
+  experts. Prova: [`short_sweep.py`](short_sweep.py); dades a
+  [`results/resident/tf119b.txt`](results/resident/tf119b.txt). Ni un error 500
+  a les passades curtes, 4 de 4 a 74k a temperatura 0 i exactitud de 8 de 8 i
+  9 de 9.
+- **Queda obert:** 5 de 65 respostes (les mateixes cinc a totes dues
+  temperatures) difereixen de les del llindar a 64. El Python fa d'àrbitre.
+
 ## Comprovacions d'exactitud
 
 Cada candidat ha de donar exactament el mateix text que la build de referència:
@@ -401,7 +433,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/tf119) | resident12 traslladada a TensorFold 1.1.9 | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119-build` |
+| **best** (variants/tf119b) | tf119 + correcció de les respostes corrompudes (provisional) | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119b-build` |
+| variants/tf119 | resident12 traslladada a TensorFold 1.1.9 (amb l'error) | [`variants/tf119/fn.patch`](variants/tf119/fn.patch) | `ieti-native117-tf119-build` |
 | variants/resident12 | resident11 + DeltaNet dels fluxos en un llançament + caches dels llindars separades | [`variants/resident12/fn.patch`](variants/resident12/fn.patch) | `ieti-native117-resident12-build` |
 | variants/resident11 | resident7 + atenció dels fluxos en un llançament | [`variants/resident11/fn.patch`](variants/resident11/fn.patch) | `ieti-native117-resident11-build` |
 | variants/resident7 | sampled + estats residents + planificador de prompts + lectura HC per files | [`variants/resident7/fn.patch`](variants/resident7/fn.patch) | `ieti-native117-resident7-build` |
