@@ -6,13 +6,13 @@
 #   quality   needles at 16k, 65k and 74k tokens
 #   capacity  16 requests of ~74k tokens and 896 output tokens: cold, then two returning turns
 #   soak      back-to-back 16-user agent runs at temperature 0.1 for SOAK_MIN minutes (default 60)
-# Results: prod/summary.txt plus each stage's directory under prod/. Leaves the best Zig build running.
+# Results: prod/summary.txt plus each stage's directory under prod/ (PROD_DIR moves them). Leaves the best Zig build running.
 set -uo pipefail
 H=~/docker/benchmarks/tensorfold-zig-117-20261027
 P=~/docker/benchmarks/tensorfold-zig-114-parity-20261024
 Z=qwen38_flash_next_tensorfold_best_cuda
 PY=qwen38_flash_next_python_lowload
-D=$H/prod
+D=${PROD_DIR:-$H/prod}
 S=$D/summary.txt
 mkdir -p "$D"
 echo "# $(date -Is) prod-check stages ${STAGES:-compare smoke quality capacity soak}" >> "$S"
