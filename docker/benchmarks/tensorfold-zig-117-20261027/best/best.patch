@@ -452,10 +452,127 @@ index 09aa10ca..f61b3a29 100644
 +                                       Pg{});
 +}
 diff --git a/zig/kernels/cuda/flashnext_batch.cu b/zig/kernels/cuda/flashnext_batch.cu
-index f7064ed9..7312752e 100644
+index f7064ed9..6e0ca709 100644
 --- a/zig/kernels/cuda/flashnext_batch.cu
 +++ b/zig/kernels/cuda/flashnext_batch.cu
-@@ -240,10 +240,9 @@ __device__ __forceinline__ int fn_block_scan(int v, int* warp_sums, int* total)
+@@ -15,8 +15,8 @@ extern "C" __global__ void fn_sum_slices(const float* __restrict__ part, void* _
+ }
+ 
+ // Shifts the last-`taps`-rows window [taps, c] in place past `rows`, n rows `stride` apart (conv history, n-gram tail).
+-extern "C" __global__ void fn_shift_window(__nv_bfloat16* __restrict__ win, const __nv_bfloat16* __restrict__ rows,
+-                                           long long stride, int n, int taps, int c) {
++static __device__ __forceinline__ void shift_window(__nv_bfloat16* __restrict__ win, const __nv_bfloat16* __restrict__ rows,
++                                                    long long stride, int n, int taps, int c) {
+     const int ch = blockIdx.x * blockDim.x + threadIdx.x;
+     if (ch >= c) return;
+     __nv_bfloat16 next[16];
+@@ -28,6 +28,45 @@ extern "C" __global__ void fn_shift_window(__nv_bfloat16* __restrict__ win, cons
+     for (int j = 0; j < taps; ++j) win[static_cast<long long>(j) * c + ch] = next[j];
+ }
+ 
++extern "C" __global__ void fn_shift_window(__nv_bfloat16* __restrict__ win, const __nv_bfloat16* __restrict__ rows,
++                                           long long stride, int n, int taps, int c) {
++    shift_window(win, rows, stride, n, taps, c);
++}
++
++// A shared round's lanes in one launch (flashnext_attn.cu's lane table: LI the lanes' ints, each row's lane at 4 * MAX;
++// LP this DeltaNet layer's [lane][5] addresses: conv window, state, state out, kept projection, kept window).
++namespace fn_lanes {
++constexpr int MAX = 32, PTRS = 5;
++__device__ __forceinline__ int rows(const int* LI, int l) { return LI[2 * MAX + l]; }
++__device__ __forceinline__ int row0(const int* LI, int l) { return LI[3 * MAX + l]; }
++__device__ __forceinline__ int lane(const int* LI, int r) { return LI[4 * MAX + r]; }
++template <typename T> __device__ __forceinline__ T* at(const unsigned long long* LP, int l, int k) {
++    return reinterpret_cast<T*>(LP[PTRS * l + k]);
++}
++}  // namespace fn_lanes
++
++// fn_shift_window for every lane, lane blockIdx.y: its conv window past its rows of `rows`.
++extern "C" __global__ void fn_shift_window_lanes(const unsigned long long* __restrict__ LP, const int* __restrict__ LI,
++                                                 const __nv_bfloat16* __restrict__ rows, long long stride, int taps, int c) {
++    const int l = blockIdx.y;
++    shift_window(fn_lanes::at<__nv_bfloat16>(LP, l, 0), rows + fn_lanes::row0(LI, l) * stride, stride,
++                 fn_lanes::rows(LI, l), taps, c);
++}
++
++// Each lane's kept projection rows and conv window (a rollback's), lane blockIdx.y, part blockIdx.z (0 the rows, 1 the
++// window), 16 bytes a thread; a lane that keeps nothing has no address.
++extern "C" __global__ void fn_gdn_keep_lanes(const unsigned long long* __restrict__ LP, const int* __restrict__ LI,
++                                             const uint4* __restrict__ proj, long long row_units, long long hist_units) {
++    const int l = blockIdx.y;
++    const bool hist = blockIdx.z == 1;
++    uint4* dst = fn_lanes::at<uint4>(LP, l, hist ? 4 : 3);
++    if (!dst) return;
++    const uint4* src = hist ? fn_lanes::at<const uint4>(LP, l, 0) : proj + fn_lanes::row0(LI, l) * row_units;
++    const long long n = hist ? hist_units : fn_lanes::rows(LI, l) * row_units;
++    for (long long i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += static_cast<long long>(gridDim.x) * blockDim.x)
++        dst[i] = src[i];
++}
++
+ // ---- the DeltaNet chain over a chunk: flashnext_gdn.cu's chain cut into front, rows and norm, with its bits ----
+ 
+ namespace fn_gdn {
+@@ -61,12 +100,12 @@ static __device__ __forceinline__ float conv_act(const __nv_bfloat16* __restrict
+ }  // namespace fn_gdn
+ 
+ // Program (row, unit), 256 threads: key head u's normed q and k (u < NK), else a value head's v, decay g and beta.
+-extern "C" __global__ void __launch_bounds__(256) fn_gdn_front(
++static __device__ __forceinline__ void gdn_front(
+         const __nv_bfloat16* __restrict__ P, const __nv_bfloat16* __restrict__ cs, const __nv_bfloat16* __restrict__ cw,
+         const float* __restrict__ a_log, const float* __restrict__ dt_bias, float* __restrict__ qn,
+-        float* __restrict__ kn, float* __restrict__ v, float* __restrict__ gb) {
++        float* __restrict__ kn, float* __restrict__ v, float* __restrict__ gb, int r) {
+     using namespace fn_gdn;
+-    const int r = blockIdx.x, u = blockIdx.y, t = threadIdx.x, warp = t >> 5, lane = t & 31;
++    const int u = blockIdx.y, t = threadIdx.x, warp = t >> 5, lane = t & 31;
+     if (u < NK) {
+         __shared__ float x[2][DK];
+         const int hk = u;
+@@ -98,6 +137,24 @@ extern "C" __global__ void __launch_bounds__(256) fn_gdn_front(
+     }
+ }
+ 
++extern "C" __global__ void __launch_bounds__(256) fn_gdn_front(
++        const __nv_bfloat16* __restrict__ P, const __nv_bfloat16* __restrict__ cs, const __nv_bfloat16* __restrict__ cw,
++        const float* __restrict__ a_log, const float* __restrict__ dt_bias, float* __restrict__ qn,
++        float* __restrict__ kn, float* __restrict__ v, float* __restrict__ gb) {
++    gdn_front(P, cs, cw, a_log, dt_bias, qn, kn, v, gb, blockIdx.x);
++}
++
++// fn_gdn_front over a shared round's rows: row blockIdx.x is its lane's row r, after the lane's own conv window.
++extern "C" __global__ void __launch_bounds__(256) fn_gdn_front_lanes(
++        const __nv_bfloat16* __restrict__ P, const unsigned long long* __restrict__ LP, const int* __restrict__ LI,
++        const __nv_bfloat16* __restrict__ cw, const float* __restrict__ a_log, const float* __restrict__ dt_bias,
++        float* __restrict__ qn, float* __restrict__ kn, float* __restrict__ v, float* __restrict__ gb) {
++    using namespace fn_gdn;
++    const int l = fn_lanes::lane(LI, blockIdx.x), r0 = fn_lanes::row0(LI, l);
++    gdn_front(P + (size_t)r0 * PW, fn_lanes::at<const __nv_bfloat16>(LP, l, 0), cw, a_log, dt_bias, qn + (size_t)r0 * NK * DK,
++              kn + (size_t)r0 * NK * DK, v + (size_t)r0 * NV * DV, gb + (size_t)r0 * NV * 2, blockIdx.x - r0);
++}
++
+ // The chain through the chunk from state_in to state_out (in place, or apart for a rollback): a warp 4 state rows.
+ static __device__ __forceinline__ void gdn_rows(
+         const float* __restrict__ qn, const float* __restrict__ kn, const float* __restrict__ v,
+@@ -177,6 +234,18 @@ extern "C" __global__ void __launch_bounds__(128) fn_gdn_rows_to(
+     gdn_rows(qn, kn, v, gb, state_in, state_out, rows, ys_out);
+ }
+ 
++// fn_gdn_rows(_to) for every lane, lane blockIdx.z: its rows from its state into its state out (in place or apart).
++extern "C" __global__ void __launch_bounds__(128) fn_gdn_rows_lanes(
++        const float* __restrict__ qn, const float* __restrict__ kn, const float* __restrict__ v,
++        const float* __restrict__ gb, const unsigned long long* __restrict__ LP, const int* __restrict__ LI,
++        float* __restrict__ ys_out) {
++    using namespace fn_gdn;
++    const int l = blockIdx.z, r0 = fn_lanes::row0(LI, l);
++    gdn_rows(qn + (size_t)r0 * NK * DK, kn + (size_t)r0 * NK * DK, v + (size_t)r0 * NV * DV, gb + (size_t)r0 * NV * 2,
++             fn_lanes::at<const float>(LP, l, 1), fn_lanes::at<float>(LP, l, 2), fn_lanes::rows(LI, l),
++             ys_out + (size_t)r0 * NV * DV);
++}
++
+ extern "C" __global__ void __launch_bounds__(128) fn_gdn_norm(
+         const float* __restrict__ ys_in, const __nv_bfloat16* __restrict__ P, const __nv_bfloat16* __restrict__ norm_w,
+         float eps, __nv_bfloat16* __restrict__ out, float* __restrict__ xs) {
+@@ -240,10 +309,9 @@ __device__ __forceinline__ int fn_block_scan(int v, int* warp_sums, int* total)
  }
  
  // attention._select and _select_tiles, a row a block: a row past `top` complete blocks lists the best, then its tail.
@@ -469,7 +586,7 @@ index f7064ed9..7312752e 100644
      __shared__ int hist[256];
      __shared__ int warp_sums[32];
      __shared__ uint32_t cut_s;
-@@ -315,6 +314,23 @@ extern "C" __global__ void __launch_bounds__(1024) fn_qsa_select(const float* __
+@@ -315,6 +383,23 @@ extern "C" __global__ void __launch_bounds__(1024) fn_qsa_select(const float* __
      }
  }
  
@@ -1686,7 +1803,7 @@ index 745b64ba..335964de 100644
          const rewind = !e.expired and e.at == s.active_rewind_at and on; // the active rewind state goes last
          if (e.borrowers == 0 and e != skip and (oldest == null or (if (rewind != oldest_rewind) oldest_rewind else e.used < s.entries.items[oldest.?].used))) {
 diff --git a/zig/src/families/flashnext/cuda_batch.zig b/zig/src/families/flashnext/cuda_batch.zig
-index 6066b1ea..37be9de4 100644
+index 6066b1ea..fba41b64 100644
 --- a/zig/src/families/flashnext/cuda_batch.zig
 +++ b/zig/src/families/flashnext/cuda_batch.zig
 @@ -18,6 +18,8 @@ const ops = @import("cuda_batch_ops.zig");
@@ -1698,13 +1815,14 @@ index 6066b1ea..37be9de4 100644
  const streams = wt.streams;
  const wide = wt.wide;
  const low = wt.low;
-@@ -89,9 +91,30 @@ const Gather = parts.Gather;
+@@ -89,9 +91,46 @@ const Gather = parts.Gather;
  /// TF_FLASHNEXT_PROFILE=1: each chunk's wall time (synchronized) and its host n-gram gather on stderr.
  fn profile() bool {
      const v = std.c.getenv("TF_FLASHNEXT_PROFILE") orelse return false;
+-    return std.mem.eql(u8, std.mem.span(v), "1");
 +    return std.mem.eql(u8, std.mem.span(v), "1") or std.mem.eql(u8, std.mem.span(v), "2");
-+}
-+
+ }
+ 
 +/// TF_FLASHNEXT_PROFILE=2: also each block kind's synchronized time over the chunk (diagnostics only).
 +fn blockTimes() bool {
 +    const v = std.c.getenv("TF_FLASHNEXT_PROFILE") orelse return false;
@@ -1717,19 +1835,35 @@ index 6066b1ea..37be9de4 100644
 +    return !std.mem.eql(u8, std.mem.span(v), "0");
 +}
 +
-+/// TF_FLASHNEXT_ATTN_LANES=1: a shared round's attention in one launch a kernel for every lane (else a lane at a time).
++/// A shared round's attention (TF_FLASHNEXT_ATTN_LANES=1) or DeltaNet (TF_FLASHNEXT_GDN_LANES=1) in one launch a
++/// kernel for every lane, else a lane at a time.
++fn lanesOn(comptime name: [:0]const u8) bool {
++    // the name in the struct gives each switch its own cache (a struct that captures nothing is one type for all)
++    const Cached = struct {
++        const knob = name;
++        var on: ?bool = null;
++    };
++    if (Cached.on) |v| return v;
++    const v = std.c.getenv(name);
++    Cached.on = v != null and std.mem.eql(u8, std.mem.span(v.?), "1");
++    return Cached.on.?;
++}
++
 +fn attnLanesOn() bool {
-+    const v = std.c.getenv("TF_FLASHNEXT_ATTN_LANES") orelse return false;
-     return std.mem.eql(u8, std.mem.span(v), "1");
- }
- 
++    return lanesOn("TF_FLASHNEXT_ATTN_LANES");
++}
++
++fn gdnLanesOn() bool {
++    return lanesOn("TF_FLASHNEXT_GDN_LANES");
++}
++
 +const Block = enum { embed, ple, hc, gdn, attn, moe, head };
 +const block_names = [_][]const u8{ "embed", "ple", "hc", "gdn", "attn", "moe", "head" };
 +
  pub fn Pass(comptime Tri: type) type {
      return struct {
          const Self = @This();
-@@ -114,10 +137,19 @@ pub fn Pass(comptime Tri: type) type {
+@@ -114,10 +153,20 @@ pub fn Pass(comptime Tri: type) type {
          /// K slices the last out projection wrote to part (1 when the prompt tile folded them).
          out_slices: usize = out_sk,
          prepared: bool = false,
@@ -1744,12 +1878,13 @@ index 6066b1ea..37be9de4 100644
 +        /// A mixed pass's round (cuda_batch_mixed.zig): its expert slots and weights in the prompt pass's scratch.
 +        y_from: u64 = 0,
 +        wts_from: u64 = 0,
-+        /// This round's lanes take their attention in one launch a kernel (stage's lane table, TF_FLASHNEXT_ATTN_LANES).
-+        lanes_attn: bool = false,
++        /// This round's lanes take their attention and DeltaNet in one launch a kernel where switched on (stage's lane
++        /// table, TF_FLASHNEXT_ATTN_LANES and TF_FLASHNEXT_GDN_LANES).
++        lanes_tab: bool = false,
  
          // ---- launches ----------------------------------------------------------------------------------------
  
-@@ -169,6 +201,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -169,6 +218,7 @@ pub fn Pass(comptime Tri: type) type {
              const rs = self.rows * dims;
              if (self.pending == null) {
                  try self.tri.hcWriteback(h, h, pss, dummy, "*bf16", dummy, dummy, "*bf16", dummy, "*bf16", rs, n, dims, streams, 0, 1, 1, 1);
@@ -1757,7 +1892,7 @@ index 6066b1ea..37be9de4 100644
                  return;
              }
              self.pending = null;
-@@ -176,11 +209,13 @@ pub fn Pass(comptime Tri: type) type {
+@@ -176,11 +226,13 @@ pub fn Pass(comptime Tri: type) type {
                  // the fp32 branch rounded once, as MODE 2 rounds its sum (a slice of one)
                  self.pending_f32 = false;
                  try self.tri.hcWriteback(h, h, pss, s.moe_f32 + r0 * dims * 4, "*fp32", inj, dummy, "*bf16", dummy, "*bf16", rs, n, dims, streams, 4, 1, 1, 1);
@@ -1774,7 +1909,7 @@ index 6066b1ea..37be9de4 100644
          }
  
          /// Prompt rows' read-out on flashnext_hcf.cu's tiles, fn_hc_down's and fn_hc_upmix's bits (K slices folded).
-@@ -212,7 +247,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -212,7 +264,7 @@ pub fn Pass(comptime Tri: type) type {
                  try self.tri.hcDenseMix(s.hc_up, norm, s.mixed + r0 * dims * 2, s.xsm + r0 * (dims / 32) * 4, n, dims, streams);
                  return;
              }
@@ -1783,7 +1918,7 @@ index 6066b1ea..37be9de4 100644
              try self.copy(keep.h, h, n * wide * 2);
              try self.tri.hcDown(h, pss, hc_w.scale.ptr, norm, hc_w.down.w.ptr, hc_w.down.s.ptr, hc_w.down.b.ptr, s.dn, s.hc_part, eps, n, hc_w.n_down, wide, dims, dims / 256, streams, hc_sk);
              if (keep.v != 0) try self.sumSlices(s.hc_part, keep.v, false, n * hc_w.n_down, hc_sk);
-@@ -255,6 +290,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -255,6 +307,7 @@ pub fn Pass(comptime Tri: type) type {
              const s = self.s;
              const n = self.rows;
              _ = try self.lane(s.mixed, s.xsm, lw.proj, s.proj, s.dummy, n, 1);
@@ -1791,7 +1926,7 @@ index 6066b1ea..37be9de4 100644
              // a lone pass keeps its projection and conv window; a shared pass keeps each lane's own
              if (self.lanes.len == 0) {
                  try self.copy(keep.proj, s.proj, n * gdn.proj_width * 2);
-@@ -267,9 +303,12 @@ pub fn Pass(comptime Tri: type) type {
+@@ -267,9 +320,14 @@ pub fn Pass(comptime Tri: type) type {
                  const st = self.seq.state[li].ptr;
                  const in: gdn_fused.In = .{ .proj = s.proj, .conv = self.seq.conv[li].ptr, .cw = lw.cw.ptr, .a_log = lw.a_log.ptr, .dt = lw.dt.ptr, .state = st, .state_out = if (keep.state_out != 0) keep.state_out else st, .norm = lw.norm.ptr };
                  try gdn_fused.launch(self.k.gdn_fused, self.stream, in, n, s.gout, s.gxs);
@@ -1801,31 +1936,80 @@ index 6066b1ea..37be9de4 100644
 +                kt.lap(self.stream, "gdn_front");
                  try self.gdnChain(s.gq, s.gk, s.gv, s.ggb, self.seq.state[li].ptr, keep.state_out, n, s.ys);
 +                kt.lap(self.stream, "gdn_chain");
++            } else if (self.lanes_tab and gdnLanesOn()) {
++                try self.gdnLanes(lw, li);
              } else {
                  // shared rounds: each lane's rows kept, fronted and chained on its own conv window and state
                  var row0: usize = 0;
-@@ -290,7 +329,9 @@ pub fn Pass(comptime Tri: type) type {
+@@ -290,7 +348,56 @@ pub fn Pass(comptime Tri: type) type {
              }
              if (!fused) try gdn_fused.norm(self.k.gnorm, self.stream, s.ys, s.proj, lw.norm.ptr, s.gout, s.gxs, n);
              if (self.lanes.len == 0) try self.shiftWindow(self.seq.conv[li].ptr, s.proj, gdn.proj_width, n, gdn.taps - 1, gdn.conv_dim);
 +            kt.lap(self.stream, "gdn_norm_shift");
              self.out_slices = try self.lane(s.gout, s.gxs, lw.out, s.dummy, s.part, n, out_sk);
 +            kt.lap(self.stream, "gdn_out");
++        }
++
++        /// The shared round's DeltaNet in four launches: each lane's kept rows and window, every row's front, every
++        /// lane's chain on its own state, and every lane's conv window moved past its rows (the per-lane loop's order).
++        fn gdnLanes(self: *Self, lw: *const Layer, li: usize) !void {
++            const s = self.s;
++            const lp = s.lanes_tab + parts.lanes_attn_ptrs + li * parts.attn_lanes * 5 * 8;
++            const tab = s.lanes_tab + parts.lanes_ptrs;
++            const lanes_n: u32 = @intCast(self.lanes.len);
++            var max_rows: usize = 0;
++            for (self.lanes) |l| max_rows = @max(max_rows, l.rows);
++            var k: cuda.Args = .{};
++            k.add(lp);
++            k.add(tab);
++            k.add(s.proj);
++            k.add(@as(c_longlong, @intCast(gdn.proj_width * 2 / 16)));
++            k.add(@as(c_longlong, @intCast((gdn.taps - 1) * gdn.conv_dim * 2 / 16)));
++            try cuda.launch.launch(self.k.keep_lanes, .{ .grid = .{ .x = 16, .y = lanes_n, .z = 2 }, .block = .{ .x = 256 } }, self.stream, &k);
++            var f: cuda.Args = .{};
++            f.add(s.proj);
++            f.add(lp);
++            f.add(tab);
++            f.add(lw.cw.ptr);
++            f.add(lw.a_log.ptr);
++            f.add(lw.dt.ptr);
++            f.add(s.gq);
++            f.add(s.gk);
++            f.add(s.gv);
++            f.add(s.ggb);
++            try cuda.launch.launch(self.k.front_lanes, .{ .grid = .{ .x = @intCast(self.rows), .y = gdn.nk + gdn.nv }, .block = .{ .x = 256 } }, self.stream, &f);
++            var c: cuda.Args = .{};
++            c.add(s.gq);
++            c.add(s.gk);
++            c.add(s.gv);
++            c.add(s.ggb);
++            c.add(lp);
++            c.add(tab);
++            c.add(s.ys);
++            try cuda.launch.launch(self.k.chain_lanes, .{ .grid = .{ .x = gdn.nv, .y = gdn.dv / 16, .z = lanes_n }, .block = .{ .x = 128 } }, self.stream, &c);
++            var w: cuda.Args = .{};
++            w.add(lp);
++            w.add(tab);
++            w.add(s.proj);
++            w.add(@as(c_longlong, @intCast(gdn.proj_width)));
++            w.add(cint(gdn.taps - 1));
++            w.add(cint(gdn.conv_dim));
++            try cuda.launch.launch(self.k.shift_lanes, .{ .grid = .{ .x = @intCast(cdiv(gdn.conv_dim, 256)), .y = lanes_n }, .block = .{ .x = 256 } }, self.stream, &w);
          }
  
          /// fn_gdn_front over `rows` projection rows after the conv window `conv`.
-@@ -344,7 +385,9 @@ pub fn Pass(comptime Tri: type) type {
+@@ -344,7 +451,9 @@ pub fn Pass(comptime Tri: type) type {
              try self.copyCols(pa, proj_n, keep.pq, qw2, qw2, n);
              try self.copyCols(pa + qw2 * 2, proj_n, keep.pk, kw, kw, n);
              try self.copyCols(pa + (qw2 + kw) * 2, proj_n, keep.pv, kw, kw, n);
 -            if (self.lanes.len > 0) {
-+            if (self.lanes_attn) {
++            if (self.lanes_tab and attnLanesOn()) {
 +                try self.attnLanes(lw, ai, pa);
 +            } else if (self.lanes.len > 0) {
                  // shared rounds: each lane's rope, cache writes, selection and attention on its own stream's caches
                  const own_seq = self.seq;
                  const own_pos0 = self.pos0;
-@@ -365,6 +408,80 @@ pub fn Pass(comptime Tri: type) type {
+@@ -365,6 +474,89 @@ pub fn Pass(comptime Tri: type) type {
              self.out_slices = try self.lane(gated, s.gxs_attn, lw.out, s.dummy, s.part, n, out_sk);
          }
  
@@ -1873,11 +2057,11 @@ index 6066b1ea..37be9de4 100644
 +        /// next-tile-ahead chunks), text on contiguous caches, one block-score buffer, our glue owning every launch.
 +        fn lanesAttn(self: *const Self, n: usize) bool {
 +            if (comptime !@hasDecl(Tri, "lanesGlue")) return false;
-+            if (!attnLanesOn() or self.lanes.len < 2 or self.lanes.len > parts.attn_lanes or n > att_rows) return false;
++            if (!(attnLanesOn() or gdnLanesOn()) or self.lanes.len < 2 or self.lanes.len > parts.attn_lanes or n > att_rows) return false;
 +            if (index_heads != 4 or self.tri.lanesGlue() == null) return false;
 +            for (self.lanes) |l| {
 +                if (l.seq.media != null or l.seq.pg.pt != 0 or l.rows == 0 or l.rows > 16) return false;
-+                if (l.seq.kc.len > layers_n / 4 or l.seq.scores != self.lanes[0].seq.scores or l.pos + l.rows > l.seq.cap) return false;
++                if (l.seq.kc.len > wt.attn_n or l.seq.conv.len > linear_n or l.seq.state.len != l.seq.conv.len or l.seq.scores != self.lanes[0].seq.scores or l.pos + l.rows > l.seq.cap) return false;
 +            }
 +            return true;
 +        }
@@ -1893,6 +2077,15 @@ index 6066b1ea..37be9de4 100644
 +            var row0: usize = 0;
 +            for (self.lanes, 0..) |l, i| {
 +                for (0..l.seq.kc.len) |ai| ptrs[(ai * lanes_n + i) * 4 ..][0..4].* = .{ l.seq.kc[ai].ptr, l.seq.vc[ai].ptr, l.seq.ikc[ai].ptr, l.seq.pooled[ai].ptr };
++                const gp = ptrs[parts.lanes_attn_ptrs / 8 ..];
++                for (0..layers_n) |layer| {
++                    if (!wt.linearLayer(layer)) continue;
++                    const li = wt.linearIndex(layer);
++                    if (li >= l.seq.conv.len) continue;
++                    const lk: LayerKeep = if (l.keep) |kp| kp.layers[layer] else .{};
++                    const st = l.seq.state[li].ptr;
++                    gp[(li * lanes_n + i) * 5 ..][0..5].* = .{ l.seq.conv[li].ptr, st, if (lk.state_out != 0) lk.state_out else st, lk.proj, lk.hist };
++                }
 +                ints[i] = @as(i32, @intCast(l.pos)) - @as(i32, @intCast(row0));
 +                ints[lanes_n + i] = @intCast(l.pos);
 +                ints[2 * lanes_n + i] = @intCast(l.rows);
@@ -1906,7 +2099,7 @@ index 6066b1ea..37be9de4 100644
          /// Where attnRows reads its rows' positions (16 bytes apart) and writes queries, indexer queries and outputs.
          const RowsAt = struct { pos: u64, q: u64, iq: u64, ao: u64 };
  
-@@ -430,6 +547,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -430,6 +622,7 @@ pub fn Pass(comptime Tri: type) type {
              try self.copy(keep.moe_x, s.mixed, n * dims * 2);
              try self.tri.routerMany(s.mixed, lw.router.ptr, s.router_l, dims, n);
              try self.tri.topkMany(s.router_l, s.picks, s.wts, n);
@@ -1914,7 +2107,7 @@ index 6066b1ea..37be9de4 100644
              try self.copy(keep.moe_ids, s.picks, pairs * 4);
              try self.copy(keep.moe_wts, s.wts, pairs * 4);
              const e = experts_n + 1;
-@@ -456,12 +574,15 @@ pub fn Pass(comptime Tri: type) type {
+@@ -456,12 +649,15 @@ pub fn Pass(comptime Tri: type) type {
                  }
                  return;
              }
@@ -1932,16 +2125,16 @@ index 6066b1ea..37be9de4 100644
                  return;
              }
              try self.k.router.route(self.stream, s.picks, pairs, e, rows_tile, plan);
-@@ -486,6 +607,8 @@ pub fn Pass(comptime Tri: type) type {
+@@ -486,6 +682,8 @@ pub fn Pass(comptime Tri: type) type {
              @memset(pos, 0);
              for (0..blocks) |b| pos[4 * b] = @intCast(if (self.lanes.len > 0) self.lanes[b].pos else self.pos0 + b * att_rows);
              try self.upload(s.pos, std.mem.sliceAsBytes(pos));
-+            self.lanes_attn = self.lanesAttn(n);
-+            if (self.lanes_attn) try self.stageLanes();
++            self.lanes_tab = self.lanesAttn(n);
++            if (self.lanes_tab) try self.stageLanes();
              if (!self.prepared) try s.uploaded();
          }
  
-@@ -501,58 +624,100 @@ pub fn Pass(comptime Tri: type) type {
+@@ -501,58 +699,100 @@ pub fn Pass(comptime Tri: type) type {
              if (n == 0 or n > s.cap) return error.UnexpectedTensor;
              if (self.lanes.len > 0) {
                  // shared rounds read every row's scores; a lane keeps its own rollback and hidden rows, nothing else
@@ -2079,22 +2272,31 @@ index c33fe9bc..56f85cc4 100644
              // the last row's streams, sums, gates and MoE slots moved to row 0, which keeps 16-byte alignment
              const r = n - 1;
 diff --git a/zig/src/families/flashnext/cuda_batch_kernels.zig b/zig/src/families/flashnext/cuda_batch_kernels.zig
-index 1443cf13..50d69a14 100644
+index 1443cf13..daf668b9 100644
 --- a/zig/src/families/flashnext/cuda_batch_kernels.zig
 +++ b/zig/src/families/flashnext/cuda_batch_kernels.zig
-@@ -34,6 +34,7 @@ pub const Kernels = struct {
+@@ -34,6 +34,12 @@ pub const Kernels = struct {
      shift: cuda.Function,
      /// Each sparse row's top blocks (attention._select / _select_tiles), native.
      select: cuda.Function,
 +    select_lanes: cuda.Function,
++    /// A shared round's DeltaNet launches for every lane at once (TF_FLASHNEXT_GDN_LANES=1).
++    front_lanes: cuda.Function,
++    chain_lanes: cuda.Function,
++    shift_lanes: cuda.Function,
++    keep_lanes: cuda.Function,
  
      pub fn load(d: *const cuda.Driver) !Kernels {
          if (!cuda.kernels.available) return error.BuiltWithoutKernels;
-@@ -69,6 +70,7 @@ pub const Kernels = struct {
+@@ -69,6 +75,11 @@ pub const Kernels = struct {
          k.copy_cols = try k.batch.function("fn_copy_cols");
          k.shift = try k.batch.function("fn_shift_window");
          k.select = try k.batch.function("fn_qsa_select");
 +        k.select_lanes = try k.batch.function("fn_qsa_select_lanes");
++        k.front_lanes = try k.batch.function("fn_gdn_front_lanes");
++        k.chain_lanes = try k.batch.function("fn_gdn_rows_lanes");
++        k.shift_lanes = try k.batch.function("fn_shift_window_lanes");
++        k.keep_lanes = try k.batch.function("fn_gdn_keep_lanes");
          k.front = try k.batch.function("fn_gdn_front");
          k.chain = try k.batch.function("fn_gdn_rows");
          k.chain_to = try k.batch.function("fn_gdn_rows_to");
@@ -2237,22 +2439,25 @@ index 00000000..9a46314b
 +    try p.head(null);
 +}
 diff --git a/zig/src/families/flashnext/cuda_batch_state.zig b/zig/src/families/flashnext/cuda_batch_state.zig
-index 98faec84..bc4d12bb 100644
+index 98faec84..7ec5177c 100644
 --- a/zig/src/families/flashnext/cuda_batch_state.zig
 +++ b/zig/src/families/flashnext/cuda_batch_state.zig
-@@ -47,6 +47,11 @@ pub const att_rows: usize = 256;
+@@ -47,6 +47,14 @@ pub const att_rows: usize = 256;
  pub const pocket_stride: usize = 128;
  /// Prompt rows one fused attention launch takes (their selections staged att_rows at a time).
  pub const fused_rows: usize = 1024;
-+/// A shared round's lanes the attention launches take at once (flashnext_attn.cu's fn_lanes MAX) and their table:
-+/// each attention layer's [lane][4] cache addresses, then the lanes' ints and each of up to att_rows rows' lane.
++/// A shared round's lanes the attention and DeltaNet launches take at once (the kernels' fn_lanes MAX) and their table:
++/// each attention layer's [lane][4] cache addresses, each DeltaNet layer's [lane][5] conv window, state, state out,
++/// kept projection and kept window, then the lanes' ints and each of up to att_rows rows' lane.
 +pub const attn_lanes: usize = 32;
-+pub const lanes_ptrs: usize = (wt.layers_n / 4) * attn_lanes * 4 * 8;
++pub const lanes_attn_ptrs: usize = wt.attn_n * attn_lanes * 4 * 8;
++pub const lanes_gdn_ptrs: usize = wt.linear_n * attn_lanes * 5 * 8;
++pub const lanes_ptrs: usize = lanes_attn_ptrs + lanes_gdn_ptrs;
 +pub const lanes_bytes: usize = lanes_ptrs + (4 * attn_lanes + att_rows) * 4;
  /// Rows a pass holds at most unless asked for more.
  pub const default_chunk: usize = 1536;
  /// The most rows TF_FLASHNEXT_CHUNK may ask for (the largest measured pass; its scratch is about 13 GiB more).
-@@ -75,7 +80,8 @@ fn cdiv(a: usize, b: usize) usize {
+@@ -75,7 +83,8 @@ fn cdiv(a: usize, b: usize) usize {
  }
  
  /// Which rows get the head: the last (a prompt), every row (a verify window or a round), or none.
@@ -2262,7 +2467,7 @@ index 98faec84..bc4d12bb 100644
  
  /// A read-out's kept tensors (fn_back's HcKept): h and normed [rows, wide], v fp32 [rows, low (+ 4)], up, inject.
  pub const HcKeep = struct { h: u64 = 0, normed: u64 = 0, v: u64 = 0, up: u64 = 0, inject: u64 = 0 };
-@@ -230,6 +236,8 @@ pub const Scratch = struct {
+@@ -230,6 +239,8 @@ pub const Scratch = struct {
      qids: u64 = 0,
      qnk: u64 = 0,
      qspr: u64 = 0,
@@ -2271,7 +2476,7 @@ index 98faec84..bc4d12bb 100644
      ao: u64 = 0,
      gated: u64 = 0,
      gxs_attn: u64 = 0,
-@@ -267,6 +275,8 @@ pub const Scratch = struct {
+@@ -267,6 +278,8 @@ pub const Scratch = struct {
      host: ?cuda.HostBuffer = null,
      /// The uploads from `host` and the event recorded after a pass's last one: the next pass waits before writing it.
      staging: ?Staging(Uploads) = null,
@@ -2280,7 +2485,7 @@ index 98faec84..bc4d12bb 100644
  
      fn add(s: *Scratch, gpa: std.mem.Allocator, d: *const cuda.Driver, len: usize) !u64 {
          var b = try cuda.DeviceBuffer.alloc(d, @max(len, 256));
-@@ -276,11 +286,12 @@ pub const Scratch = struct {
+@@ -276,11 +289,12 @@ pub const Scratch = struct {
      }
  
      /// Byte offsets of the staged ids, positions, n-gram rows and their sums in `host`, and its length.
@@ -2295,7 +2500,7 @@ index 98faec84..bc4d12bb 100644
      }
  
      /// Waits until the last pass's uploads have read `host` (they are queued behind its kernels), so it may change.
-@@ -305,6 +316,10 @@ pub const Scratch = struct {
+@@ -305,6 +319,10 @@ pub const Scratch = struct {
      pub fn hostPos(s: *const Scratch, n: usize) []i32 {
          return @alignCast(std.mem.bytesAsSlice(i32, s.host.?.bytes[hostAt(s.cap)[1]..][0 .. n * 4]));
      }
@@ -2306,7 +2511,7 @@ index 98faec84..bc4d12bb 100644
      pub fn hostEmb(s: *const Scratch, n: usize) []u16 {
          return @alignCast(std.mem.bytesAsSlice(u16, s.host.?.bytes[hostAt(s.cap)[2]..][0 .. n * dims * 2]));
      }
-@@ -326,7 +341,7 @@ pub const Scratch = struct {
+@@ -326,7 +344,7 @@ pub const Scratch = struct {
          n += cap * (2 * gdn.nk * gdn.dk + 2 * gdn.nv) * 4;
          n += cap * q_heads * head_dim * 2 + cap * index_heads * index_dim * 2;
          n += att_rows * nch * q_heads * (head_dim + 2) * 4 + cap * out_k * 2 * 2 + cap * (out_k / 32) * 4;
@@ -2315,7 +2520,7 @@ index 98faec84..bc4d12bb 100644
          n += cap * (experts_n + 1) * 4 + pairs * 4 * 2 + pairs * 4 + items * 3 * 4 + 8 + pairs * 4 + nblk * (experts_n + 1) * 4;
          n += cap * moe_w * 6 + cap * dims * 4;
          n += pairs * moe_w * 2 + pairs * dims * 4 + cap * dims * 2;
-@@ -380,6 +395,7 @@ pub const Scratch = struct {
+@@ -380,6 +398,7 @@ pub const Scratch = struct {
          s.qids = try s.add(gpa, d, fused_rows * idw * 4);
          s.qnk = try s.add(gpa, d, fused_rows * 4);
          s.qspr = try s.add(gpa, d, fused_rows * 4);
@@ -2323,7 +2528,7 @@ index 98faec84..bc4d12bb 100644
          s.ao = try s.add(gpa, d, cap * out_k * 2);
          s.gated = try s.add(gpa, d, cap * out_k * 2);
          s.gxs_attn = try s.add(gpa, d, cap * (out_k / 32) * 4);
-@@ -417,12 +433,13 @@ pub const Scratch = struct {
+@@ -417,12 +436,13 @@ pub const Scratch = struct {
          s.dummy = try s.add(gpa, d, 4096);
          try s.bufs.items[s.bufs.items.len - 1].fill8(0, stream.handle);
          try stream.synchronize();
@@ -2338,7 +2543,7 @@ index 98faec84..bc4d12bb 100644
          if (s.staging) |*g| {
              // no queued upload may still read `host`; a wait that fails has lost the context, and its copies with it
              g.ready() catch {};
-@@ -505,6 +522,11 @@ pub const Gather = struct {
+@@ -505,6 +525,11 @@ pub const Gather = struct {
              };
              return;
          }
@@ -5724,16 +5929,18 @@ index edb68ce9..d23500e6 100644
          k.hcf_down = try k.hcf_mod.function(cubin_hcf_down);
 diff --git a/zig/src/families/flashnext/cuda_tile_rows.zig b/zig/src/families/flashnext/cuda_tile_rows.zig
 new file mode 100644
-index 00000000..c6f6e742
+index 00000000..fb10f221
 --- /dev/null
 +++ b/zig/src/families/flashnext/cuda_tile_rows.zig
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,28 @@
 +//! Rows from which a pass takes the prompt tiles in place of the row kernels (each bit for bit the other):
 +//! TF_TILE_EXPERTS_ROWS, TF_TILE_READOUT_ROWS and TF_TILE_MATMUL_ROWS, default 64 each.
 +const std = @import("std");
 +
 +fn read(comptime name: [:0]const u8) usize {
++    // the name in the struct gives each knob its own cache (a struct that captures nothing is one type for all)
 +    const Cached = struct {
++        const knob = name;
 +        var rows: ?usize = null;
 +    };
 +    if (Cached.rows) |n| return n;

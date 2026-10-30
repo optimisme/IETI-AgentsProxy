@@ -1,11 +1,11 @@
 # TensorFold Zig 1.1.7: millor build de Flash-Next per a setze alumnes
 
-**La millor build (29 d'octubre, `variants/resident11`) és TensorFold 1.1.7 amb
+**La millor build (30 d'octubre, `variants/resident12`) és TensorFold 1.1.7 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
 els fluxos d'una ronda en un sol llançament per kernel (un 11% menys per ronda
-de resposta a 74k). Iguala o supera el
+de resposta a 74k), i el mateix per a les capes DeltaNet (un 2% més). Iguala o supera el
 Python en la càrrega d'agent, en les rondes de retorn i en el primer token
 mitjà amb contextos de 45k i 74k. Només perd en el temps total de la primera
 ronda freda (un 5–8%) i, a 45k, en el p95 del primer token.** Vegeu
@@ -22,10 +22,12 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-resident11-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-resident12-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/resident11/fn.patch`](variants/resident11/fn.patch). Les builds
-  anteriors són [`variants/resident7/fn.patch`](variants/resident7/fn.patch)
+  [`variants/resident12/fn.patch`](variants/resident12/fn.patch). Les builds
+  anteriors són [`variants/resident11/fn.patch`](variants/resident11/fn.patch)
+  (29 d'octubre, sense DeltaNet en un llançament),
+  [`variants/resident7/fn.patch`](variants/resident7/fn.patch)
   (29 d'octubre, sense l'atenció en un llançament) i
   [`variants/sampled/fn.patch`](variants/sampled/fn.patch) (28 d'octubre).
 - Configuració: 16 fluxos, finestra de 75.000 tokens, KV fp8 (files int8),
@@ -33,8 +35,11 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
   descodifica), cache de prompts elàstica de fins a 24 GiB amb estats residents
   (`TF_PROMPT_CACHE_RESIDENT_GIB=2`), planificador de prompts
   (`TF_FILL_AGING_ROUNDS=1000000`, `TF_FILL_ROUND_STEPS=8`), lectura HC per files
-  fins a 127 files (`TF_TILE_READOUT_ROWS=128`), atenció dels fluxos en un
-  llançament (`TF_FLASHNEXT_ATTN_LANES=1`), visió activada, temperatura per
+  fins a 127 files (`TF_TILE_READOUT_ROWS=128`, i també
+  `TF_TILE_EXPERTS_ROWS` i `TF_TILE_MATMUL_ROWS` a 128; vegeu
+  [DeltaNet en un llançament](#deltanet-en-un-llançament-30-doctubre)), atenció
+  i DeltaNet dels fluxos en un llançament (`TF_FLASHNEXT_ATTN_LANES=1`,
+  `TF_FLASHNEXT_GDN_LANES=1`), visió activada, temperatura per
   defecte del servidor 0,1.
 - Escollir el checkpoint: `TENSORFOLD_MODEL_ID`, `TENSORFOLD_MODEL_REVISION` i
   `TENSORFOLD_CHECKPOINT_VOLUME` (per defecte, MLX 4 bits).
@@ -110,6 +115,11 @@ build del 29 d'octubre el Zig reaprofita la cache a les rondes de retorn i hi é
    del seu flux en una taula que es puja un cop per ronda, com fa el Python
    (`attn_multi.py`). Els programes són els mateixos. Vegeu
    [Atenció en un llançament](#atenció-en-un-llançament-29-doctubre).
+8. **DeltaNet dels fluxos en un llançament** (`TF_FLASHNEXT_GDN_LANES`): a cada
+   capa DeltaNet hi havia cinc llançaments per flux (dues còpies, la part
+   frontal, la cadena i el desplaçament de la finestra). Ara en són quatre per a
+   tots els fluxos, amb la mateixa taula de la ronda. Els bits són els mateixos.
+   Vegeu [DeltaNet en un llançament](#deltanet-en-un-llançament-30-doctubre).
 
 ## Què s'ha descartat
 
@@ -188,11 +198,42 @@ Mateixa build (`variants/resident11`), interruptor apagat i encès.
   prompts, que aquest canvi no toca; per això hi canvien poc.
 - Exactitud amb l'interruptor encès: greedy junts = sols 8 de 8 (dues rondes),
   agulles 9 de 9, respostes iguals a `kvcheck-117` 8 de 8 i mostrejades 8 de 8.
-- Queda per tancar: DeltaNet (~6 ms per ronda) i els experts (~7 ms).
+- Quedava per tancar: DeltaNet (~6 ms per ronda) i els experts (~7 ms).
 - La build també porta tres opcions de mesura que no fan res si no s'activen:
   `TF_FLASHNEXT_ROUND_ROWS` (límit de files per ronda; l'escombrada de 32 a 128
   no va guanyar res), `TF_DRAFT_TIMES` (temps dels passos de draft) i
   `TF_DRAFT_PREFIX` (sense efecte).
+
+## DeltaNet en un llançament (30 d'octubre)
+
+Després de l'atenció, el bloc DeltaNet era la diferència següent: 34,5 ms
+davant de 28,1 al Python en una ronda de 64 files. Mateix script
+(`SW=TF_FLASHNEXT_GDN_LANES AVAR=resident12 bash attn-lanes.sh`); dades a
+[`results/resident/gdn-lanes.txt`](results/resident/gdn-lanes.txt). Mateixa
+build (`variants/resident12`), interruptor apagat i encès.
+
+| Setze respostes curtes | Apagat | Encès | Python |
+|---|---|---|---|
+| Bloc DeltaNet, 64 files | 34,5 ms | **30,0 ms** | 28,1 ms |
+| Verificació per ronda | 183,2 ms | **178,6 ms** | — |
+| Ronda sencera | 206,0 ms | **201,5 ms** (−2%) | — |
+| Tokens/s | 234,4–236,9 | **238,9–241,7** | ~243 |
+
+- Exactitud amb l'interruptor encès: greedy junts = sols 8 de 8 (dues rondes),
+  agulles 9 de 9, respostes iguals a `kvcheck-117` 8 de 8 i mostrejades 8 de 8.
+- No s'ha mesurat a 74k: el cost de DeltaNet no depèn del context, i s'hi espera
+  el mateix estalvi d'uns 4,5 ms per ronda.
+- **Error trobat de passada.** En Zig, una cache declarada dins d'una funció
+  genèrica és compartida per tots els noms si no fa referència al nom. Per això
+  a les builds fins a resident11 `TF_TILE_READOUT_ROWS=128` també posava a 128
+  els llindars dels experts i de les matmuls (`TF_TILE_EXPERTS_ROWS`,
+  `TF_TILE_MATMUL_ROWS`), i totes les mesures anteriors es van fer així. Les
+  respostes no canviaven. resident12 corregeix les dues caches i el perfil posa
+  els dos llindars a 128 explícitament, per mantenir el comportament mesurat.
+  La primera prova d'aquest canvi comparava encès amb encès per aquest motiu;
+  la taula és de la build refeta.
+- Queda per tancar: els drafts (~23 ms per ronda davant de ~17 al Python) i els
+  experts (un 3% per darrere, limitats per l'amplada de banda de memòria).
 
 ## Comprovacions d'exactitud
 
@@ -324,7 +365,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/resident11) | resident7 + atenció dels fluxos en un llançament | [`best/best.patch`](best/best.patch) | `ieti-native117-resident11-build` |
+| **best** (variants/resident12) | resident11 + DeltaNet dels fluxos en un llançament + caches dels llindars separades | [`best/best.patch`](best/best.patch) | `ieti-native117-resident12-build` |
+| variants/resident11 | resident7 + atenció dels fluxos en un llançament | [`variants/resident11/fn.patch`](variants/resident11/fn.patch) | `ieti-native117-resident11-build` |
 | variants/resident7 | sampled + estats residents + planificador de prompts + lectura HC per files | [`variants/resident7/fn.patch`](variants/resident7/fn.patch) | `ieti-native117-resident7-build` |
 | variants/sampled | 1.1.7 + patch + pas mixt + drafts mostrejats (millor del 28 d'octubre) | [`variants/sampled/fn.patch`](variants/sampled/fn.patch) | `ieti-native117-sampled-build` |
 | tf117-20261027 | 1.1.7 + patch + pas mixt | [`tf117-20261027/fn.patch`](tf117-20261027/fn.patch) | `ieti-native117-fn-build` |

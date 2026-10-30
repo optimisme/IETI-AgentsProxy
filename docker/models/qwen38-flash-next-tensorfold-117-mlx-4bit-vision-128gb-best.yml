@@ -1,6 +1,6 @@
-# Best Flash-Next Zig build (2026-10-29, variants/resident11): TensorFold 1.1.7 + our Flash-Next patch, the mixed pass,
+# Best Flash-Next Zig build (2026-10-30, variants/resident12): TensorFold 1.1.7 + our Flash-Next patch, the mixed pass,
 # MiaAI-Lab's sampled drafts (0007, 0008, 0011), resident prompt states, the fill scheduler, the reply read-out and
-# one-launch attention for a round's lanes. Start it with benchmarks/tensorfold-zig-117-20261027/up-117.sh, which supplies the
+# one-launch attention and DeltaNet for a round's lanes. Start it with benchmarks/tensorfold-zig-117-20261027/up-117.sh, which supplies the
 # patch digest; tests and results: benchmarks/tensorfold-zig-117-20261027/REPORT.md.
 # 16 streams, 75k context, fp8 (int8-row) KV, MTP6/0.60, vision and an elastic RAM prompt cache.
 # TF_FLASHNEXT_MIXED=1 runs a prompt chunk and the decode round in one pass, experts read once; 0: apart.
@@ -82,9 +82,15 @@ services:
       TF_FILL_ROUND_STEPS: "${TF_FILL_ROUND_STEPS:-8}"
       # Reply rounds (up to 16 x 7 rows) keep the row read-out; its prompt tile is slower there. Bits are the same.
       TF_TILE_READOUT_ROWS: "${TF_TILE_READOUT_ROWS:-128}"
+      # Builds before resident12 read all three thresholds from the first one asked (the read-out's 128): these keep
+      # the measured behaviour now that each knob is its own.
+      TF_TILE_EXPERTS_ROWS: "${TF_TILE_EXPERTS_ROWS:-128}"
+      TF_TILE_MATMUL_ROWS: "${TF_TILE_MATMUL_ROWS:-128}"
       # Reply rounds' attention in one launch a kernel for every stream (each row finds its caches by table); 0: a
       # stream at a time. Bits are the same.
       TF_FLASHNEXT_ATTN_LANES: "${TF_FLASHNEXT_ATTN_LANES:-1}"
+      # The same for the DeltaNet layers (copies, front, chain and window shift); 0: a stream at a time. Bits are the same.
+      TF_FLASHNEXT_GDN_LANES: "${TF_FLASHNEXT_GDN_LANES:-1}"
       # fp8: Flash Next's attention caches as the Python engine's --kv-dtype int8 rows (H32 groups, fp16 scales), half the bytes.
       TENSORFOLD_KV_CACHE: "${TENSORFOLD_KV_CACHE:-fp8}"
       # Experiments: space-separated VAR=value pairs exported before the server starts (any engine knob, no profile edit).
@@ -129,7 +135,7 @@ services:
 volumes:
   patched-runtime:
     external: true
-    name: ${TENSORFOLD_NATIVE_VOLUME:-ieti-native117-resident11-build}
+    name: ${TENSORFOLD_NATIVE_VOLUME:-ieti-native117-resident12-build}
   upstream-runtime:
     external: true
     name: ieti-tensorfold-116-runtime
