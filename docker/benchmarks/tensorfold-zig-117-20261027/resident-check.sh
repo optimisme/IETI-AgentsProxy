@@ -6,7 +6,7 @@
 #   quick      about a minute once the server is up, first by default: the band's short prompts at both temperatures. Any
 #              error or changed reply stops the run here
 #   band       short prompts through the 64-127 row chunks (74-136 tokens) and four 74k prompts at temperature 0: no
-#              errors, replies as variants/tf119c/band-*.json
+#              errors, replies as variants/tf119d/band-*.json
 #   reuse      two-turn conversations resumed from copies, then from resident states (TF_PROMPT_CACHE_RESIDENT_ALWAYS=1):
 #              the replies must be the same (reuse_check.py)
 #   capacity   16 requests near TOKENS (default 74000) and two return turns (the Python campaign's probe)
@@ -57,9 +57,9 @@ sweeps() { # the short prompts at both temperatures against the reference: non-z
     n=${t/./}; [ $t = 0 ] && f=40 || f=10
     python3 $H/short_sweep.py http://127.0.0.1:8007 $f 140 2 $t $D/band-$n.json 2>&1 | tail -1 | cut -c1-200 | tee -a "$S"
     python3 -c "import json, sys
-a=json.load(open('$H/variants/tf119c/band-t$n.json')); b=json.load(open('$D/band-$n.json'))
+a=json.load(open('$H/variants/tf119d/band-t$n.json')); b=json.load(open('$D/band-$n.json'))
 same=sum(a[k]==b.get(k) for k in a)
-print('band temperature $t: equal to tf119c', same, 'of', len(a))
+print('band temperature $t: equal to tf119d', same, 'of', len(a))
 sys.exit(same != len(a))" | tee -a "$S"
     [ "${PIPESTATUS[0]}" = 0 ] || bad=1
   done

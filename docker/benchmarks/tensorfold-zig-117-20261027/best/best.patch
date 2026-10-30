@@ -1103,6 +1103,22 @@ index 1ac2e6fa..1e76c82b 100644
 +    }
 +    if (t == 0) flags[r] = 0;
 +}
+diff --git a/zig/kernels/cuda/qmm_prefill.cu b/zig/kernels/cuda/qmm_prefill.cu
+index 64787401..e384197d 100644
+--- a/zig/kernels/cuda/qmm_prefill.cu
++++ b/zig/kernels/cuda/qmm_prefill.cu
+@@ -299,3 +299,11 @@ template __global__ void tf_qmm_prefill::prefill_kernel<64, 128, 128, 2, 4, 3, f
+ template __global__ void tf_qmm_prefill::prefill_kernel<64, 128, 128, 2, 2, 2, false>(
+     const __nv_bfloat16* __restrict__, const uint32_t* __restrict__, const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__, void* __restrict__, int, int, int,
+     int, int, int);
++// Flash-Next's group-32 prompts on the same tile, bf16 out.
++template __global__ void tf_qmm_prefill::prefill_kernel<32, 128, 128, 2, 2, 2, false>(
++    const __nv_bfloat16* __restrict__, const uint32_t* __restrict__, const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__, void* __restrict__, int, int, int,
++    int, int, int);
++// Flash-Next's group-32 prompts on the same tile, fp32 out.
++template __global__ void tf_qmm_prefill::prefill_kernel<32, 128, 128, 2, 2, 2, true>(
++    const __nv_bfloat16* __restrict__, const uint32_t* __restrict__, const __nv_bfloat16* __restrict__, const __nv_bfloat16* __restrict__, void* __restrict__, int, int, int,
++    int, int, int);
 diff --git a/zig/src/core/lane_host.zig b/zig/src/core/lane_host.zig
 index e2bd3fea..1d5090c2 100644
 --- a/zig/src/core/lane_host.zig
@@ -1810,7 +1826,7 @@ index 745b64ba..335964de 100644
          const rewind = !e.expired and e.at == s.active_rewind_at and on; // the active rewind state goes last
          if (e.borrowers == 0 and e != skip and (oldest == null or (if (rewind != oldest_rewind) oldest_rewind else e.used < s.entries.items[oldest.?].used))) {
 diff --git a/zig/src/families/flashnext/cuda_batch.zig b/zig/src/families/flashnext/cuda_batch.zig
-index 6066b1ea..5d3b10c5 100644
+index 6066b1ea..7f49dcc7 100644
 --- a/zig/src/families/flashnext/cuda_batch.zig
 +++ b/zig/src/families/flashnext/cuda_batch.zig
 @@ -18,6 +18,8 @@ const ops = @import("cuda_batch_ops.zig");
@@ -1822,7 +1838,7 @@ index 6066b1ea..5d3b10c5 100644
  const streams = wt.streams;
  const wide = wt.wide;
  const low = wt.low;
-@@ -89,9 +91,46 @@ const Gather = parts.Gather;
+@@ -89,9 +91,57 @@ const Gather = parts.Gather;
  /// TF_FLASHNEXT_PROFILE=1: each chunk's wall time (synchronized) and its host n-gram gather on stderr.
  fn profile() bool {
      const v = std.c.getenv("TF_FLASHNEXT_PROFILE") orelse return false;
@@ -1864,13 +1880,24 @@ index 6066b1ea..5d3b10c5 100644
 +    return lanesOn("TF_FLASHNEXT_GDN_LANES");
 +}
 +
++/// A lone prompt chunk's dense matmuls take Python's prompt GEMM; TF_FLASHNEXT_PROMPT_GEMM=0 keeps the decode tiles.
++fn promptGemmOn() bool {
++    const Cached = struct {
++        var on: ?bool = null;
++    };
++    if (Cached.on) |v| return v;
++    const v = std.c.getenv("TF_FLASHNEXT_PROMPT_GEMM");
++    Cached.on = v == null or !std.mem.eql(u8, std.mem.span(v.?), "0");
++    return Cached.on.?;
++}
++
 +const Block = enum { embed, ple, hc, gdn, attn, moe, head };
 +const block_names = [_][]const u8{ "embed", "ple", "hc", "gdn", "attn", "moe", "head" };
 +
  pub fn Pass(comptime Tri: type) type {
      return struct {
          const Self = @This();
-@@ -114,10 +153,20 @@ pub fn Pass(comptime Tri: type) type {
+@@ -114,16 +164,27 @@ pub fn Pass(comptime Tri: type) type {
          /// K slices the last out projection wrote to part (1 when the prompt tile folded them).
          out_slices: usize = out_sk,
          prepared: bool = false,
@@ -1891,7 +1918,14 @@ index 6066b1ea..5d3b10c5 100644
  
          // ---- launches ----------------------------------------------------------------------------------------
  
-@@ -169,6 +218,7 @@ pub fn Pass(comptime Tri: type) type {
+         /// qmm.cu's arithmetic over m rows into out (bf16) or part (fp32 K slices); returns the slices (1 when folded).
+         pub fn lane(self: *Self, x: u64, xs: u64, w: Q4, out: u64, part: u64, m: usize, sk: usize) !usize {
+             if (try zs.lane(self.k, self.stream, self.s, self.zero_slices, x, w, part, m, sk)) |one| return one;
++            if (self.lanes.len == 0 and m >= 64 and w.native == null and promptGemmOn()) return tiles.prefill(self.k, self.stream, x, w, out, part, m, sk);
+             return tiles.matmul(self.k, self.stream, x, xs, w, out, part, self.s.native_part, m, sk);
+         }
+ 
+@@ -169,6 +230,7 @@ pub fn Pass(comptime Tri: type) type {
              const rs = self.rows * dims;
              if (self.pending == null) {
                  try self.tri.hcWriteback(h, h, pss, dummy, "*bf16", dummy, dummy, "*bf16", dummy, "*bf16", rs, n, dims, streams, 0, 1, 1, 1);
@@ -1899,7 +1933,7 @@ index 6066b1ea..5d3b10c5 100644
                  return;
              }
              self.pending = null;
-@@ -176,11 +226,13 @@ pub fn Pass(comptime Tri: type) type {
+@@ -176,11 +238,13 @@ pub fn Pass(comptime Tri: type) type {
                  // the fp32 branch rounded once, as MODE 2 rounds its sum (a slice of one)
                  self.pending_f32 = false;
                  try self.tri.hcWriteback(h, h, pss, s.moe_f32 + r0 * dims * 4, "*fp32", inj, dummy, "*bf16", dummy, "*bf16", rs, n, dims, streams, 4, 1, 1, 1);
@@ -1916,7 +1950,7 @@ index 6066b1ea..5d3b10c5 100644
          }
  
          /// Prompt rows' read-out on flashnext_hcf.cu's tiles, fn_hc_down's and fn_hc_upmix's bits (K slices folded).
-@@ -212,7 +264,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -212,7 +276,7 @@ pub fn Pass(comptime Tri: type) type {
                  try self.tri.hcDenseMix(s.hc_up, norm, s.mixed + r0 * dims * 2, s.xsm + r0 * (dims / 32) * 4, n, dims, streams);
                  return;
              }
@@ -1925,7 +1959,7 @@ index 6066b1ea..5d3b10c5 100644
              try self.copy(keep.h, h, n * wide * 2);
              try self.tri.hcDown(h, pss, hc_w.scale.ptr, norm, hc_w.down.w.ptr, hc_w.down.s.ptr, hc_w.down.b.ptr, s.dn, s.hc_part, eps, n, hc_w.n_down, wide, dims, dims / 256, streams, hc_sk);
              if (keep.v != 0) try self.sumSlices(s.hc_part, keep.v, false, n * hc_w.n_down, hc_sk);
-@@ -255,6 +307,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -255,6 +319,7 @@ pub fn Pass(comptime Tri: type) type {
              const s = self.s;
              const n = self.rows;
              _ = try self.lane(s.mixed, s.xsm, lw.proj, s.proj, s.dummy, n, 1);
@@ -1933,7 +1967,7 @@ index 6066b1ea..5d3b10c5 100644
              // a lone pass keeps its projection and conv window; a shared pass keeps each lane's own
              if (self.lanes.len == 0) {
                  try self.copy(keep.proj, s.proj, n * gdn.proj_width * 2);
-@@ -267,9 +320,14 @@ pub fn Pass(comptime Tri: type) type {
+@@ -267,9 +332,14 @@ pub fn Pass(comptime Tri: type) type {
                  const st = self.seq.state[li].ptr;
                  const in: gdn_fused.In = .{ .proj = s.proj, .conv = self.seq.conv[li].ptr, .cw = lw.cw.ptr, .a_log = lw.a_log.ptr, .dt = lw.dt.ptr, .state = st, .state_out = if (keep.state_out != 0) keep.state_out else st, .norm = lw.norm.ptr };
                  try gdn_fused.launch(self.k.gdn_fused, self.stream, in, n, s.gout, s.gxs);
@@ -1948,7 +1982,7 @@ index 6066b1ea..5d3b10c5 100644
              } else {
                  // shared rounds: each lane's rows kept, fronted and chained on its own conv window and state
                  var row0: usize = 0;
-@@ -290,7 +348,56 @@ pub fn Pass(comptime Tri: type) type {
+@@ -290,7 +360,56 @@ pub fn Pass(comptime Tri: type) type {
              }
              if (!fused) try gdn_fused.norm(self.k.gnorm, self.stream, s.ys, s.proj, lw.norm.ptr, s.gout, s.gxs, n);
              if (self.lanes.len == 0) try self.shiftWindow(self.seq.conv[li].ptr, s.proj, gdn.proj_width, n, gdn.taps - 1, gdn.conv_dim);
@@ -2005,7 +2039,7 @@ index 6066b1ea..5d3b10c5 100644
          }
  
          /// fn_gdn_front over `rows` projection rows after the conv window `conv`.
-@@ -344,7 +451,9 @@ pub fn Pass(comptime Tri: type) type {
+@@ -344,7 +463,9 @@ pub fn Pass(comptime Tri: type) type {
              try self.copyCols(pa, proj_n, keep.pq, qw2, qw2, n);
              try self.copyCols(pa + qw2 * 2, proj_n, keep.pk, kw, kw, n);
              try self.copyCols(pa + (qw2 + kw) * 2, proj_n, keep.pv, kw, kw, n);
@@ -2016,7 +2050,7 @@ index 6066b1ea..5d3b10c5 100644
                  // shared rounds: each lane's rope, cache writes, selection and attention on its own stream's caches
                  const own_seq = self.seq;
                  const own_pos0 = self.pos0;
-@@ -365,6 +474,89 @@ pub fn Pass(comptime Tri: type) type {
+@@ -365,6 +486,89 @@ pub fn Pass(comptime Tri: type) type {
              self.out_slices = try self.lane(gated, s.gxs_attn, lw.out, s.dummy, s.part, n, out_sk);
          }
  
@@ -2106,7 +2140,7 @@ index 6066b1ea..5d3b10c5 100644
          /// Where attnRows reads its rows' positions (16 bytes apart) and writes queries, indexer queries and outputs.
          const RowsAt = struct { pos: u64, q: u64, iq: u64, ao: u64 };
  
-@@ -430,6 +622,7 @@ pub fn Pass(comptime Tri: type) type {
+@@ -430,6 +634,7 @@ pub fn Pass(comptime Tri: type) type {
              try self.copy(keep.moe_x, s.mixed, n * dims * 2);
              try self.tri.routerMany(s.mixed, lw.router.ptr, s.router_l, dims, n);
              try self.tri.topkMany(s.router_l, s.picks, s.wts, n);
@@ -2114,7 +2148,7 @@ index 6066b1ea..5d3b10c5 100644
              try self.copy(keep.moe_ids, s.picks, pairs * 4);
              try self.copy(keep.moe_wts, s.wts, pairs * 4);
              const e = experts_n + 1;
-@@ -456,12 +649,16 @@ pub fn Pass(comptime Tri: type) type {
+@@ -456,12 +661,16 @@ pub fn Pass(comptime Tri: type) type {
                  }
                  return;
              }
@@ -2133,7 +2167,7 @@ index 6066b1ea..5d3b10c5 100644
                  return;
              }
              try self.k.router.route(self.stream, s.picks, pairs, e, rows_tile, plan);
-@@ -486,6 +683,8 @@ pub fn Pass(comptime Tri: type) type {
+@@ -486,6 +695,8 @@ pub fn Pass(comptime Tri: type) type {
              @memset(pos, 0);
              for (0..blocks) |b| pos[4 * b] = @intCast(if (self.lanes.len > 0) self.lanes[b].pos else self.pos0 + b * att_rows);
              try self.upload(s.pos, std.mem.sliceAsBytes(pos));
@@ -2142,7 +2176,7 @@ index 6066b1ea..5d3b10c5 100644
              if (!self.prepared) try s.uploaded();
          }
  
-@@ -501,58 +700,100 @@ pub fn Pass(comptime Tri: type) type {
+@@ -501,58 +712,100 @@ pub fn Pass(comptime Tri: type) type {
              if (n == 0 or n > s.cap) return error.UnexpectedTensor;
              if (self.lanes.len > 0) {
                  // shared rounds read every row's scores; a lane keeps its own rollback and hidden rows, nothing else
@@ -5939,10 +5973,10 @@ index 7db8fe40..aa546be4 100644
  }
  
 diff --git a/zig/src/families/flashnext/cuda_tile_kernels.zig b/zig/src/families/flashnext/cuda_tile_kernels.zig
-index edb68ce9..d23500e6 100644
+index edb68ce9..9aeb3e0e 100644
 --- a/zig/src/families/flashnext/cuda_tile_kernels.zig
 +++ b/zig/src/families/flashnext/cuda_tile_kernels.zig
-@@ -11,6 +11,8 @@ pub const hcf_up_smem: u32 = 3 * (2 * 64 * 64 + 2 * 128 * 16 + 2 * 2 * 128 * 2 +
+@@ -11,12 +11,22 @@ pub const hcf_up_smem: u32 = 3 * (2 * 64 * 64 + 2 * 128 * 16 + 2 * 2 * 128 * 2 +
  /// Prompt rows' experts on factored 64-pair tiles (flashnext_fexp.cu), expert_rows' bits: up with SwiGLU, down to fp32.
  pub const cubin_fexp_up: [:0]const u8 = "_ZN15tf_fact_experts11fact_kernelILi2ELi2ELi1ELi4ELi2ELi3EEEvPK13__nv_bfloat16iiPK5uint4iiPKiS8_S8_Pvif";
  pub const cubin_fexp_down: [:0]const u8 = "_ZN15tf_fact_experts11fact_kernelILi1ELi0ELi2ELi2ELi4ELi3EEEvPK13__nv_bfloat16iiPK5uint4iiPKiS8_S8_Pvif";
@@ -5951,7 +5985,21 @@ index edb68ce9..d23500e6 100644
  pub const fexp_smem: u32 = 41472;
  pub const fexp_tile: usize = 64;
  pub const cubin_fact_fold: [:0]const u8 = "_ZN4fact11fact_kernelILi64ELi128ELi2ELi4ELi3ELi2ELb0ELi2ELb1ELb1ELb1EEEvPK13__nv_bfloat16PKfPKjS3_S3_PvPfiiiiiii";
-@@ -26,6 +28,7 @@ pub const TileKernels = struct {
+ pub const fact_smem: u32 = 3 * (2 * 64 * 64 + 2 * 128 * 16 + 2 * 2 * 128 * 2 + 2 * 64 * 4);
+ 
++/// Python's prompt GEMM (qmm_prefill.cu) for group 32: 128 x 128 on 2 x 2 warps, two stages; bf16 and fp32 out.
++pub const cubin_prefill: [:0]const u8 = "_ZN14tf_qmm_prefill14prefill_kernelILi32ELi128ELi128ELi2ELi2ELi2ELb0EEEvPK13__nv_bfloat16PKjS3_S3_Pviiiiii";
++pub const cubin_prefill_f32: [:0]const u8 = "_ZN14tf_qmm_prefill14prefill_kernelILi32ELi128ELi128ELi2ELi2ELi2ELb1EEEvPK13__nv_bfloat16PKjS3_S3_Pviiiiii";
++pub const prefill_smem: u32 = 2 * (128 * 64 + 128 * 16 + 2 * 128 * 2);
++
+ pub const TileKernels = struct {
++    prefill_mod: cuda.Module,
++    prefill: cuda.Function,
++    prefill_f32: cuda.Function,
+     fact_mod: cuda.Module,
+     fact: cuda.Function,
+     fact_fold: cuda.Function,
+@@ -26,9 +36,16 @@ pub const TileKernels = struct {
      fexp_mod: cuda.Module,
      fexp_up: cuda.Function,
      fexp_down: cuda.Function,
@@ -5959,7 +6007,16 @@ index edb68ce9..d23500e6 100644
  
      pub fn load(d: *const cuda.Driver) !TileKernels {
          var k: TileKernels = undefined;
-@@ -41,6 +44,8 @@ pub const TileKernels = struct {
++        k.prefill_mod = try cuda.Module.load(d, cuda.kernels.qmm_prefill);
++        errdefer k.prefill_mod.unload();
++        k.prefill = try k.prefill_mod.function(cubin_prefill);
++        try k.prefill.allowDynamicShared(prefill_smem);
++        k.prefill_f32 = try k.prefill_mod.function(cubin_prefill_f32);
++        try k.prefill_f32.allowDynamicShared(prefill_smem);
+         k.fact_mod = try cuda.Module.load(d, cuda.kernels.flashnext_fact);
+         errdefer k.fact_mod.unload();
+         k.fact = try k.fact_mod.function(cubin_fact);
+@@ -41,6 +58,8 @@ pub const TileKernels = struct {
          try k.fexp_up.allowDynamicShared(fexp_smem);
          k.fexp_down = try k.fexp_mod.function(cubin_fexp_down);
          try k.fexp_down.allowDynamicShared(fexp_smem);
@@ -5968,6 +6025,14 @@ index edb68ce9..d23500e6 100644
          k.hcf_mod = try cuda.Module.load(d, cuda.kernels.flashnext_hcf);
          errdefer k.hcf_mod.unload();
          k.hcf_down = try k.hcf_mod.function(cubin_hcf_down);
+@@ -51,6 +70,7 @@ pub const TileKernels = struct {
+     }
+ 
+     pub fn unload(k: *TileKernels) void {
++        k.prefill_mod.unload();
+         k.hcf_mod.unload();
+         k.fexp_mod.unload();
+         k.fact_mod.unload();
 diff --git a/zig/src/families/flashnext/cuda_tile_rows.zig b/zig/src/families/flashnext/cuda_tile_rows.zig
 new file mode 100644
 index 00000000..fb10f221
@@ -6003,7 +6068,7 @@ index 00000000..fb10f221
 +    return read("TF_TILE_MATMUL_ROWS");
 +}
 diff --git a/zig/src/families/flashnext/cuda_tiles.zig b/zig/src/families/flashnext/cuda_tiles.zig
-index a623d411..c83ac95b 100644
+index a623d411..fecb2f0b 100644
 --- a/zig/src/families/flashnext/cuda_tiles.zig
 +++ b/zig/src/families/flashnext/cuda_tiles.zig
 @@ -3,6 +3,7 @@ const cuda = @import("cuda");
@@ -6023,7 +6088,26 @@ index a623d411..c83ac95b 100644
      const bm: usize = if (big) 64 else 16;
      const bn: usize = if (big) 128 else 64;
      var a: cuda.Args = .{};
-@@ -76,7 +77,9 @@ pub fn readout(tri: anytype, k: *const Kernels, stream: cuda.Stream, s: *Scratch
+@@ -59,6 +60,18 @@ pub fn matmul(k: *const Kernels, stream: cuda.Stream, x: u64, xs: u64, w: Q4, ou
+     return z;
+ }
+ 
++/// x [m, k] times w by Python's prompt GEMM (qmm.prefill_matmul): bf16 to out, or one fp32 slice to part where the
++/// caller asked for K slices. Returns the slices written.
++pub fn prefill(k: *const Kernels, stream: cuda.Stream, x: u64, w: Q4, out: u64, part: u64, m: usize, sk: usize) !usize {
++    const rows_t = cdiv(m, 128);
++    var a: cuda.Args = .{};
++    for ([_]u64{ x, w.w.ptr, w.s.ptr, w.b.ptr, if (sk > 1) part else out }) |v| a.add(v);
++    for ([_]usize{ m, w.n, w.k, cdiv(w.n, 128) * 128, w.k, @max(@as(usize, 1), @min(rows_t, (12 << 20) / (128 * w.k * 2))) }) |v| a.add(cint(v));
++    const f = if (sk > 1) k.tiles.prefill_f32 else k.tiles.prefill;
++    try cuda.launch.launch(f, .{ .grid = .{ .x = @intCast(rows_t * cdiv(w.n, 128)) }, .block = .{ .x = 128 }, .shared = tk.prefill_smem }, stream, &a);
++    return 1;
++}
++
+ /// Rows [r0, r0 + n)'s read-out on flashnext_hcf.cu: down with its K slices folded, the reduce, up in bf16, the mix.
+ pub fn readout(tri: anytype, k: *const Kernels, stream: cuda.Stream, s: *Scratch, hc_w: HcW, r0: usize, n: usize) !void {
+     const h = s.h + r0 * wide * 2;
+@@ -76,7 +89,9 @@ pub fn readout(tri: anytype, k: *const Kernels, stream: cuda.Stream, s: *Scratch
      a.add(eps);
      for ([_]usize{ dims, nc, streams }) |v| a.add(cint(v));
      try cuda.launch.launch(k.tiles.hcf_down, .{ .grid = .{ .x = @intCast(cdiv(n, 32) * cdiv(hc_w.n_down, 192)) }, .block = .{ .x = 256 }, .shared = tk.hcf_down_smem }, stream, &a);
@@ -6033,7 +6117,7 @@ index a623d411..c83ac95b 100644
      var b: cuda.Args = .{};
      for ([_]u64{ act, xs_act, hc_w.up.w.ptr, hc_w.up.s.ptr, hc_w.up.b.ptr, s.proj }) |v| b.add(v);
      for ([_]usize{ n, wide, low, 1, low, sweepOf(n, 64, low) }) |v| b.add(cint(v));
-@@ -85,8 +88,11 @@ pub fn readout(tri: anytype, k: *const Kernels, stream: cuda.Stream, s: *Scratch
+@@ -85,8 +100,11 @@ pub fn readout(tri: anytype, k: *const Kernels, stream: cuda.Stream, s: *Scratch
      b.add(@as(f32, 0));
      for ([_]usize{ dims, nc, streams }) |v| b.add(cint(v));
      try cuda.launch.launch(k.tiles.hcf_up, .{ .grid = .{ .x = @intCast(cdiv(n, 64) * cdiv(wide, 128)) }, .block = .{ .x = 256 }, .shared = tk.hcf_up_smem }, stream, &b);

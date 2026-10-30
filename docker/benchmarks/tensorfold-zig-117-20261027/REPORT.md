@@ -3,19 +3,22 @@
 > **Avís (30 d'octubre).** resident12 i tf119 tenen un error greu amb els prompts
 > d'uns 74–136 tokens, i s'espera el mateix des de resident7: vegeu
 > [Respostes corrompudes](#respostes-corrompudes-amb-trossos-de-64127-files-30-doctubre).
-> No s'han de desplegar. `variants/tf119c` el corregeix i és la millor build.
+> No s'han de desplegar. `variants/tf119c` el corregeix, i `variants/tf119d`, que el
+> conté, és la millor build.
 
-**La millor build (30 d'octubre, `variants/tf119c`) és TensorFold 1.1.9 amb
+**La millor build (30 d'octubre, `variants/tf119d`) és TensorFold 1.1.9 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
 els fluxos d'una ronda en un sol llançament per kernel (un 11% menys per ronda
-de resposta a 74k), i el mateix per a les capes DeltaNet (un 2% més). La 1.1.9
+de resposta a 74k), i el mateix per a les capes DeltaNet (un 2% més), a més de la multiplicació
+de prompt del Python als trossos sols de 64 files o més. La 1.1.9
 desallotja menys estats de la cache de prompts: les rondes de retorn a 74k baixen
 de 140 / 120 s a 109 / 82 s (el Python, 380 / 386 s). Iguala o supera el
-Python en la càrrega d'agent, en les rondes de retorn i en el primer token
-mitjà amb contextos de 45k i 74k. Només perd en el temps total de la primera
-ronda freda (un 5–8%) i, a 45k, en el p95 del primer token.** Vegeu
+Python en la càrrega d'agent, en les rondes de retorn, en el primer token mitjà
+amb contextos de 45k i 74k i, des de tf119d, en la ronda freda de 74k: 627 s
+davant de 637 s. A 45k perd en el p95 del primer token, i tf119d encara no s'hi
+ha mesurat.** Vegeu
 [Contextos plens: Zig davant de Python](#contextos-plens-zig-davant-de-python-29-doctubre).
 La resta de patches de MiaAI-Lab, el checkpoint NVIDIA NVFP4 i un drafter propi
 s'han descartat.
@@ -29,9 +32,9 @@ GB10 experimental del port SSH 2226; la màquina de referència no s'ha utilitza
 
 - Perfil: [`qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml`](../../models/qwen38-flash-next-tensorfold-117-mlx-4bit-vision-128gb-best.yml)
 - A la 2226: `bash ~/docker/benchmarks/tensorfold-zig-117-20261027/up-117.sh`
-  (posa el volum `ieti-native117-tf119c-build` i el resum SHA-256 del patch).
+  (posa el volum `ieti-native117-tf119d-build` i el resum SHA-256 del patch).
 - Patch de la millor build: [`best/best.patch`](best/best.patch), idèntic a
-  [`variants/tf119c/fn.patch`](variants/tf119c/fn.patch) (diferència respecte de
+  [`variants/tf119d/fn.patch`](variants/tf119d/fn.patch) (diferència respecte de
   `v1.1.9`). Les builds anteriors són
   [`variants/tf119/fn.patch`](variants/tf119/fn.patch) (30 d'octubre, sense la
   correcció) i, sobre la 1.1.7,
@@ -311,7 +314,39 @@ malament i el model principal quedava corromput.
   662 s, respostes curtes a 241 tok/s i càrrega d'agents a 117,7 tok/s sense
   errors: no perd velocitat respecte de tf119.
 - **Prova ràpida:** `resident-check.sh` comença per l'etapa `quick`, les passades
-  curtes contra les respostes de tf119c, i s'atura a la primera diferència.
+  curtes contra les respostes de la millor build, i s'atura a la primera diferència.
+
+## Multiplicació de prompt del Python (30 d'octubre)
+
+El buit de la ronda freda de 74k era d'omplir, no de la cua de respostes. La ronda
+treballa sense pauses: el Zig omple un prompt cada 37 s i descodifica mentre omple
+(primer token mitjà 298 s), i el Python omple en paral·lel (14 de 16 primers tokens
+a uns 472 s). La descodificació costa més o menys el mateix a tots dos.
+
+La diferència era la multiplicació: el Python usa `qmm_prefill` (grup 32, rajola 9)
+per als prompts i el Zig feia servir l'aritmètica de resposta. `variants/tf119d` hi
+passa els trossos sols de 64 files o més (`TF_FLASHNEXT_PROMPT_GEMM=0` ho desactiva).
+
+| 74k, 16 alumnes | tf119c | tf119d | Python |
+|---|---|---|---|
+| Un prompt fred | 36,5 s | 34,3 s | 31,8 s |
+| Ronda freda | 662 s | **627 s** (629,5 i 629,9 a la prova) | 637 s |
+| Primer token mitjà | 316 s | 298 s | ~472 s |
+| Càrrega d'agent | 117,7 tok/s | 118,8 tok/s | |
+
+- **Respostes:** 50 de 50 i 65 de 65 iguals que la seva referència, 4 de 4 a 74k a
+  temperatura 0, exactitud de 8 de 8 i 9 de 9, reutilització de 8 de 8. Dotze
+  documents de 74k amb [`sane_replies.py`](sane_replies.py): tots tornen el codi
+  demanat. Dades a [`results/resident/tf119d.txt`](results/resident/tf119d.txt).
+- **Canvia alguns bits:** 3 de 50 i 3 de 65 respostes difereixen de tf119c en la
+  redacció, no en el contingut. Un tros de menys de 64 files, o que va amb una
+  ronda, continua amb l'aritmètica de resposta, de manera que un mateix prompt pot
+  variar lleugerament segons la càrrega.
+- **Ronda de retorn 2:** la prova ignora el final de resposta, i a tots els motors
+  (Python inclòs) les 16 respostes acaben repetint text. Aquesta velocitat no és
+  comparable.
+- **Queda per fer:** per 4096 files, HC 393 davant de 340 ms i atenció 434 davant de
+  397 ms; mesurar tf119d a 45k.
 
 ## Comprovacions d'exactitud
 
@@ -443,7 +478,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/tf119c) | tf119 + correcció definitiva de les respostes corrompudes | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119c-build` |
+| **best** (variants/tf119d) | tf119c + multiplicació de prompt del Python | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119d-build` |
+| variants/tf119c | tf119 + correcció definitiva de les respostes corrompudes | [`variants/tf119c/fn.patch`](variants/tf119c/fn.patch) | `ieti-native117-tf119c-build` |
 | variants/tf119b | tf119 + primera correcció, substituïda per tf119c | [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) | `ieti-native117-tf119b-build` |
 | variants/tf119 | resident12 traslladada a TensorFold 1.1.9 (amb l'error) | [`variants/tf119/fn.patch`](variants/tf119/fn.patch) | `ieti-native117-tf119-build` |
 | variants/resident12 | resident11 + DeltaNet dels fluxos en un llançament + caches dels llindars separades | [`variants/resident12/fn.patch`](variants/resident12/fn.patch) | `ieti-native117-resident12-build` |
