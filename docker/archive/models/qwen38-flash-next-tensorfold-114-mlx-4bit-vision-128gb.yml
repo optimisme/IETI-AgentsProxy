@@ -1,0 +1,114 @@
+# Memory policy: Living Weights (--slide), Recall (--recall*), disk learning
+# (--learn*), conversation persistence, and compact-memory are OFF (opt-in flags omitted).
+# KV and optional RAM prompt caches are computation caches, not persistent learning.
+# Upstream TensorFold 1.1.4 CUDA qualification profile (GB10).
+# Target: 8 concurrent streams, each with 75,000 total prompt/reply tokens.
+# Unmodified release binary; admission/performance/vision require GPU qualification.
+# JPEG decoder: upstream libjpeg-turbo 3.1.4.1, checksum-pinned separately.
+# Image limit for this experiment: one image per request, up to 4,096 image tokens.
+# Default chunks 1,536; 8 GiB RAM prefix cache; persistent memory disabled.
+# Reuses the existing pinned Python checkpoint cache read-only; no Python engine.
+# The upstream CUDA path supports MLX affine group-32, not GPTQ AutoRound.
+# Sources/results: benchmarks/tensorfold-zig-release114-quick-20261024/.
+# Quick GB10 screen: 64/64 fixed-output requests completed per runtime.
+# Eight-user short code: 186.6-192.8 tok/s vs Python 279.5-312.5; not promoted.
+# Full 75k occupied contexts, tools and image requests were not qualified here.
+name: ieti-qwen38-flash-next-tensorfold-114
+services:
+  qwen-tensorfold-114:
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    platform: linux/arm64
+    pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-tensorfold-114-mlx-4bit-vision-128gb.yml"
+    container_name: qwen38_flash_next_tensorfold_114_cuda
+    restart: "no"
+    init: true
+    stop_grace_period: 60s
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "${TENSORFOLD_BIND_ADDRESS:-127.0.0.1}:${TENSORFOLD_BIND_PORT:-8007}:8000"
+    volumes:
+      - upstream-runtime:/opt/ieti-tf114
+      - checkpoint-cache:/root/.cache/huggingface:ro
+    environment:
+      MODEL_ID: TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP
+      MODEL_REVISION: 2b170fa6309d5d1ee380b35636075fac7945f286
+      TF_RELEASE: "1.1.4"
+      NATIVE_BINARY: /opt/ieti-tf114/tensorfold-1.1.4-linux-aarch64/bin/tensorfold-native
+      TF_REVISION: eab8582819688325e371907e4706e1c602b8a273
+      TF_ARCHIVE_SHA256: 2c77ff0179dbfb9ae1c6ac647f85210194c151243f49eb93f0e34a8d53d7a4ec
+      CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
+      PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-8}"
+      TENSORFOLD_MEMORY_RESERVE_GIB: "${TENSORFOLD_RESERVE_GIB:-10}"
+      TENSORFOLD_PROMPT_CACHE_GIB: "${TENSORFOLD_PROMPT_CACHE_GIB:-8}"
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      TENSORFOLD_CUDA_KERNELS: native
+      TF_FLASHNEXT_DRAFTS: "${TENSORFOLD_DRAFT_DEPTH:-6}"
+      TF_FLASHNEXT_CHUNK: "${TENSORFOLD_PREFILL_CHUNK:-1536}"
+      DRAFTS_ENABLED: "${TENSORFOLD_DRAFTS_ENABLED:-1}"
+      VISION_ENABLED: "${TENSORFOLD_VISION_ENABLED:-1}"
+      TF_FLASHNEXT_CONFIDENCE: "0.60"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        cd /opt/ieti-tf114
+        if [ "$$(cat ready 2>/dev/null || true)" != "$${TF_ARCHIVE_SHA256}" ]; then
+          curl -fsSL -o release.tar.gz "https://github.com/ashhart/TensorFold/releases/download/v$${TF_RELEASE}/tensorfold-$${TF_RELEASE}-linux-aarch64.tar.gz"
+          echo "$${TF_ARCHIVE_SHA256}  release.tar.gz" | sha256sum -c -
+          tar -xzf release.tar.gz
+          cd "tensorfold-$${TF_RELEASE}-linux-aarch64"
+          sha256sum -c SHA256SUMS
+          cd ..
+          echo "$${TF_ARCHIVE_SHA256}" > ready
+        fi
+        # The native JPEG decoder requires this exact separately supplied library.
+        runtime=/opt/ieti-tf114
+        codec_sha=d3f9d7ddd998758e1850b37153a7904bdcdeb8cf54a782c772780b0bc50dd553
+        codec_dir="$$runtime/codecs"
+        if [ "$$(cat "$$codec_dir/ready" 2>/dev/null || true)" != "$$codec_sha" ];then
+         mkdir -p "$$codec_dir"
+         curl -fsSL --retry 3 -o "$$codec_dir/jpeg.deb" https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4.1/libjpeg-turbo-official_3.1.4.1_arm64.deb
+         echo "$$codec_sha  $$codec_dir/jpeg.deb" | sha256sum -c -
+         dpkg-deb -x "$$codec_dir/jpeg.deb" "$$codec_dir"
+         cp -a "$$codec_dir"/opt/libjpeg-turbo/lib64/libturbojpeg.so* "$$runtime/tensorfold-1.1.4-linux-aarch64/lib/"
+         printf '%s\n' "$$codec_sha" > "$$codec_dir/ready"
+        fi
+        sha256sum "$$runtime/tensorfold-1.1.4-linux-aarch64/lib/libturbojpeg.so.0.4.0"
+        MODEL_PATH="/root/.cache/huggingface/hub/models--TensorFold--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/$${MODEL_REVISION}"
+        test -f "$$MODEL_PATH/config.json"
+        options=()
+        if [ "$${DRAFTS_ENABLED}" = 0 ]; then options+=(--no-drafts); fi
+        if [ "$${VISION_ENABLED}" = 1 ]; then options+=(--vision --vision-max-images 1 --vision-image-tokens 4096); fi
+        exec "$${NATIVE_BINARY}" serve "$$MODEL_PATH" \
+          --host 0.0.0.0 --port 8000 --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" --parallel "$${PARALLEL_STREAMS}" \
+          --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \
+          --thinking --reasoning-effort low --thinking-budget 1024 \
+          --prompt-cache-gib "$${TENSORFOLD_PROMPT_CACHE_GIB}" \
+          "$${options[@]}" --no-update-check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+volumes:
+  upstream-runtime:
+    name: ieti-tensorfold-114-runtime
+  checkpoint-cache:
+    external: true
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache

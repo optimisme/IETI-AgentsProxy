@@ -1,0 +1,1181 @@
+diff --git a/zig/kernels/cuda/flashnext_attn.cu b/zig/kernels/cuda/flashnext_attn.cu
+index 2f66798..559b204 100644
+--- a/zig/kernels/cuda/flashnext_attn.cu
++++ b/zig/kernels/cuda/flashnext_attn.cu
+@@ -3,6 +3,8 @@
+ // glue.py and attention.py's arithmetic and bf16 rounding points; the attention dots on mma tiles, K ascending.
+ 
+ #include <cuda_bf16.h>
++#include <cuda_fp8.h>
++#include <type_traits>
+ #include <math.h>
+ #include <stdint.h>
+ 
+@@ -63,12 +65,19 @@ __device__ __forceinline__ int media_pos(int pos, int d, int half, const int* ro
+     return pos < n ? rope3[axis * n + pos] : pos + delta;
+ }
+ 
++template <typename CacheT>
++__device__ __forceinline__ CacheT cache_pack(__nv_bfloat16 value) {
++    if constexpr (std::is_same_v<CacheT, __nv_bfloat16>) return value;
++    else return CacheT(__bfloat162float(value));
++}
++
+ // glue._attn_prep (text positions, bf16 cache), program (row, head): heads normed, rounded, roped, rounded, stored.
++template <typename CacheT>
+ __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
+                                                                const float* __restrict__ QW, const float* __restrict__ KW,
+                                                                const float* __restrict__ IW, const float* __restrict__ INV,
+-                                                               __nv_bfloat16* __restrict__ Q, __nv_bfloat16* __restrict__ KC,
+-                                                               __nv_bfloat16* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
++                                                               __nv_bfloat16* __restrict__ Q, CacheT* __restrict__ KC,
++                                                               CacheT* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
+                                                                __nv_bfloat16* __restrict__ IKC, float eps, int PW, int NQ, int NKV,
+                                                                int NI, int IHD, int HALF, const int* rope3, int n, int delta) {
+     __shared__ float scratch[32];
+@@ -95,8 +104,8 @@ __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restric
+         Q[(static_cast<long long>(r) * NQ + head) * HD + d] = out;
+     } else if (!index) {
+         const long long slot = static_cast<long long>(pos) * NKV + head - NQ;
+-        KC[slot * HD + d] = out;
+-        VC[slot * HD + d] = P[row + NQ * 2 * HD + NKV * HD + (head - NQ) * HD + d];
++        KC[slot * HD + d] = cache_pack<CacheT>(out);
++        VC[slot * HD + d] = cache_pack<CacheT>(P[row + NQ * 2 * HD + NKV * HD + (head - NQ) * HD + d]);
+     } else {
+         IQ[(static_cast<long long>(r) * NI + head - NQ - NKV) * IHD + d] = out;
+     }
+@@ -205,9 +214,9 @@ extern "C" __global__ void __launch_bounds__(256) fn_qsa_scores(const __nv_bfloa
+ }
+ 
+ // attention._chunks, program (row, KV head, chunk): the chunk's keys TK at a time, online softmax, partial o, m, l.
+-template <int NB>
+-__device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ KC,
+-                                            const __nv_bfloat16* __restrict__ VC, const int* __restrict__ POS0,
++template <int NB, typename CacheT>
++__device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q, const CacheT* __restrict__ KC,
++                                            const CacheT* __restrict__ VC, const int* __restrict__ POS0,
+                                             float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
+                                             const int* __restrict__ IDS, const int* __restrict__ NKR, const int* __restrict__ SPR,
+                                             int H, int HK, int G, int CH, int NCH, float SCALE, int IDW, int QSA) {
+@@ -240,11 +249,17 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+         }
+         __syncthreads();
+         for (int pass = 0; pass < 2; ++pass) {
+-            const __nv_bfloat16* src = pass == 0 ? KC : VC;
++            const CacheT* src = pass == 0 ? KC : VC;
+             Row* dst = tiles_kv + (buf * 2 + pass) * TK;
+             for (int e = threadIdx.x; e < TK * HD / 8; e += blockDim.x) {
+                 const int k = e / (HD / 8), v = e % (HD / 8), key = key_ids[buf][k];
+-                qmm_frag::cp16z(&dst[k][8 * v], src + (static_cast<long long>(max(key, 0)) * HK + hk) * HD + 8 * v, key >= 0);
++                if constexpr (std::is_same_v<CacheT, __nv_bfloat16>) {
++                    qmm_frag::cp16z(&dst[k][8 * v], src + (static_cast<long long>(max(key, 0)) * HK + hk) * HD + 8 * v, key >= 0);
++                } else {
++#pragma unroll
++                    for (int j = 0; j < 8; ++j)
++                        dst[k][8 * v + j] = key >= 0 ? __float2bfloat16_rn(static_cast<float>(src[(static_cast<long long>(key) * HK + hk) * HD + 8 * v + j])) : __float2bfloat16_rn(0.0f);
++                }
+             }
+             qmm_frag::commit();
+         }
+@@ -408,3 +423,45 @@ extern "C" __global__ void __launch_bounds__(256) fn_attn_merge(const float* __r
+         OUT[(static_cast<long long>(r) * H + head) * HD + d] = __float2bfloat16_rn(__fdiv_rn(o, l));
+     }
+ }
++
++
++extern "C" __global__ void __launch_bounds__(256) fn_attn_prep_fp8(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
++                                                               const float* __restrict__ QW, const float* __restrict__ KW,
++                                                               const float* __restrict__ IW, const float* __restrict__ INV,
++                                                               __nv_bfloat16* __restrict__ Q, __nv_fp8_e4m3* __restrict__ KC,
++                                                               __nv_fp8_e4m3* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
++                                                               __nv_bfloat16* __restrict__ IKC, float eps, int PW, int NQ, int NKV,
++                                                               int NI, int IHD, int HALF) {
++    fn_attn_prep_body(P, POS0, QW, KW, IW, INV, Q, KC, VC, IQ, IKC, eps, PW, NQ, NKV, NI, IHD, HALF, nullptr, 0, 0);
++}
++
++
++extern "C" __global__ void __launch_bounds__(256) fn_attn_prep_media_fp8(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
++                                                               const float* __restrict__ QW, const float* __restrict__ KW,
++                                                               const float* __restrict__ IW, const float* __restrict__ INV,
++                                                               __nv_bfloat16* __restrict__ Q, __nv_fp8_e4m3* __restrict__ KC,
++                                                               __nv_fp8_e4m3* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
++                                                               __nv_bfloat16* __restrict__ IKC, float eps, int PW, int NQ, int NKV,
++                                                               int NI, int IHD, int HALF, const int* rope3, int n, int delta) {
++    fn_attn_prep_body(P, POS0, QW, KW, IW, INV, Q, KC, VC, IQ, IKC, eps, PW, NQ, NKV, NI, IHD, HALF, rope3, n, delta);
++}
++
++
++extern "C" __global__ void __launch_bounds__(128) fn_attn_chunks_fp8(const __nv_bfloat16* __restrict__ Q, const __nv_fp8_e4m3* __restrict__ KC,
++                                                                 const __nv_fp8_e4m3* __restrict__ VC, const int* __restrict__ POS0,
++                                                                 float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
++                                                                 const int* __restrict__ IDS, const int* __restrict__ NKR,
++                                                                 const int* __restrict__ SPR, int H, int HK, int G, int CH, int NCH,
++                                                                 float SCALE, int IDW, int QSA) {
++    attn_chunks<1>(Q, KC, VC, POS0, PO, PM, PL, IDS, NKR, SPR, H, HK, G, CH, NCH, SCALE, IDW, QSA);
++}
++
++
++extern "C" __global__ void __launch_bounds__(128) fn_attn_chunks_ahead_fp8(const __nv_bfloat16* __restrict__ Q, const __nv_fp8_e4m3* __restrict__ KC,
++                                                                       const __nv_fp8_e4m3* __restrict__ VC, const int* __restrict__ POS0,
++                                                                       float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
++                                                                       const int* __restrict__ IDS, const int* __restrict__ NKR,
++                                                                       const int* __restrict__ SPR, int H, int HK, int G, int CH, int NCH,
++                                                                       float SCALE, int IDW, int QSA) {
++    attn_chunks<2>(Q, KC, VC, POS0, PO, PM, PL, IDS, NKR, SPR, H, HK, G, CH, NCH, SCALE, IDW, QSA);
++}
+diff --git a/zig/kernels/cuda/flashnext_batch.cu b/zig/kernels/cuda/flashnext_batch.cu
+index c4ad0e2..587eb05 100644
+--- a/zig/kernels/cuda/flashnext_batch.cu
++++ b/zig/kernels/cuda/flashnext_batch.cu
+@@ -314,3 +314,96 @@ extern "C" __global__ void __launch_bounds__(1024) fn_qsa_select(const float* __
+         spr[r] = 1;
+     }
+ }
++
++
++// Shared-stream descriptor batching adapted from BobClawblaw/TensorFold's
++// shared-rounds/native-v1.0.12 pointer-table approach (MIT). Keep v1.1.0's
++// single-GPU geometry, arithmetic order, FP8 caches and rollback storage.
++struct IetiGdnSeg {
++    const __nv_bfloat16* proj;
++    __nv_bfloat16* conv;
++    float* state;
++    float* state_out;
++    __nv_bfloat16* keep_proj;
++    __nv_bfloat16* keep_hist;
++    long long row0;
++    long long rows;
++};
++static_assert(sizeof(IetiGdnSeg) == 64);
++
++extern "C" __global__ void fn_gdn_preserve_multi(const IetiGdnSeg* segs) {
++    using namespace fn_gdn;
++    const IetiGdnSeg sg = segs[blockIdx.y];
++    const size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
++    if (sg.keep_proj != nullptr && i < (size_t)sg.rows * PW) sg.keep_proj[i] = sg.proj[i];
++    if (sg.keep_hist != nullptr && i < (TAPS - 1) * C) sg.keep_hist[i] = sg.conv[i];
++}
++
++extern "C" __global__ void __launch_bounds__(256) fn_gdn_front_multi(
++        const IetiGdnSeg* segs, const int* owners, const __nv_bfloat16* __restrict__ cw,
++        const float* __restrict__ a_log, const float* __restrict__ dt_bias, float* q_all,
++        float* k_all, float* v_all, float* gb_all) {
++    const IetiGdnSeg sg = segs[owners[blockIdx.x]];
++    const __nv_bfloat16* P = sg.proj;
++    const __nv_bfloat16* cs = sg.conv;
++    float* qn = q_all + sg.row0 * fn_gdn::NK * fn_gdn::DK;
++    float* kn = k_all + sg.row0 * fn_gdn::NK * fn_gdn::DK;
++    float* v = v_all + sg.row0 * fn_gdn::NV * fn_gdn::DV;
++    float* gb = gb_all + sg.row0 * fn_gdn::NV * 2;
++    using namespace fn_gdn;
++    const int r = (int)blockIdx.x - (int)sg.row0, u = blockIdx.y, t = threadIdx.x, warp = t >> 5, lane = t & 31;
++    if (u < NK) {
++        __shared__ float x[2][DK];
++        const int hk = u;
++        x[t / DK][t % DK] = conv_act(P, cs, cw, r, t < DK ? hk * DK + t : NK * DK + hk * DK + (t - DK));
++        __syncthreads();
++        if (warp < 2) {
++            float v4[4], ss = 0.0f;
++#pragma unroll
++            for (int i = 0; i < 4; ++i) {
++                v4[i] = x[warp][lane * 4 + i];
++                ss = ss + v4[i] * v4[i];
++            }
++            ss = warp_sum(ss);
++            float inv = 1.0f / sqrtf(ss + 1e-6f);
++            if (warp == 0) inv = inv * (1.0f / sqrtf((float)DK));
++            float* dst = (warp == 0 ? qn : kn) + ((size_t)r * NK + hk) * DK;
++#pragma unroll
++            for (int i = 0; i < 4; ++i) dst[lane * 4 + i] = v4[i] * inv;
++        }
++    } else {
++        const int hv = u - NK;
++        if (t < DV) v[(size_t)r * NV * DV + hv * DV + t] = conv_act(P, cs, cw, r, 2 * NK * DK + hv * DV + t);
++        else if (t == DV) {
++            const float b = __bfloat162float(P[(size_t)r * PW + C + NV * DV + hv]);
++            const float a = __bfloat162float(P[(size_t)r * PW + C + NV * DV + NV + hv]);
++            gb[((size_t)r * NV + hv) * 2] = expf(-expf(a_log[hv]) * softplusf_(a + dt_bias[hv]));
++            gb[((size_t)r * NV + hv) * 2 + 1] = bf(sigmoidf_(b));
++        }
++    }
++}
++
++extern "C" __global__ void __launch_bounds__(128) fn_gdn_rows_multi(
++        const IetiGdnSeg* segs, const float* q, const float* k,
++        const float* v, const float* gb, float* ys) {
++    using namespace fn_gdn;
++    const IetiGdnSeg sg = segs[blockIdx.z];
++    const size_t qk = sg.row0 * NK * DK;
++    const size_t vo = sg.row0 * NV * DV;
++    gdn_rows(q + qk, k + qk, v + vo, gb + sg.row0 * NV * 2,
++             sg.state, sg.state_out, (int)sg.rows, ys + vo);
++}
++
++extern "C" __global__ void fn_gdn_shift_multi(const IetiGdnSeg* segs) {
++    using namespace fn_gdn;
++    const IetiGdnSeg sg = segs[blockIdx.y];
++    const int ch = blockIdx.x * blockDim.x + threadIdx.x;
++    if (ch >= C) return;
++    __nv_bfloat16 next[TAPS - 1];
++    for (int j = 0; j < TAPS - 1; ++j) {
++        const int src = j + (int)sg.rows;
++        next[j] = src < TAPS - 1 ? sg.conv[(size_t)src * C + ch]
++                                : sg.proj[(size_t)(src - (TAPS - 1)) * PW + ch];
++    }
++    for (int j = 0; j < TAPS - 1; ++j) sg.conv[(size_t)j * C + ch] = next[j];
++}
+diff --git a/zig/src/families/flashnext/cuda_batch.zig b/zig/src/families/flashnext/cuda_batch.zig
+index 611fbdc..b65a0bf 100644
+--- a/zig/src/families/flashnext/cuda_batch.zig
++++ b/zig/src/families/flashnext/cuda_batch.zig
+@@ -224,30 +224,38 @@ pub fn Pass(comptime Tri: type) type {
+                 return;
+             }
+             // a round: each row's convolution over its own stream's tail, the one-row launch a lone decode makes
+-            for (self.lanes, 0..) |l, r| {
++            for (self.lanes) |l| {
++                const r = l.offset;
+                 const g = r * wide * 2;
+-                try self.tri.pleConv(s.ple_gated + g, s.ple_pss + r * streams * 4, lw.nc.ptr, l.seq.tail.ptr, lw.ple_cw.ptr, s.h + g, s.h + g, s.ple_nrow + g, eps, 1, dims, streams, 4, 3);
+-                try self.shiftWindow(l.seq.tail.ptr, s.ple_nrow + g, wide, 1, ple_tail_n, wide);
++                try self.tri.pleConv(s.ple_gated + g, s.ple_pss + r * streams * 4, lw.nc.ptr, l.seq.tail.ptr, lw.ple_cw.ptr, s.h + g, s.h + g, s.ple_nrow + g, eps, l.count, dims, streams, 4, 3);
++                try self.shiftWindow(l.seq.tail.ptr, s.ple_nrow + g, wide, l.count, ple_tail_n, wide);
+             }
+         }
+ 
+-        fn gdnBlock(self: *Self, lw: *const Layer, li: usize, keep: LayerKeep) !void {
++        fn gdnBlock(self: *Self, lw: *const Layer, li: usize, keep: LayerKeep, layer: usize) !void {
+             const s = self.s;
+             const n = self.rows;
+             try self.lane(s.mixed, s.xsm, lw.proj, s.proj, s.dummy, n, 1);
+             try self.copy(keep.proj, s.proj, n * gdn.proj_width * 2);
+             try self.copy(keep.hist, self.seq.conv[li].ptr, (gdn.taps - 1) * gdn.conv_dim * 2);
+-            // every row's conv, norms and gates, the recurrence, then the gated norm: the one-block chain's bits
+-            if (self.lanes.len == 0) {
++            const multi = self.lanes.len > 1 and sharedGdn();
++            // Descriptor tables batch the original arithmetic across independent user states.
++            if (multi) {
++                try self.gdnMany(lw, li, layer);
++            } else if (self.lanes.len == 0) {
+                 try self.gdnFront(lw, s.proj, self.seq.conv[li].ptr, n, s.gq, s.gk, s.gv, s.ggb);
+                 try self.gdnChain(s.gq, s.gk, s.gv, s.ggb, self.seq.state[li].ptr, keep.state_out, n, s.ys);
+-            } else for (self.lanes, 0..) |l, r| {
+-                // a round: each row's front and recurrence on its own stream's conv window and state
++            } else for (self.lanes) |l| {
++                const r = l.offset;
++                const lk: LayerKeep = if (l.keep) |k| k.layers[layer] else .{};
++                const projection = s.proj + r * gdn.proj_width * 2;
++                try self.copy(lk.proj, projection, l.count * gdn.proj_width * 2);
++                try self.copy(lk.hist, l.seq.conv[li].ptr, (gdn.taps - 1) * gdn.conv_dim * 2);
+                 const qk = r * gdn.nk * gdn.dk * 4;
+                 const v = r * gdn.value_dim * 4;
+                 const gb = r * gdn.nv * 2 * 4;
+-                try self.gdnFront(lw, s.proj + r * gdn.proj_width * 2, l.seq.conv[li].ptr, 1, s.gq + qk, s.gk + qk, s.gv + v, s.ggb + gb);
+-                try self.gdnChain(s.gq + qk, s.gk + qk, s.gv + v, s.ggb + gb, l.seq.state[li].ptr, 0, 1, s.ys + v);
++                try self.gdnFront(lw, projection, l.seq.conv[li].ptr, l.count, s.gq + qk, s.gk + qk, s.gv + v, s.ggb + gb);
++                try self.gdnChain(s.gq + qk, s.gk + qk, s.gv + v, s.ggb + gb, l.seq.state[li].ptr, lk.state_out, l.count, s.ys + v);
+             }
+             var b: cuda.Args = .{};
+             b.add(s.ys);
+@@ -257,14 +265,61 @@ pub fn Pass(comptime Tri: type) type {
+             b.add(s.gout);
+             b.add(s.gxs);
+             try cuda.launch.launch(self.k.gnorm, .{ .grid = .{ .x = @intCast(n), .y = gdn.nv }, .block = .{ .x = gdn.dv } }, self.stream, &b);
+-            if (self.lanes.len == 0) {
++            if (multi) {
++                var shifts: cuda.Args = .{};
++                shifts.add(s.multi + layer * Scratch.multiStride(s.cap));
++                try cuda.launch.launch(self.k.shift_multi, .{ .grid = .{ .x = @intCast(cdiv(gdn.conv_dim, 256)), .y = @intCast(self.lanes.len) }, .block = .{ .x = 256 } }, self.stream, &shifts);
++            } else if (self.lanes.len == 0) {
+                 try self.shiftWindow(self.seq.conv[li].ptr, s.proj, gdn.proj_width, n, gdn.taps - 1, gdn.conv_dim);
+-            } else for (self.lanes, 0..) |l, r| {
+-                try self.shiftWindow(l.seq.conv[li].ptr, s.proj + r * gdn.proj_width * 2, gdn.proj_width, 1, gdn.taps - 1, gdn.conv_dim);
++            } else for (self.lanes) |l| {
++                try self.shiftWindow(l.seq.conv[li].ptr, s.proj + l.offset * gdn.proj_width * 2, gdn.proj_width, l.count, gdn.taps - 1, gdn.conv_dim);
+             }
+             try self.lane(s.gout, s.gxs, lw.out, s.dummy, s.part, n, out_sk);
+         }
+ 
++        fn sharedGdn() bool {
++            const raw = std.c.getenv("TF_FLASHNEXT_BATCH_GDN") orelse return true;
++            return !std.mem.eql(u8, std.mem.span(raw), "0");
++        }
++        var reported_gdn: bool = false;
++        fn gdnMany(self: *Self, lw: *const Layer, li: usize, layer: usize) !void {
++            if (self.lanes.len > 32) return error.WindowTooWide;
++            const s = self.s;
++            const host = s.hostMulti(layer);
++            const table: []u64 = @alignCast(std.mem.bytesAsSlice(u64, host[0..32 * 64]));
++            const owners: []u32 = @alignCast(std.mem.bytesAsSlice(u32, host[32 * 64..]));
++            var widest: usize = 0;
++            var preserve = false;
++            for (self.lanes, 0..) |l, i| {
++                const lk: LayerKeep = if (l.keep) |k| k.layers[layer] else .{};
++                const values = [_]u64{ s.proj + l.offset * gdn.proj_width * 2, l.seq.conv[li].ptr,
++                    l.seq.state[li].ptr, if (lk.state_out != 0) lk.state_out else l.seq.state[li].ptr,
++                    lk.proj, lk.hist, l.offset, l.count };
++                @memcpy(table[i * 8..][0..8], &values);
++                @memset(owners[l.offset..][0..l.count], @intCast(i));
++                widest = @max(widest, l.count);
++                preserve = preserve or lk.proj != 0 or lk.hist != 0;
++            }
++            const dev = s.multi + layer * Scratch.multiStride(s.cap);
++            try self.upload(dev, host[0..32 * 64 + self.rows * 4]);
++            try s.uploaded();
++            if (preserve) {
++                var cp: cuda.Args = .{}; cp.add(dev);
++                const words = @max(widest * gdn.proj_width, (gdn.taps - 1) * gdn.conv_dim);
++                try cuda.launch.launch(self.k.preserve_multi, .{ .grid = .{ .x = @intCast(cdiv(words, 256)), .y = @intCast(self.lanes.len) }, .block = .{ .x = 256 } }, self.stream, &cp);
++            }
++            var front: cuda.Args = .{};
++            for ([_]u64{ dev, dev + 32 * 64, lw.cw.ptr, lw.a_log.ptr, lw.dt.ptr, s.gq, s.gk, s.gv, s.ggb }) |v| front.add(v);
++            try cuda.launch.launch(self.k.front_multi, .{ .grid = .{ .x = @intCast(self.rows), .y = gdn.nk + gdn.nv }, .block = .{ .x = 256 } }, self.stream, &front);
++            var chain: cuda.Args = .{};
++            for ([_]u64{ dev, s.gq, s.gk, s.gv, s.ggb, s.ys }) |v| chain.add(v);
++            try cuda.launch.launch(self.k.chain_multi, .{ .grid = .{ .x = gdn.nv, .y = gdn.dv / 16, .z = @intCast(self.lanes.len) }, .block = .{ .x = 128 } }, self.stream, &chain);
++            if (!reported_gdn) {
++                std.log.info("shared recurrent batching active, owners={d}", .{self.lanes.len});
++                reported_gdn = true;
++            }
++        }
++
+         /// fn_gdn_front over `rows` projection rows after the conv window `conv`.
+         fn gdnFront(self: *Self, lw: *const Layer, proj: u64, conv: u64, rows: usize, gq: u64, gk: u64, gv: u64, ggb: u64) !void {
+             var f: cuda.Args = .{};
+@@ -307,10 +362,11 @@ pub fn Pass(comptime Tri: type) type {
+                     self.seq = own_seq;
+                     self.pos0 = own_pos0;
+                 }
+-                for (self.lanes, 0..) |l, r| {
++                for (self.lanes) |l| {
++                    const r = l.offset;
+                     self.seq = l.seq;
+                     self.pos0 = l.pos;
+-                    try self.attnRows(lw, ai, pa + r * proj_n * 2, 1, .{ .pos = s.pos + r * 16, .q = s.q + r * q_heads * head_dim * 2, .iq = s.iq + r * index_heads * index_dim * 2, .ao = s.ao + r * out_k * 2 });
++                    try self.attnRows(lw, ai, pa + r * proj_n * 2, l.count, .{ .pos = s.pos + r * 16, .q = s.q + r * q_heads * head_dim * 2, .iq = s.iq + r * index_heads * index_dim * 2, .ao = s.ao + r * out_k * 2 });
+                 }
+             } else try self.attnRows(lw, ai, pa, n, .{ .pos = s.pos, .q = s.q, .iq = s.iq, .ao = s.ao });
+             try self.tri.attnGate(s.ao, pa, s.gated, s.gxs_attn, n, proj_n, q_heads, head_dim);
+@@ -401,9 +457,11 @@ pub fn Pass(comptime Tri: type) type {
+ 
+         /// Token ids and positions onto the device from the scratch's pinned copies, which stay put until they land.
+         pub fn stage(self: *Self, ids: []const u32) !void {
++            // Graph rounds upload all four owned input planes before capture/replay.
++            if (self.prepared) return;
+             const s = self.s;
+             const n = ids.len;
+-            if (!self.prepared) try s.ready();
++            try s.ready();
+             const id32 = s.hostIds(n);
+             for (id32, ids) |*o, v| o.* = @intCast(v);
+             try self.upload(s.ids, std.mem.sliceAsBytes(id32));
+@@ -411,7 +469,11 @@ pub fn Pass(comptime Tri: type) type {
+             // one int a block (a round: a row), 16 bytes apart: _chunks and _merge take POS0 16-byte aligned
+             const pos = s.hostPos(blocks * 4);
+             @memset(pos, 0);
+-            for (0..blocks) |b| pos[4 * b] = @intCast(if (self.lanes.len > 0) self.lanes[b].pos else self.pos0 + b * att_rows);
++            if (self.lanes.len > 0) {
++                for (self.lanes) |l| for (0..cdiv(l.count, att_rows)) |b| {
++                    pos[4 * (l.offset + b)] = @intCast(l.pos + b * att_rows);
++                };
++            } else for (0..blocks) |b| pos[4 * b] = @intCast(self.pos0 + b * att_rows);
+             try self.upload(s.pos, std.mem.sliceAsBytes(pos));
+             if (!self.prepared) try s.uploaded();
+         }
+@@ -438,8 +500,9 @@ pub fn Pass(comptime Tri: type) type {
+                     };
+                     return;
+                 }
+-                for (g.lanes, 0..) |l, r| {
+-                    g.ngram.rows(l.seq.history[0..], g.ids[r..][0..1], g.emb[r * dims ..][0..dims], g.xs[r * (dims / 32) ..][0 .. dims / 32]) catch |err| {
++                for (g.lanes) |l| {
++                    const r = l.offset;
++                    g.ngram.rows(l.seq.history[0..], g.ids[r..][0..l.count], g.emb[r * dims ..][0 .. l.count * dims], g.xs[r * (dims / 32) ..][0 .. l.count * (dims / 32)]) catch |err| {
+                         g.failed = err;
+                         return;
+                     };
+@@ -459,8 +522,13 @@ pub fn Pass(comptime Tri: type) type {
+             if (n == 0 or n > s.cap) return error.UnexpectedTensor;
+             if (self.lanes.len > 0) {
+                 // a round reads every row's scores and keeps nothing for a rollback
+-                if (n != self.lanes.len or self.hooks.logits != .all or self.hooks.keep != null or self.hooks.streams != 0) return error.UnexpectedTensor;
+-                for (self.lanes) |l| if (l.pos + 1 > l.seq.cap) return error.UnexpectedTensor;
++                if (self.hooks.logits != .all or self.hooks.keep != null or self.hooks.streams != 0) return error.UnexpectedTensor;
++                var consumed: usize = 0;
++                for (self.lanes) |l| {
++                    if (l.offset != consumed or l.count == 0 or l.count > n - consumed or l.pos + l.count > l.seq.cap) return error.UnexpectedTensor;
++                    consumed += l.count;
++                }
++                if (consumed != n) return error.UnexpectedTensor;
+             } else if (pos0 + n > self.seq.cap) return error.UnexpectedTensor;
+             self.rows = n;
+             self.pos0 = pos0;
+@@ -486,16 +554,18 @@ pub fn Pass(comptime Tri: type) type {
+                     thread = null;
+                     if (gather.failed) |err| return err;
+                     if (profile()) std.debug.print("batch: {d} rows' n-gram rows gathered on the host in {d:.1} ms\n", .{ n, @as(f64, @floatFromInt(gather.ns)) / 1e6 });
+-                    try self.upload(s.ple_emb, std.mem.sliceAsBytes(emb));
+-                    try self.upload(s.ple_xs, std.mem.sliceAsBytes(xs));
+-                    if (!self.prepared) try s.uploaded();
++                    if (!self.prepared) {
++                        try self.upload(s.ple_emb, std.mem.sliceAsBytes(emb));
++                        try self.upload(s.ple_xs, std.mem.sliceAsBytes(xs));
++                        try s.uploaded();
++                    }
+                     if (self.pending != null) try self.writeback(0, n);
+                     try self.pleBlock(lw, ids);
+                 }
+                 try self.writeback(0, n);
+                 try self.readout(lw.attn_hc, 0, n);
+                 if (lw.linear) {
+-                    try self.gdnBlock(lw, wt.linearIndex(layer), keep);
++                    try self.gdnBlock(lw, wt.linearIndex(layer), keep, layer);
+                 } else {
+                     try self.attnBlock(lw, wt.attnIndex(layer));
+                 }
+@@ -535,6 +605,7 @@ pub fn Pass(comptime Tri: type) type {
+                 .all => {
+                     try self.writeback(0, n);
+                     try self.copy(self.hooks.streams, s.h, n * wide * 2);
++                    for (self.lanes) |l| try self.copy(l.streams, s.h + l.offset * wide * 2, l.count * wide * 2);
+                     try self.readout(self.m.mixer, 0, n);
+                     const out = if (self.hooks.logits_out != 0) self.hooks.logits_out else return error.UnexpectedTensor;
+                     try self.projectHead(out, n);
+diff --git a/zig/src/families/flashnext/cuda_batch_state.zig b/zig/src/families/flashnext/cuda_batch_state.zig
+index c070c68..1dde2c3 100644
+--- a/zig/src/families/flashnext/cuda_batch_state.zig
++++ b/zig/src/families/flashnext/cuda_batch_state.zig
+@@ -101,6 +101,10 @@ pub const Kernels = struct {
+     native_lane: cuda.qmmf.Lane,
+     nvfp4: cuda.experts.Nvfp4Experts,
+     front: cuda.Function,
++    front_multi: cuda.Function,
++    chain_multi: cuda.Function,
++    preserve_multi: cuda.Function,
++    shift_multi: cuda.Function,
+     chain: cuda.Function,
+     chain_to: cuda.Function,
+     gnorm: cuda.Function,
+@@ -135,6 +139,10 @@ pub const Kernels = struct {
+         k.sum = try k.batch.function("fn_sum_slices");
+         k.shift = try k.batch.function("fn_shift_window");
+         k.select = try k.batch.function("fn_qsa_select");
++        k.front_multi = try k.batch.function("fn_gdn_front_multi");
++        k.chain_multi = try k.batch.function("fn_gdn_rows_multi");
++        k.preserve_multi = try k.batch.function("fn_gdn_preserve_multi");
++        k.shift_multi = try k.batch.function("fn_gdn_shift_multi");
+         k.front = try k.batch.function("fn_gdn_front");
+         k.chain = try k.batch.function("fn_gdn_rows");
+         k.chain_to = try k.batch.function("fn_gdn_rows_to");
+@@ -227,6 +235,7 @@ pub const Scratch = struct {
+     gk: u64 = 0,
+     gv: u64 = 0,
+     ggb: u64 = 0,
++    multi: u64 = 0,
+     q: u64 = 0,
+     iq: u64 = 0,
+     po: u64 = 0,
+@@ -286,6 +295,12 @@ pub const Scratch = struct {
+         return .{ 0, pos, emb, xs, xs + cap * (dims / 32) * 4 };
+     }
+ 
++    pub fn multiStride(cap: usize) usize { return std.mem.alignForward(usize, 32 * 64 + cap * 4, 16); }
++    fn multiHostAt(cap: usize) usize { return std.mem.alignForward(usize, hostAt(cap)[4], 16); }
++    pub fn hostMulti(s: *Scratch, layer: usize) []u8 {
++        return s.host.?.bytes[multiHostAt(s.cap) + layer * multiStride(s.cap)..][0..multiStride(s.cap)];
++    }
++
+     /// Waits until the last pass's uploads have read `host` (they are queued behind its kernels), so it may change.
+     pub fn ready(s: *Scratch) !void {
+         if (s.staging) |*g| try g.ready();
+@@ -321,7 +336,7 @@ pub const Scratch = struct {
+         const nblk = cdiv(pairs, plan_small);
+         const items = cdiv(pairs, tile) + experts_n + 1;
+         var n: usize = 0;
+-        n += cap * 4 + (cap + 1) * 16;
++        n += cap * 4 + (cap + 1) * 16 + layers_n * multiStride(cap);
+         n += cap * wide * 2 * 2 + cap * pss_n * 4 + cap * (low + 4) * 2 + hc_sk * cap * (low + 4) * 4;
+         n += cap * wide * 2 + 8 * cap * dims * 4;
+         n += cap * low * 2 + cap * (low / 32) * 4 + cap * streams * 2 + cap * dims * 2 + cap * (dims / 32) * 4;
+@@ -368,6 +383,7 @@ pub const Scratch = struct {
+         s.gk = try s.add(gpa, d, cap * gdn.nk * gdn.dk * 4);
+         s.gv = try s.add(gpa, d, cap * gdn.value_dim * 4);
+         s.ggb = try s.add(gpa, d, cap * gdn.nv * 2 * 4);
++        s.multi = try s.add(gpa, d, layers_n * multiStride(cap));
+         s.q = try s.add(gpa, d, cap * q_heads * head_dim * 2);
+         s.iq = try s.add(gpa, d, cap * index_heads * index_dim * 2);
+         s.po = try s.add(gpa, d, att_rows * nch * q_heads * head_dim * 4);
+@@ -411,7 +427,7 @@ pub const Scratch = struct {
+         s.dummy = try s.add(gpa, d, 4096);
+         try s.bufs.items[s.bufs.items.len - 1].fill8(0, stream.handle);
+         try stream.synchronize();
+-        s.host = try cuda.HostBuffer.alloc(d, hostAt(cap)[4]);
++        s.host = try cuda.HostBuffer.alloc(d, multiHostAt(cap) + layers_n * multiStride(cap));
+         s.staging = .{ .q = .{ .stream = stream, .event = try cuda.Event.init(d, false) } };
+         return s;
+     }
+@@ -458,7 +474,14 @@ pub fn scoreBytes(cap: usize, rows: usize) usize {
+ }
+ 
+ /// One row of a decode round: its stream's next token, on that stream's own caches at its own position.
+-pub const Lane = struct { seq: SeqState, pos: usize };
++pub const Lane = struct {
++    seq: SeqState,
++    pos: usize,
++    offset: usize = 0,
++    count: usize = 1,
++    keep: ?*Keep = null,
++    streams: u64 = 0,
++};
+ 
+ /// The engine's resident weights the pass reads.
+ pub const Model = struct {
+diff --git a/zig/src/families/flashnext/cuda_cache_type.zig b/zig/src/families/flashnext/cuda_cache_type.zig
+new file mode 100644
+index 0000000..72b832f
+--- /dev/null
++++ b/zig/src/families/flashnext/cuda_cache_type.zig
+@@ -0,0 +1,7 @@
++//! Opt-in FP8 E4M3 KV storage. Indexer keys and pooled keys remain bf16.
++const std = @import("std");
++pub fn enabled() bool {
++    const v = std.c.getenv("TF_FLASHNEXT_KV_FP8") orelse return false;
++    return std.mem.eql(u8, std.mem.span(v), "1");
++}
++pub fn elementBytes() usize { return if (enabled()) 1 else 2; }
+diff --git a/zig/src/families/flashnext/cuda_draft_batch.zig b/zig/src/families/flashnext/cuda_draft_batch.zig
+new file mode 100644
+index 0000000..d54c673
+--- /dev/null
++++ b/zig/src/families/flashnext/cuda_draft_batch.zig
+@@ -0,0 +1,126 @@
++//! Batch MTP head projections across owners; each owner's attention cache and sampling remain independent.
++const std = @import("std");
++const cuda = @import("cuda");
++const prompt = @import("cuda_prompt.zig");
++const batch = @import("cuda_batch.zig");
++const mtp = @import("cuda_mtp.zig");
++const wt = @import("cuda_prompt_wt.zig");
++
++pub const Item = struct {
++    draft: *mtp.Draft,
++    next: []const u32,
++    rows: u64,
++    position: u64,
++    count: usize,
++    sampling: ?mtp.Sampling,
++    chain: *mtp.Chain,
++};
++const HeadRows = struct { draft: *mtp.Draft, next: []const u32, rows: u64 };
++fn cint(n: usize) c_int { return @intCast(n); }
++
++fn forward(comptime Tri: type, o: anytype, items: []const HeadRows, logits: u64) !void {
++    if (items.len == 0) return;
++    const e = o.e;
++    const h = o.h;
++    var n: usize = 0;
++    var cap: usize = 0;
++    var widest: usize = 0;
++    for (items, 0..) |item, i| {
++        if (item.next.len == 0 or item.next.len > mtp.max_rows or item.draft.len + item.next.len > item.draft.cap) return error.WindowTooWide;
++        for (items[0..i]) |previous| if (previous.draft == item.draft) return error.DuplicateSequence;
++        n += item.next.len;
++        cap = @max(cap, item.draft.cap);
++        widest = @max(widest, item.next.len);
++    }
++    if (items.len > 32) return error.WindowTooWide;
++    e.round_graph.clear();
++    const s = try e.reserve(@max(@as(usize, 32), n * 2));
++    const scores = try e.reserveScores(cap, widest);
++    const ids = try e.gpa.alloc(u32, n);
++    defer e.gpa.free(ids);
++    const groups = try e.gpa.alloc(batch.Lane, items.len);
++    defer e.gpa.free(groups);
++    var at: usize = 0;
++    for (items, groups) |item, *group| {
++        const d = item.draft;
++        @memcpy(ids[at..][0..item.next.len], item.next);
++        group.* = .{ .seq = .{ .media = d.media, .conv = &.{}, .state = &.{}, .kc = (&d.kc)[0..1], .vc = (&d.vc)[0..1], .ikc = (&d.ikc)[0..1], .pooled = (&d.pooled)[0..1], .tail = d.kc, .history = &d.unused_history, .cap = d.cap, .scores = scores }, .pos = d.len, .offset = at, .count = item.next.len };
++        at += item.next.len;
++    }
++    var p: batch.Pass(Tri) = .{ .gpa = e.gpa, .io = e.io, .stream = e.stream.*, .tri = o.tri, .k = &e.batch_k, .s = s,
++        .m = .{ .table_w = e.table.w.ptr, .table_s = e.table.s.ptr, .table_b = e.table.b.ptr, .table_dense = e.table.dense, .layers = (&h.layer)[0..1], .mixer = h.mixer, .head = h.draft, .ngram = &e.ngram },
++        .seq = groups[0].seq, .lanes = groups, .hooks = .{ .logits = .none }, .rows = n };
++    try p.stage(ids);
++    // ple_nrow is unused by the MTP layer. Gather conditioning rows before its shared RMS/FC kernels.
++    for (items, groups) |item, group| try p.copy(s.ple_nrow + group.offset * wt.wide * 2, item.rows, item.next.len * wt.wide * 2);
++    if (e.table.dense) {
++        try o.tri.embedDense(s.ids, e.table.w.ptr, s.ple_keys, wt.dims, wt.streams, n);
++    } else {
++        try o.tri.embed(s.ids, e.table.w.ptr, e.table.s.ptr, e.table.b.ptr, s.ple_keys, wt.dims, wt.streams, n);
++    }
++    for (items, groups) |item, group| try @import("cuda_media.zig").injectNext(item.draft.media, e.stream.*, s.ple_keys + group.offset * wt.wide * 2, item.draft.len, item.next.len);
++    try o.tri.rmsnorm(s.ple_keys, h.norm_e.ptr, s.mixed, s.xsm, wt.eps, wt.wide, n, wt.dims, wt.dims);
++    try p.lane(s.mixed, s.xsm, h.fc_e, s.dummy, s.part, n, mtp.fc_sk);
++    try p.sumSlices(s.part, s.branch, true, n * wt.dims, mtp.fc_sk);
++    try o.tri.rmsnorm(s.ple_nrow, h.norm_h.ptr, s.norm, s.gq, wt.eps, wt.wide, n, wt.wide, wt.wide);
++    try p.lane(s.norm, s.gq, h.fc_h, s.dummy, s.part, wt.streams * n, mtp.fc_sk);
++    try p.sumSlices(s.part, s.ple_gated, true, wt.streams * n * wt.dims, mtp.fc_sk);
++    try o.tri.addStreams(s.branch, s.ple_gated, s.h, n, wt.dims, wt.streams);
++    try p.writeback(0, n);
++    try p.readout(h.layer.attn_hc, 0, n);
++    try p.attnBlock(&h.layer, 0);
++    try o.tri.hcWriteback(s.h, s.h, s.pss, s.part, "*fp32", s.inj, s.dummy, "*bf16", s.dummy, "*bf16", n * wt.dims, n, wt.dims, wt.streams, 4, 1, 1, wt.out_sk);
++    try p.readout(h.layer.mlp_hc, 0, n);
++    try p.moeBlock(&h.layer);
++    p.pending = 0;
++    try p.writeback(0, n);
++    for (items, groups) |item, group| {
++        try p.copy(item.draft.out.ptr, s.h + (group.offset + group.count - 1) * wt.wide * 2, wt.wide * 2);
++        item.draft.len += group.count;
++    }
++    // Last rows are monotonically increasing: forward compaction never overwrites a later source.
++    for (groups, 0..) |group, i| {
++        const last = group.offset + group.count - 1;
++        if (last != i) {
++            try p.copy(s.h + i * wt.wide * 2, s.h + last * wt.wide * 2, wt.wide * 2);
++            try p.copy(s.pss + i * batch.pss_n * 4, s.pss + last * batch.pss_n * 4, batch.pss_n * 4);
++        }
++    }
++    try p.readout(h.mixer, 0, items.len);
++    try p.lane(s.mixed, s.xsm, h.draft, logits, s.dummy, items.len, 1);
++    for (items, 0..) |item, i| try p.copy(item.draft.dlogits.ptr, logits + i * h.ids.len * 2, h.ids.len * 2);
++    // All stack-backed token ids and shared scratch copies have landed before the caller reuses them.
++    try e.stream.synchronize();
++}
++
++pub fn run(comptime Tri: type, o: anytype, items: []const Item, logits: u64, confidence: f64) !void {
++    if (items.len == 0 or items.len > 32) return error.WindowTooWide;
++    var work: [32]HeadRows = undefined;
++    var active: [32]bool = @splat(true);
++    for (items, 0..) |item, i| {
++        item.chain.n = 0;
++        if (item.draft.drafted > item.draft.len) return error.PositionMismatch;
++        item.draft.len -= item.draft.drafted;
++        item.draft.drafted = 0;
++        work[i] = .{ .draft = item.draft, .next = item.next, .rows = item.rows };
++    }
++    try forward(Tri, o, work[0..items.len], logits);
++    for (0..mtp.max_chain) |j| {
++        var n: usize = 0;
++        for (items, 0..) |item, i| {
++            if (!active[i] or j >= item.count) continue;
++            const got = try o.pick(item.draft, item.position + j, item.sampling);
++            const low = confidence > 0 and got.prob < confidence;
++            if (low and j > 0) { active[i] = false; continue; }
++            item.chain.tokens[item.chain.n] = got.token;
++            item.chain.probs[item.chain.n] = got.prob;
++            item.chain.n += 1;
++            if (low or j + 1 >= item.count) { active[i] = false; continue; }
++            work[n] = .{ .draft = item.draft, .next = item.chain.tokens[j..][0..1], .rows = item.draft.out.ptr };
++            n += 1;
++        }
++        if (n == 0) break;
++        try forward(Tri, o, work[0..n], logits);
++        for (work[0..n]) |item| item.draft.drafted += 1;
++    }
++}
+diff --git a/zig/src/families/flashnext/cuda_glue.zig b/zig/src/families/flashnext/cuda_glue.zig
+index 643015d..f69a93d 100644
+--- a/zig/src/families/flashnext/cuda_glue.zig
++++ b/zig/src/families/flashnext/cuda_glue.zig
+@@ -107,14 +107,14 @@ pub const Glue = struct {
+             .ple_gate = try g.hc.function("fn_ple_gate"),
+             .ple_conv = try g.hc.function("fn_ple_conv"),
+             .add_streams = try g.hc.function("fn_add_streams"),
+-            .prep = try g.attn.function("fn_attn_prep"),
+-            .prep_media = try g.attn.function("fn_attn_prep_media"),
++            .prep = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_prep_fp8" else "fn_attn_prep"),
++            .prep_media = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_prep_media_fp8" else "fn_attn_prep_media"),
+             .pool_media = try g.attn.function("fn_qsa_pool_media"),
+             .gate = try g.attn.function("fn_attn_gate"),
+             .pool = try g.attn.function("fn_qsa_pool"),
+             .scores = try g.attn.function("fn_qsa_scores"),
+-            .chunks = try g.attn.function("fn_attn_chunks"),
+-            .chunks_ahead = try g.attn.function("fn_attn_chunks_ahead"),
++            .chunks = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_chunks_fp8" else "fn_attn_chunks"),
++            .chunks_ahead = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_chunks_ahead_fp8" else "fn_attn_chunks_ahead"),
+             .merge = try g.attn.function("fn_attn_merge"),
+         };
+         try g.f.chunks.allowDynamicShared(chunkSmem(1));
+diff --git a/zig/src/families/flashnext/cuda_lanes.zig b/zig/src/families/flashnext/cuda_lanes.zig
+index 67356ec..be8e852 100644
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -150,6 +150,8 @@ pub fn Namespace(comptime Tri: type) type {
+             logits: cuda.DeviceBuffer,
+             drawn: [ring]u32 = undefined,
+             next: u64 = 0,
++            draft_batch_seen: bool = false,
++            verify_batch_seen: bool = false,
+ 
+             fn tri(self: *Cuda) Tri {
+                 return .{ .set = if (self.set) |*x| x else null, .own = &self.glue, .s = self.stream };
+@@ -206,9 +208,10 @@ pub fn Namespace(comptime Tri: type) type {
+                     .speculate_early = false,
+                     .drafts = if (drafting) @intCast(self.depth) else 0,
+                     .draft_probabilities = drafting,
++                    .draft_streams = drafting and self.ranks == null and envUsize("TF_FLASHNEXT_BATCH_DRAFT", 0) == 1,
+                     .streams_exact = true,
+                     .hidden_rows = true,
+-                    .batch_rows = if (drafting) 4 * mtp.max_rows else round_streams,
++                    .batch_rows = if (drafting) (if (envUsize("TF_FLASHNEXT_BATCH_VERIFY", 0) == 1) 16 * mtp.max_rows else 4 * mtp.max_rows) else round_streams,
+                     .max_streams = round_streams,
+                 };
+             }
+@@ -358,6 +361,8 @@ pub fn Namespace(comptime Tri: type) type {
+         }
+ 
+         fn dropLane(self: *Cuda, l: *Lane) void {
++            // A graph must never retain pointers into released sequence caches.
++            self.engine.round_graph.clear();
+             if (l.draft) |*d| d.deinit();
+             if (self.ranks) |r| r.drop(&l.seq) else l.seq.deinit(self.gpa);
+         }
+@@ -403,6 +408,11 @@ pub fn Namespace(comptime Tri: type) type {
+         /// A drafting stream's window in one batched pass; streams without drafts share rounds, each row its own bits.
+         fn verifyFn(ptr: *anyopaque, windows: []const be.Window, out: []be.Verified) anyerror!void {
+             const self = of(ptr);
++            if (self.head != null and self.ranks == null and windows.len > 1 and envUsize("TF_FLASHNEXT_BATCH_VERIFY", 0) == 1) {
++                var all_drafted = true;
++                for (windows) |w| if ((try self.lane(w.stream)).draft == null) { all_drafted = false; };
++                if (all_drafted) return verifyBatch(self, windows, out);
++            }
+             const seqs = try self.gpa.alloc(*prompt.Seq, windows.len);
+             defer self.gpa.free(seqs);
+             const ids = try self.gpa.alloc(u32, windows.len);
+@@ -440,6 +450,35 @@ pub fn Namespace(comptime Tri: type) type {
+             for (seqs[0..plain], at_window[0..plain]) |q, wi| out[wi].sampled[0] = try self.tokenAt(q, windows[wi].stream, windows[wi].positions[0]);
+         }
+ 
++        fn verifyBatch(self: *Cuda, windows: []const be.Window, out: []be.Verified) !void {
++            const grouped = @import("cuda_verify_batch.zig");
++            if (!self.verify_batch_seen) {
++                std.log.info("flashnext: grouped MTP verification active, owners={d}", .{windows.len});
++                self.verify_batch_seen = true;
++            }
++            const items = try self.gpa.alloc(grouped.Window, windows.len);
++            defer self.gpa.free(items);
++            const ids = try self.gpa.alloc(u32, windows.len * mtp.max_rows);
++            defer self.gpa.free(ids);
++            var at: usize = 0;
++            for (windows, items) |w, *item| {
++                if (w.held != 0 or w.parents != null) return error.HeldDraftsNotBuilt;
++                const l = try self.lane(w.stream);
++                const n = w.rows();
++                if (n == 0 or n > mtp.max_rows) return error.WindowTooWide;
++                for (w.positions, 0..) |p, r| if (p != l.seq.fed + 1 + r) return error.PositionMismatch;
++                ids[at] = w.pending;
++                @memcpy(ids[at + 1 .. at + n], w.tokens);
++                item.* = .{ .seq = &l.seq, .draft = &l.draft.?, .ids = ids[at .. at + n] };
++                at += n;
++            }
++            try grouped.run(self.engine, Tri, self.tri(), items, self.logits.ptr);
++            for (windows, items, out) |w, item, *o| {
++                try self.ops().draws(item.draft, w.stream.sampling, o.sampled[0..w.rows()]);
++                if (w.tokens.len > 0) @memcpy(o.drafts[0..w.tokens.len], w.tokens);
++            }
++        }
++
+         /// Each window keeps its first rows (a chain's prefix): the DeltaNet states replayed over them alone.
+         fn keepFn(ptr: *anyopaque, windows: []const be.Window, paths: []const []const u32) anyerror!void {
+             const self = of(ptr);
+@@ -455,6 +494,7 @@ pub fn Namespace(comptime Tri: type) type {
+         fn draftFn(ptr: *anyopaque, requests: []const be.DraftRequest) anyerror!void {
+             const self = of(ptr);
+             if (self.head == null) return error.NoDraftHead;
++            if (self.ranks == null and requests.len > 1 and envUsize("TF_FLASHNEXT_BATCH_DRAFT", 0) == 1) return draftBatch(self, requests);
+             for (requests) |r| {
+                 if (r.lanes != null) return error.TreesNotBuilt;
+                 const l = try self.lane(r.stream);
+@@ -478,6 +518,38 @@ pub fn Namespace(comptime Tri: type) type {
+             }
+         }
+ 
++        fn draftBatch(self: *Cuda, requests: []const be.DraftRequest) !void {
++            const grouped = @import("cuda_draft_batch.zig");
++            if (!self.draft_batch_seen) {
++                std.log.info("flashnext: grouped MTP draft head active, owners={d}", .{requests.len});
++                self.draft_batch_seen = true;
++            }
++            const items = try self.gpa.alloc(grouped.Item, requests.len);
++            defer self.gpa.free(items);
++            const firsts = try self.gpa.alloc(u32, requests.len);
++            defer self.gpa.free(firsts);
++            for (requests, items, firsts) |r, *item, *first| {
++                if (r.lanes != null) return error.TreesNotBuilt;
++                const l = try self.lane(r.stream);
++                const d = if (l.draft) |*x| x else return error.NoDraftHead;
++                if (r.rows) |path| try self.ops().rollback(&l.seq, d, path.len) else {
++                    if (d.open) try self.ops().rollback(&l.seq, d, d.rows);
++                }
++                if (r.position != l.seq.fed + 1) return error.PositionMismatch;
++                const room = l.seq.cap - l.seq.fed - 1;
++                const count = @min(@min(r.depth, self.depth), room);
++                if (r.rows) |path| {
++                    for (path, 0..) |row, i| if (row != i) return error.TreesNotBuilt;
++                    if (r.follow.len < path.len) return error.PositionMismatch;
++                    item.* = .{ .draft = d, .next = r.follow[0..path.len], .rows = d.streams.ptr, .position = r.position, .count = count, .sampling = r.stream.sampling, .chain = &l.chain };
++                } else {
++                    first.* = self.value(r.first orelse return error.NoFirstToken);
++                    item.* = .{ .draft = d, .next = @as([*]u32, @ptrCast(first))[0..1], .rows = d.prompt_last, .position = r.position, .count = count, .sampling = r.stream.sampling, .chain = &l.chain };
++                }
++            }
++            try grouped.run(Tri, self.ops(), items, self.logits.ptr, self.confidence);
++        }
++
+         /// The held chain as host tokens: the round loop verifies them as it would copied ones.
+         fn treeFn(ptr: *anyopaque, s: *lanes.Stream, gpa: std.mem.Allocator) anyerror!?lanes.stream.Held {
+             const self = of(ptr);
+diff --git a/zig/src/families/flashnext/cuda_lanes_load.zig b/zig/src/families/flashnext/cuda_lanes_load.zig
+index 34b84a9..8ff8bdb 100644
+--- a/zig/src/families/flashnext/cuda_lanes_load.zig
++++ b/zig/src/families/flashnext/cuda_lanes_load.zig
+@@ -9,6 +9,10 @@ const Glue = @import("cuda_glue.zig").Glue;
+ const images = @import("cuda_images.zig");
+ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cuda.Context, dir: []const u8, captured: ?[]const u8, o: F.Options) !F.Loaded {
+     if (o.vision) |v| try @import("qwen_vision").media.checkLimits(v);
++    if (@import("cuda_cache_type.zig").enabled()) {
++        if (o.tp != 1 or captured != null) return error.UnsupportedFp8Configuration;
++        std.log.info("flashnext: experimental FP8 E4M3 keys/values, bf16 indexer; single GPU native kernels", .{});
++    }
+     const Cuda = F.Cuda;
+     const round_streams = 32;
+ 
+@@ -67,7 +71,7 @@ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cu
+     const window = @min(o.context + mtp.max_rows, prompt.max_tokens);
+     // and an attention block's block scores at the window (64 MiB at 262,144 tokens)
+     _ = try own.engine.reserveScores(window, @min(o.context, own.engine.chunk));
+-    own.logits = try cuda.DeviceBuffer.alloc(driver, round_streams * prompt.vocabulary * 2);
++    own.logits = try cuda.DeviceBuffer.alloc(driver, round_streams * (if (own.head != null) mtp.max_rows else @as(usize, 1)) * prompt.vocabulary * 2);
+     errdefer own.logits.free();
+     own.lanes = .empty;
+     own.next = 0;
+diff --git a/zig/src/families/flashnext/cuda_media.zig b/zig/src/families/flashnext/cuda_media.zig
+index 6e66da2..6038508 100644
+--- a/zig/src/families/flashnext/cuda_media.zig
++++ b/zig/src/families/flashnext/cuda_media.zig
+@@ -42,8 +42,10 @@ pub const View = struct {
+ pub fn inject(view: ?View, rows: anytype, stream: cuda.Stream, out: u64, pos: usize, n: usize) !void {
+     if (rows.len == 0) {
+         if (view) |m| try m.image.inject(stream, out, pos, n, wt.streams);
+-    } else for (rows, 0..) |l, r| {
+-        if (l.seq.media) |m| try m.image.inject(stream, out + r * wt.wide * 2, l.pos, 1, wt.streams);
++    } else for (rows, 0..) |l, index| {
++        const offset = if (@hasField(@TypeOf(l), "offset")) l.offset else index;
++        const count = if (@hasField(@TypeOf(l), "count")) l.count else 1;
++        if (l.seq.media) |m| try m.image.inject(stream, out + offset * wt.wide * 2, l.pos, count, wt.streams);
+     }
+ }
+ 
+diff --git a/zig/src/families/flashnext/cuda_media_test.zig b/zig/src/families/flashnext/cuda_media_test.zig
+index 0f58af7..c98b83f 100644
+--- a/zig/src/families/flashnext/cuda_media_test.zig
++++ b/zig/src/families/flashnext/cuda_media_test.zig
+@@ -40,8 +40,8 @@ test "the splice, attention and pooled indexer launches get every pointer, scala
+     try m.pooled(s, 1, 2, 3, 4, 5, 1e-6, 8);
+     try std.testing.expectEqualSlices(u64, &.{ 1, 2, 3, 4, 5, eps, 8, wt.index_dim, wt.half, wt.index_ratio, 3000, 20, delta }, Capture.values[2][0..13]);
+     try std.testing.expectEqual([7]u32{ 8 / wt.index_ratio + 2, 1, 1, 128, 1, 1, 0 }, Capture.configs[2]);
+-    const Row = struct { seq: struct { media: ?media.View }, pos: usize };
+-    const rows = [_]Row{ .{ .seq = .{ .media = m }, .pos = 2 }, .{ .seq = .{ .media = null }, .pos = 2 }, .{ .seq = .{ .media = view(&d, 1100) }, .pos = 5 } };
++    const Row = struct { seq: struct { media: ?media.View }, pos: usize, offset: usize = 0, count: usize = 1 };
++    const rows = [_]Row{ .{ .seq = .{ .media = m }, .pos = 2 }, .{ .seq = .{ .media = null }, .pos = 2, .offset = 1 }, .{ .seq = .{ .media = view(&d, 1100) }, .pos = 5, .offset = 2 } };
+     try media.inject(null, &rows, s, 9000, 0, 3);
+     try std.testing.expectEqualSlices(u64, &.{ 1000, 2000, 9000, 2, 20, 2560, 4 }, Capture.values[3][0..7]);
+     try std.testing.expectEqualSlices(u64, &.{ 1100, 2000, 9000 + 2 * wt.wide * 2, 5, 20, 2560, 4 }, Capture.values[4][0..7]);
+@@ -50,3 +50,20 @@ test "the splice, attention and pooled indexer launches get every pointer, scala
+     try media.injectNext(m, s, 8000, 19, 1);
+     try std.testing.expectEqual(@as(usize, 6), Capture.calls);
+ }
++
++test "grouped verification routes variable image spans to separate owners" {
++    var d: cuda.Driver = undefined;
++    d.api.cuLaunchKernel = Capture.launch;
++    const stream: cuda.Stream = .{ .d = &d, .handle = @ptrFromInt(99) };
++    const Row = struct { seq: struct { media: ?media.View }, pos: usize, offset: usize, count: usize };
++    const rows = [_]Row{
++        .{ .seq = .{ .media = view(&d, 1000) }, .pos = 2, .offset = 0, .count = 2 },
++        .{ .seq = .{ .media = view(&d, 1100) }, .pos = 7, .offset = 2, .count = 3 },
++    };
++    Capture.calls = 0;
++    try media.inject(null, &rows, stream, 9000, 0, 5);
++    try std.testing.expectEqual(@as(usize, 2), Capture.calls);
++    try std.testing.expectEqual(@as(u32, 2), Capture.configs[0][0]);
++    try std.testing.expectEqual(@as(u32, 3), Capture.configs[1][0]);
++    try std.testing.expectEqualSlices(u64, &.{ 1100, 2000, 9000 + 2 * wt.wide * 2, 7, 20, 2560, 4 }, Capture.values[1][0..7]);
++}
+diff --git a/zig/src/families/flashnext/cuda_mtp_draft.zig b/zig/src/families/flashnext/cuda_mtp_draft.zig
+index 1ae18ae..4ee57ec 100644
+--- a/zig/src/families/flashnext/cuda_mtp_draft.zig
++++ b/zig/src/families/flashnext/cuda_mtp_draft.zig
+@@ -91,15 +91,15 @@ pub const Draft = struct {
+ 
+     /// Device bytes `init(cap, draft_n, rows)` allocates.
+     pub fn bytes(cap: usize, draft_n: usize, rows: usize) usize {
+-        return cap * (2 * prompt.kv_row_bytes + index_dim * 2) + prompt.pooledBytes(cap) + @max(rows, max_rows) * wide * 2 + wide * 2 + max_rows * vocab * 2 + draft_n * 2 + max_rows * 16 + saved_bytes + linear_n * state_n * 4;
++        return cap * (2 * prompt.kvRowBytes() + index_dim * 2) + prompt.pooledBytes(cap) + @max(rows, max_rows) * wide * 2 + wide * 2 + max_rows * vocab * 2 + draft_n * 2 + max_rows * 16 + saved_bytes + linear_n * state_n * 4;
+     }
+ 
+     /// A head cache of `cap` entries; `rows` the widest prompt chunk whose streams it keeps.
+     pub fn init(gpa: std.mem.Allocator, driver: *cuda.Driver, stream: cuda.Stream, cap: usize, draft_n: usize, rows: usize) !Draft {
+         var d: Draft = .{ .gpa = gpa, .cap = cap, .rows_cap = @max(rows, max_rows), .kc = undefined, .vc = undefined, .ikc = undefined, .pooled = undefined, .streams = undefined, .out = undefined, .logits = undefined, .dlogits = undefined, .best = undefined, .saved = undefined, .host = undefined };
+-        d.kc = try cuda.DeviceBuffer.alloc(driver, cap * kv_heads * head_dim * 2);
++        d.kc = try cuda.DeviceBuffer.alloc(driver, cap * prompt.kvRowBytes());
+         errdefer d.kc.free();
+-        d.vc = try cuda.DeviceBuffer.alloc(driver, cap * kv_heads * head_dim * 2);
++        d.vc = try cuda.DeviceBuffer.alloc(driver, cap * prompt.kvRowBytes());
+         errdefer d.vc.free();
+         d.ikc = try cuda.DeviceBuffer.alloc(driver, cap * index_dim * 2);
+         errdefer d.ikc.free();
+diff --git a/zig/src/families/flashnext/cuda_prompt.zig b/zig/src/families/flashnext/cuda_prompt.zig
+index 5009a98..30bb563 100644
+--- a/zig/src/families/flashnext/cuda_prompt.zig
++++ b/zig/src/families/flashnext/cuda_prompt.zig
+@@ -97,11 +97,12 @@ pub const max_tokens: usize = weights.window;
+ 
+ /// One position's keys and values in one attention layer, bf16.
+ pub const kv_row_bytes: usize = kv_heads * head_dim * 2;
++pub fn kvRowBytes() usize { return kv_heads * head_dim * @import("cuda_cache_type.zig").elementBytes(); }
+ 
+ /// Device bytes `Engine.newSeq(cap)` allocates: conv tails, recurrent states, KV with indexer keys, the n-gram tail.
+ pub fn seqBytes(cap: usize) usize {
+     const linear = linear_n * ((gdn.taps - 1) * gdn.conv_dim * 2 + state_n * 4);
+-    const attn = attn_n * (cap * (2 * kv_row_bytes + index_dim * 2) + pooledBytes(cap));
++    const attn = attn_n * (cap * (2 * kvRowBytes() + index_dim * 2) + pooledBytes(cap));
+     return linear + attn + ple_tail_n * wide * 2;
+ }
+ 
+@@ -136,6 +137,7 @@ pub const Engine = struct {
+     /// Rows a batched chunk takes at most (TF_FLASHNEXT_CHUNK; batch.default_chunk by default).
+     chunk: usize,
+     round_graph: round_graph.Cache = .{},
++    next_graph_owner: u64 = 1,
+     image_factory: ?*@import("cuda_images.zig").Vision = null,
+     collective: ?*@import("cuda_collective.zig").Collective = null,
+ 
+@@ -156,6 +158,7 @@ pub const Engine = struct {
+         e.collective = null;
+         e.image_factory = null;
+         e.round_graph = .{};
++        e.next_graph_owner = 1;
+         errdefer for (e.layers[0..e.n_layers]) |*l| l.free(gpa);
+         e.model_dir = try gpa.dupe(u8, model_dir);
+         errdefer gpa.free(e.model_dir);
+@@ -229,15 +232,17 @@ pub const Engine = struct {
+     pub fn newSeq(e: *Engine, cap: usize) !Seq {
+         e.round_graph.clear();
+         if (cap == 0) return error.UnexpectedTensor;
++        const graph_owner = e.next_graph_owner;
++        e.next_graph_owner = std.math.add(u64, graph_owner, 1) catch return error.GraphOwnerExhausted;
+         const logits = try e.gpa.alloc(u8, vocab * 2);
+         errdefer e.gpa.free(logits);
+         const conv = try zeros(e.gpa, e.driver, e.stream.*, linear_n, (gdn.taps - 1) * gdn.conv_dim * 2);
+         errdefer freeOwned(e.gpa, conv);
+         const state = try zeros(e.gpa, e.driver, e.stream.*, linear_n, state_n * 4);
+         errdefer freeOwned(e.gpa, state);
+-        const kc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kv_heads * head_dim * 2);
++        const kc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kvRowBytes());
+         errdefer freeOwned(e.gpa, kc);
+-        const vc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kv_heads * head_dim * 2);
++        const vc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kvRowBytes());
+         errdefer freeOwned(e.gpa, vc);
+         const ikc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * index_dim * 2);
+         errdefer freeOwned(e.gpa, ikc);
+@@ -247,6 +252,7 @@ pub const Engine = struct {
+         errdefer tail.free();
+         try tail.fill8(0, e.stream.handle);
+         return .{
++            .graph_owner = graph_owner,
+             .conv = conv,
+             .state = state,
+             .kc = kc,
+@@ -341,7 +347,7 @@ pub const Engine = struct {
+         const s = try e.reserve(seqs.len);
+         // each row's attention runs alone on the block scores
+         const scores = try e.reserveScores(cap, 1);
+-        for (rows, seqs) |*l, q| l.* = .{ .seq = q.view(scores), .pos = q.fed };
++        for (rows, seqs, 0..) |*l, q, i| l.* = .{ .seq = q.view(scores), .pos = q.fed, .offset = i };
+         var p: batch.Pass(Tri) = .{
+             .gpa = e.gpa,
+             .io = e.io,
+@@ -357,7 +363,7 @@ pub const Engine = struct {
+         const has_media = for (seqs) |q| {
+             if (q.media != null) break true;
+         } else false;
+-        if (e.collective != null and round_graph.enabled() and !has_media) {
++        if (round_graph.enabled() and !has_media) {
+             const key = try round_graph.Key.init(seqs, s.ids, scores, out);
+             try e.round_graph.run(key, &p, ids);
+         } else try p.chunk(ids, 0, null);
+@@ -374,6 +380,8 @@ pub const Engine = struct {
+ pub const Seq = struct {
+     media: ?@import("cuda_media.zig").State = null,
+     rank_id: u64 = 0,
++    /// Unique within this engine; prevents decode-graph reuse after a cache owner changes.
++    graph_owner: u64 = 0,
+     conv: []cuda.DeviceBuffer,
+     state: []cuda.DeviceBuffer,
+     kc: []cuda.DeviceBuffer,
+diff --git a/zig/src/families/flashnext/cuda_round_graph.zig b/zig/src/families/flashnext/cuda_round_graph.zig
+index e367e31..84b2b79 100644
+--- a/zig/src/families/flashnext/cuda_round_graph.zig
++++ b/zig/src/families/flashnext/cuda_round_graph.zig
+@@ -21,8 +21,9 @@ pub const Key = struct {
+         if (seqs.len == 0 or seqs.len > 32) return error.UnexpectedTensor;
+         var key: Key = .{ .count = seqs.len, .scratch = scratch, .scores = scores, .output = output };
+         for (seqs, 0..) |q, i| {
+-            if (q.rank_id == 0) return error.UnsupportedRankOperation;
+-            key.owners[i] = q.rank_id;
++            const owner = if (q.rank_id != 0) q.rank_id else q.graph_owner;
++            if (owner == 0) return error.UnsupportedRankOperation;
++            key.owners[i] = owner;
+             const end = q.fed + 1;
+             key.chunks[i] = @intCast((@min(end, 2051) + 511) / 512);
+             key.score_tiles[i] = if (end / 4 > 512) @intCast(((end + 3) / 4 + 63) / 64) else 0;
+@@ -51,6 +52,13 @@ pub const Cache = struct {
+             positions[i * 4] = @intCast(lane.pos);
+             try pass.m.ngram.rows(lane.seq.history[0..], ids[i..][0..1], s.hostEmb(ids.len)[i * dims ..][0..dims], s.hostXs(ids.len)[i * (dims / 32) ..][0 .. dims / 32]);
+         }
++        // No host pointers escape into the graph. Ordinary uploads preserve
++        // copy_source custody; same-stream ordering puts them before replay.
++        try s.upload(s.ids, std.mem.sliceAsBytes(s.hostIds(ids.len)));
++        try s.upload(s.pos, std.mem.sliceAsBytes(positions));
++        try s.upload(s.ple_emb, std.mem.sliceAsBytes(s.hostEmb(ids.len)));
++        try s.upload(s.ple_xs, std.mem.sliceAsBytes(s.hostXs(ids.len)));
++        try s.uploaded();
+     }
+ 
+     pub fn run(c: *Cache, key: Key, pass: anytype, ids: []const u32) !void {
+@@ -60,6 +68,8 @@ pub const Cache = struct {
+             try cuda.graph.beginCapture(pass.stream, .thread_local);
+             pass.prepared = true;
+             pass.chunk(ids, 0, null) catch |err| {
++                // Even an invalidated CUDA capture must release wrapper scope.
++                defer cuda.copy_source.captureEnd(pass.stream);
+                 if (cuda.graph.endCapture(pass.stream)) |g| {
+                     var discarded = g;
+                     discarded.deinit();
+@@ -78,7 +88,7 @@ pub const Cache = struct {
+ };
+ 
+ test "decode graph keys invalidate on owner order, attention seams and score tile seams" {
+-    const Seq = struct { rank_id: u64, fed: usize };
++    const Seq = struct { rank_id: u64, graph_owner: u64 = 0, fed: usize };
+     var first: Seq = .{ .rank_id = 1, .fed = 10 };
+     var second: Seq = .{ .rank_id = 2, .fed = 10 };
+     const base = try Key.init(@as([]const *Seq, &.{ &first, &second }), 1, 2, 3);
+@@ -96,3 +106,13 @@ test "decode graph keys invalidate on owner order, attention seams and score til
+     first.fed = 2304;
+     try std.testing.expect(!std.meta.eql(score, try Key.init(@as([]const *Seq, &.{&first}), 1, 2, 3)));
+ }
++
++ test "single GPU graph owners reject unknown caches and invalidate replacement" {
++    const Seq = struct { rank_id: u64 = 0, graph_owner: u64 = 0, fed: usize = 10 };
++    var q: Seq = .{};
++    try std.testing.expectError(error.UnsupportedRankOperation, Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3));
++    q.graph_owner = 1;
++    const first = try Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3);
++    q.graph_owner = 2;
++    try std.testing.expect(!std.meta.eql(first, try Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3)));
++}
+diff --git a/zig/src/families/flashnext/cuda_snap.zig b/zig/src/families/flashnext/cuda_snap.zig
+index 0e55180..919c593 100644
+--- a/zig/src/families/flashnext/cuda_snap.zig
++++ b/zig/src/families/flashnext/cuda_snap.zig
+@@ -14,7 +14,7 @@ const tail_bytes = wt.ple_tail_n * wt.wide * 2;
+ 
+ /// One attention cache's first `at` key, value and indexer-key rows, and the pooled blocks they complete.
+ fn attnBytes(at: usize) usize {
+-    return at * (2 * prompt.kv_row_bytes + index_row) + at / wt.index_ratio * index_row;
++    return at * (2 * prompt.kvRowBytes() + index_row) + at / wt.index_ratio * index_row;
+ }
+ 
+ /// Device bytes a state after `at` tokens takes: the DeltaNet's are fixed, each attention cache grows by the token.
+@@ -38,8 +38,8 @@ const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
+ /// An attention cache's pieces for `at` rows: complete pooled blocks only (the rest pool again as later rows land).
+ fn attnPieces(kc: []cuda.DeviceBuffer, vc: []cuda.DeviceBuffer, ikc: []cuda.DeviceBuffer, pooled: []cuda.DeviceBuffer, at: usize) [4]Piece {
+     return .{
+-        .{ .bufs = kc, .n = at * prompt.kv_row_bytes },
+-        .{ .bufs = vc, .n = at * prompt.kv_row_bytes },
++        .{ .bufs = kc, .n = at * prompt.kvRowBytes() },
++        .{ .bufs = vc, .n = at * prompt.kvRowBytes() },
+         .{ .bufs = ikc, .n = at * index_row },
+         .{ .bufs = pooled, .n = at / wt.index_ratio * index_row },
+     };
+diff --git a/zig/src/families/flashnext/cuda_verify_batch.zig b/zig/src/families/flashnext/cuda_verify_batch.zig
+new file mode 100644
+index 0000000..51de2f6
+--- /dev/null
++++ b/zig/src/families/flashnext/cuda_verify_batch.zig
+@@ -0,0 +1,71 @@
++//! Several MTP windows in one dense/expert pass; recurrent, convolution and KV state stay per owner.
++const std = @import("std");
++const cuda = @import("cuda");
++const prompt = @import("cuda_prompt.zig");
++const batch = @import("cuda_batch.zig");
++const mtp = @import("cuda_mtp.zig");
++const wt = @import("cuda_prompt_wt.zig");
++
++pub const Window = struct { seq: *prompt.Seq, draft: *mtp.Draft, ids: []const u32 };
++fn copy(stream: cuda.Stream, dst: u64, src: u64, n: usize) !void {
++    if (n == 0) return;
++    try stream.d.check(stream.d.api.cuMemcpyDtoDAsync_v2(dst, src, n, stream.handle), "cuMemcpyDtoDAsync");
++}
++
++pub fn run(e: *prompt.Engine, comptime Tri: type, tri: Tri, windows: []const Window, logits: u64) !void {
++    if (windows.len == 0 or windows.len > 32 or e.collective != null) return error.UnsupportedVerifyBatch;
++    var count: usize = 0;
++    var cap: usize = 0;
++    var widest: usize = 0;
++    for (windows, 0..) |w, wi| {
++        if (w.ids.len == 0 or w.ids.len > mtp.max_rows or w.seq.fed + w.ids.len > w.seq.cap) return error.WindowTooWide;
++        for (windows[0..wi]) |previous| if (previous.seq == w.seq) return error.DuplicateSequence;
++        count += w.ids.len;
++        cap = @max(cap, w.seq.cap);
++        widest = @max(widest, w.ids.len);
++    }
++    e.round_graph.clear();
++    const s = try e.reserve(count);
++    const scores = try e.reserveScores(cap, widest);
++    const ids = try e.gpa.alloc(u32, count);
++    defer e.gpa.free(ids);
++    const groups = try e.gpa.alloc(batch.Lane, windows.len);
++    defer e.gpa.free(groups);
++    var at: usize = 0;
++    for (windows, groups) |w, *group| {
++        const q = w.seq;
++        const d = w.draft;
++        d.settle(q);
++        d.fed0 = q.fed;
++        d.rows = w.ids.len;
++        d.history = q.history;
++        @memcpy(d.ids[0..w.ids.len], w.ids);
++        const keeps = w.ids.len > 1;
++        if (keeps) try copy(e.stream.*, d.saved.ptr + mtp.Draft.tail_at, q.tail.ptr, wt.ple_tail_n * wt.wide * 2);
++        @memcpy(ids[at..][0..w.ids.len], w.ids);
++        group.* = .{ .seq = q.view(scores), .pos = q.fed, .offset = at, .count = w.ids.len, .keep = if (keeps) &d.keep else null, .streams = d.streams.ptr };
++        at += w.ids.len;
++    }
++    var pass: batch.Pass(Tri) = .{
++        .gpa = e.gpa,
++        .io = e.io,
++        .stream = e.stream.*,
++        .tri = tri,
++        .k = &e.batch_k,
++        .s = s,
++        .m = .{ .table_w = e.table.w.ptr, .table_s = e.table.s.ptr, .table_b = e.table.b.ptr, .table_dense = e.table.dense, .layers = e.layers[0..e.n_layers], .mixer = e.mixer, .head = e.head_q, .ngram = &e.ngram },
++        .seq = groups[0].seq,
++        .lanes = groups,
++        .hooks = .{ .logits = .all, .logits_out = logits },
++    };
++    try pass.chunk(ids, 0, null);
++    for (windows, groups) |w, group| {
++        const n = w.ids.len;
++        try copy(e.stream.*, w.draft.logits.ptr, logits + group.offset * prompt.vocabulary * 2, n * prompt.vocabulary * 2);
++        if (n > 1) try copy(e.stream.*, w.draft.saved.ptr + mtp.Draft.nrow_at, s.ple_nrow + group.offset * wt.wide * 2, n * wt.wide * 2);
++        w.seq.fed += n;
++        w.draft.open = n > 1;
++    }
++    // A later draw reads each owner's results; scratch and the gather's source IDs may now be released.
++    try e.stream.synchronize();
++}

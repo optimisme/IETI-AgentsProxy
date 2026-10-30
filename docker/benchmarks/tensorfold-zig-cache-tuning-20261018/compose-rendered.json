@@ -1,0 +1,158 @@
+{
+  "name": "ieti-qwen38-flash-next-tensorfold-zig-tuned-int4-mtp-fp8-vision-128gb",
+  "services": {
+    "qwen-tensorfold-zig": {
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "set -euo pipefail\nset -a\n. /run/secrets/tokens.env\nset +a\nif [ -n \"$${HUGGINGFACE_ACCESS_TOKENS:-}\" ]; then\n  export HF_TOKEN=\"$${HUGGINGFACE_ACCESS_TOKENS}\"\nfi\npython3 - <<'PY_ARGS'\nimport os\ncontext, streams = int(os.environ['CONTEXT_LENGTH']), int(os.environ['PARALLEL_STREAMS'])\nif not 1 <= streams <= 16 or not 1 <= context <= 262144:\n    raise SystemExit('Expected 1-16 streams and 1-262144 context tokens')\nPY_ARGS\npython3 -m venv --system-site-packages /opt/ieti-zig/venv\n. /opt/ieti-zig/venv/bin/activate\nif [ \"$$(cat /opt/ieti-zig/ready 2>/dev/null || true)\" != \"$${RECIPE_REVISION}\" ]; then\n  rm -f /opt/ieti-zig/ready\n  python -m pip install 'huggingface_hub>=1.0'\n  python -m pip install --no-deps 'transformers==5.17.0' 'av==19.0.1'\n  rm -rf /opt/mia-recipe /tensorfold\n  git init -q /opt/mia-recipe\n  git -C /opt/mia-recipe remote add origin https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold.git\n  git -C /opt/mia-recipe fetch -q --depth 1 origin \"$${RECIPE_REVISION}\"\n  git -C /opt/mia-recipe checkout -q --detach FETCH_HEAD\n  test \"$$(git -C /opt/mia-recipe rev-parse HEAD)\" = \"$${RECIPE_REVISION}\"\n  cat /opt/mia-recipe/patches/*.patch | sha256sum | awk -v expected=\"$${PATCHES_SHA256}\" '$$1 != expected { exit 1 }'\n  git init -q /tensorfold\n  git -C /tensorfold remote add origin https://github.com/ashhart/TensorFold.git\n  git -C /tensorfold fetch -q --depth 1 origin \"$${TF_REVISION}\"\n  git -C /tensorfold checkout -q --detach FETCH_HEAD\n  test \"$$(git -C /tensorfold rev-parse HEAD)\" = \"$${TF_REVISION}\"\n  cd /tensorfold\n  for patch in /opt/mia-recipe/patches/*.patch; do\n    git apply --check \"$$patch\"\n    git apply \"$$patch\"\n  done\n  curl -fsSL -o /opt/ieti-zig/zig.tar.xz \"https://ziglang.org/download/$${ZIG_VERSION}/zig-aarch64-linux-$${ZIG_VERSION}.tar.xz\"\n  echo \"$${ZIG_SHA256}  /opt/ieti-zig/zig.tar.xz\" | sha256sum -c -\n  mkdir -p /opt/ieti-zig/zig\n  tar -xJf /opt/ieti-zig/zig.tar.xz -C /opt/ieti-zig/zig --strip-components=1\n  rm /opt/ieti-zig/zig.tar.xz\n  /opt/ieti-zig/zig/zig build -Dnvcc=/usr/local/cuda/bin/nvcc -Doptimize=fast --prefix /opt/ieti-zig/install --cache-dir /opt/ieti-zig/build-cache -j2 fatbins install native\n  python - <<'PY_MTIME'\nimport json, os\nfor name in sorted({k['source']['file'] for k in json.load(open('zig/tests/cuda/flashnext/kernels.json'))['kernels']}):\n    os.utime(os.path.join('src', name), (1791318675, 1791318675))\nPY_MTIME\n  PYTHONPATH=/tensorfold/src python -B tools/zig/flashnext_aot.py build \\\n    --spec zig/tests/cuda/flashnext/kernels.json --jit zig/tests/cuda/flashnext/jit.json --tp 1 \\\n    --out \"$${TENSORFOLD_CUDA_KERNELS}\" > /opt/ieti-zig/aot.log 2>&1 || true\n  tail -n 20 /opt/ieti-zig/aot.log\n  grep -q 'kernels ->' /opt/ieti-zig/aot.log\n  if grep PROBLEM /opt/ieti-zig/aot.log | grep -v 'cubin sha256'; then exit 1; fi\n  test -f \"$${TENSORFOLD_CUDA_KERNELS}/aot.json\"\n  mkdir -p /opt/ieti-zig/python /opt/ieti-zig/licenses\n  cp -a src/tensorfold /opt/ieti-zig/python/\n  for item in LICENSE LICENSE.md LICENSES NOTICE THIRD_PARTY_NOTICES.md; do\n    if [ -e \"$$item\" ]; then cp -a \"$$item\" /opt/ieti-zig/licenses/; fi\n  done\n  cp /opt/mia-recipe/LICENSE /opt/ieti-zig/licenses/MiaAI-LICENSE\n  test -x /opt/ieti-zig/install/native/bin/tensorfold-native\n  echo \"$${RECIPE_REVISION}\" > /opt/ieti-zig/ready\nfi\n# These host-only changes reuse the pinned CUDA assets and rebuild the native executable.\nif [ \"$$(cat /opt/ieti-zig/ieti-cache-ready 2>/dev/null || true)\" != \"$${IETI_CACHE_PATCH_SHA256}\" ]; then\n  echo \"$${IETI_CACHE_PATCH_SHA256}  /run/ieti-cache.patch\" | sha256sum -c -\n  rm -rf /opt/mia-recipe /tensorfold\n  git init -q /opt/mia-recipe\n  git -C /opt/mia-recipe remote add origin https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold.git\n  git -C /opt/mia-recipe fetch -q --depth 1 origin \"$${RECIPE_REVISION}\"\n  git -C /opt/mia-recipe checkout -q --detach FETCH_HEAD\n  cat /opt/mia-recipe/patches/*.patch | sha256sum | awk -v expected=\"$${PATCHES_SHA256}\" '$$1 != expected { exit 1 }'\n  git init -q /tensorfold\n  git -C /tensorfold remote add origin https://github.com/ashhart/TensorFold.git\n  git -C /tensorfold fetch -q --depth 1 origin \"$${TF_REVISION}\"\n  git -C /tensorfold checkout -q --detach FETCH_HEAD\n  test \"$$(git -C /tensorfold rev-parse HEAD)\" = \"$${TF_REVISION}\"\n  cd /tensorfold\n  for patch in /opt/mia-recipe/patches/*.patch; do git apply --check \"$$patch\"; git apply \"$$patch\"; done\n  git apply --check /run/ieti-cache.patch\n  git apply /run/ieti-cache.patch\n  /opt/ieti-zig/zig/zig build -Dnvcc=/usr/local/cuda/bin/nvcc -Doptimize=fast --prefix /opt/ieti-zig/install --cache-dir /opt/ieti-zig/build-cache -j2 native\n  /opt/ieti-zig/zig/zig build --cache-dir /opt/ieti-zig/build-cache -j2 test --summary all > /opt/ieti-zig/ieti-cache-tests.log 2>&1\n  tail -n 25 /opt/ieti-zig/ieti-cache-tests.log\n  echo \"$${IETI_CACHE_PATCH_SHA256}\" > /opt/ieti-zig/ieti-cache-ready\nfi\nif [ \"$${IETI_CACHE_TIMINGS}\" = 1 ]; then export TF_FLASHNEXT_PASS_TIMES=1; else unset TF_FLASHNEXT_PASS_TIMES; fi\nMODEL_PATH=\"$$(python - <<'PY_MODEL'\nimport json, os, sys\nfrom pathlib import Path\nfrom huggingface_hub import snapshot_download\nrevision = os.environ['MODEL_REVISION']\nsnapshot = Path(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=revision, max_workers=4))\nconfig = json.loads((snapshot / 'config.json').read_text())\nif snapshot.name != revision or config.get('model_type') != 'qwen4_exp':\n    raise SystemExit('Unexpected pinned model snapshot')\nquant = config.get('quantization_config', {})\nif str(quant.get('quant_method', '')).lower() != 'gptq' or quant.get('bits') != 4:\n    raise SystemExit('Expected GPTQ-format INT4-AutoRound weights')\ntables = list((snapshot / 'ple-table').glob('*.safetensors'))\nif not tables or not all(p.stat().st_size > 0 for p in tables):\n    raise SystemExit('Missing FP8 n-gram table')\nindex = json.loads((snapshot / 'model.safetensors.index.json').read_text())\nif not all((snapshot / name).is_file() and (snapshot / name).stat().st_size > 0 for name in set(index['weight_map'].values())):\n    raise SystemExit('Missing checkpoint shards')\nprint(f'[ieti] Verified {os.environ[\"MODEL_ID\"]}@{revision}', file=sys.stderr, flush=True)\nprint(snapshot)\nPY_MODEL\n)\"\n# Preserve the recipe's memory floor; never bypass this to force capacity.\npython - <<'PY_MEMORY'\nfrom pathlib import Path\nfields = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())\navailable = int(fields['MemAvailable'].split()[0]) / 1048576\nif available < 93:\n    raise SystemExit(f'Only {available:.1f} GiB available; INT4 profile requires at least 93 GiB before model load')\nprint(f'[ieti] {available:.1f} GiB available before load; 16 x 75000 FP8 tokens need about 20 GiB KV, excluding scratch and retained state', flush=True)\nPY_MEMORY\nexec /opt/ieti-zig/install/native/bin/tensorfold-native serve \"$$MODEL_PATH\" \\\n  --host 0.0.0.0 --port 8000 --name \"$${MODEL_ID}\" \\\n  --context \"$${CONTEXT_LENGTH}\" --parallel \"$${PARALLEL_STREAMS}\" \\\n  --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \\\n  --thinking --reasoning-effort low --thinking-budget 1024 \\\n  --prompt-cache-gib \"$${TENSORFOLD_PROMPT_CACHE_GIB}\" \\\n  --kv-dtype fp8 --vision --vision-max-images 50 --vision-max-videos 4 \\\n  --vision-image-tokens 16384 --no-update-check\n"
+      ],
+      "container_name": "qwen38_flash_next_cuda_vram128_tensorfold_zig_tuned_int4_mtp_fp8_vision",
+      "deploy": {
+        "resources": {
+          "reservations": {
+            "devices": [
+              {
+                "capabilities": [
+                  "gpu"
+                ],
+                "driver": "nvidia",
+                "count": 1
+              }
+            ]
+          }
+        },
+        "placement": {}
+      },
+      "entrypoint": null,
+      "environment": {
+        "CONTEXT_LENGTH": "75000",
+        "CUDA_CACHE_PATH": "/cache/nv",
+        "HF_HOME": "/root/.cache/huggingface",
+        "HUGGINGFACE_HUB_CACHE": "/root/.cache/huggingface/hub",
+        "IETI_CACHE_PATCH_SHA256": "d07e611f133e396b0af5e486f82a06de0f787c659b455a18de0680a6bf55c9b2",
+        "IETI_CACHE_TIMINGS": "0",
+        "MAX_JOBS": "2",
+        "MODEL_ID": "azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound",
+        "MODEL_REVISION": "1464274120d36a4d8fcaa934552334a7d83ce0fd",
+        "PARALLEL_STREAMS": "16",
+        "PATCHES_SHA256": "168ed7c1d8b6c9dc22c02bec6ad5e5e9f21ec93ff3556b69970ed8c1578a24f7",
+        "PIP_CACHE_DIR": "/opt/ieti-zig/pip",
+        "PYTHONUNBUFFERED": "1",
+        "RECIPE_REVISION": "656879fd752749bbd11a6e1a065a326c00940911",
+        "TENSORFOLD_CUDA_KERNELS": "/opt/ieti-zig/install/share/tensorfold/cuda/sm121",
+        "TENSORFOLD_MEMORY_RESERVE_GIB": "10",
+        "TENSORFOLD_NO_UPDATE_CHECK": "1",
+        "TENSORFOLD_PROMPT_CACHE_GIB": "8",
+        "TENSORFOLD_VISION_PYTHONPATH": "/opt/ieti-zig/python",
+        "TENSORFOLD_VISION_WORKSPACE_MIB": "2048",
+        "TF_FLASHNEXT_CACHE_MIN_PROMPT": "1024",
+        "TF_FLASHNEXT_DEPTH": "6",
+        "TF_FLASHNEXT_FILL_FAIR": "0",
+        "TF_FLASHNEXT_PREFILL_TAIL": "512",
+        "TF_FLASHNEXT_PRODUCT_STREAMS": "5",
+        "TF_FLASHNEXT_PROMPT_EXPERT_TILE": "2",
+        "TF_FLASHNEXT_YARN": "0",
+        "TF_REVISION": "db281878ddb836fd0df510d8771ecb7e0fe47d26",
+        "TORCH_EXTENSIONS_DIR": "/cache/torch-extensions",
+        "TRITON_CACHE_DIR": "/cache/triton",
+        "ZIG_GLOBAL_CACHE_DIR": "/opt/ieti-zig/global-cache",
+        "ZIG_SHA256": "9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8",
+        "ZIG_VERSION": "0.17.0"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=10).read()"
+        ],
+        "timeout": "15s",
+        "interval": "30s",
+        "retries": 5,
+        "start_period": "3h0m0s"
+      },
+      "image": "nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c",
+      "init": true,
+      "ipc": "host",
+      "labels": {
+        "com.ieti.inference": "true",
+        "com.ieti.profile": "qwen38-flash-next-tensorfold-zig-tuned-int4-mtp-fp8-vision-128gb.yml"
+      },
+      "networks": {
+        "default": null
+      },
+      "platform": "linux/arm64",
+      "ports": [
+        {
+          "mode": "ingress",
+          "target": 8000,
+          "published": "8000",
+          "protocol": "tcp"
+        }
+      ],
+      "pull_policy": "missing",
+      "restart": "unless-stopped",
+      "stop_grace_period": "1m0s",
+      "ulimits": {
+        "memlock": -1,
+        "stack": 67108864
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/Users/<user>/Documents/GitHub/IETI-AgentsProxy/docker/tokens.env",
+          "target": "/run/secrets/tokens.env",
+          "read_only": true,
+          "bind": {}
+        },
+        {
+          "type": "bind",
+          "source": "/Users/<user>/Documents/GitHub/IETI-AgentsProxy/docker/patches/tensorfold-zig-flashnext-cache-v1.patch",
+          "target": "/run/ieti-cache.patch",
+          "read_only": true,
+          "bind": {}
+        },
+        {
+          "type": "volume",
+          "source": "zig-tuned-int4-hf-cache",
+          "target": "/root/.cache/huggingface",
+          "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "zig-tuned-int4-runtime-cache",
+          "target": "/opt/ieti-zig",
+          "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "zig-tuned-int4-kernel-cache",
+          "target": "/cache",
+          "volume": {}
+        }
+      ]
+    }
+  },
+  "networks": {
+    "default": {
+      "name": "ieti-qwen38-flash-next-tensorfold-zig-tuned-int4-mtp-fp8-vision-128gb_default",
+      "ipam": {},
+      "external": false
+    }
+  },
+  "volumes": {
+    "zig-tuned-int4-hf-cache": {
+      "name": "ieti-qwen38-flash-next-tensorfold-zig-tuned-int4-hf-cache",
+      "external": false
+    },
+    "zig-tuned-int4-kernel-cache": {
+      "name": "ieti-qwen38-flash-next-tensorfold-zig-tuned-int4-kernel-cache",
+      "external": false
+    },
+    "zig-tuned-int4-runtime-cache": {
+      "name": "ieti-qwen38-flash-next-tensorfold-zig-tuned-int4-runtime-cache",
+      "external": false
+    }
+  }
+}

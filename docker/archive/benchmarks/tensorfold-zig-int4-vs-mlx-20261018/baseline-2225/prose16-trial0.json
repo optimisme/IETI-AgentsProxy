@@ -1,0 +1,1065 @@
+{
+  "summary": {
+    "name": "prose16-trial0",
+    "requests": 16,
+    "successes": 16,
+    "full_output_requests": 16,
+    "wall_s": 14.819230391643941,
+    "aggregate_output_tok_s": 276.39761929267223,
+    "ttft_p50_s": 0.5375966187566519,
+    "ttft_p95_s": 0.550131912343204,
+    "latency_p50_s": 13.694979802705348,
+    "output_tokens": 4096,
+    "cached_tokens": 0,
+    "input_tokens": [
+      41,
+      41,
+      41,
+      41,
+      41,
+      41,
+      41,
+      41,
+      41,
+      41,
+      42,
+      42,
+      42,
+      42,
+      42,
+      42
+    ],
+    "min_available_gib": 10.278018951416016,
+    "max_swap_used_gib": 1.1845359802246094,
+    "swap_out_pages": 0,
+    "oom_kills": 0,
+    "peak_engine_running": 16,
+    "external_requests": 0
+  },
+  "before": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 10315,
+    "prompt_tokens_total": 6223954,
+    "completion_tokens_total": 212052,
+    "prefill_seconds_total": 1412.2562,
+    "decode_seconds_total": 6775.762,
+    "cached_tokens_total": 4151418,
+    "rounds_total": 81661,
+    "drafted_total": 253714,
+    "accepted_total": 120151,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "after": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 10331,
+    "prompt_tokens_total": 6224616,
+    "completion_tokens_total": 216148,
+    "prefill_seconds_total": 1412.757,
+    "decode_seconds_total": 6984.3181,
+    "cached_tokens_total": 4151418,
+    "rounds_total": 82873,
+    "drafted_total": 258008,
+    "accepted_total": 123019,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "requests": [
+    {
+      "request_sha256": "eeb149a0c9f09543eda6f4cda970552f4c7f9802d337b5f2bea32042095205a7",
+      "ttft_s": 0.5380675029009581,
+      "content_ttft_s": 0.5380680300295353,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0292,
+        "decode_s": 11.5966,
+        "rounds": 67,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 266,
+        "accepted": 188,
+        "token_sha": "5d87e9e4f2c9"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 12.137972708791494,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between consistency and concurrency.\n\n### The Four Isolation Levels\n\n| Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|---|---|---|---|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts SET balance = balance + 100 WHERE id = 'B';\nCOMMIT;\n\n-- Transaction T2: Read total",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "c1ab52404f15a64169eb28169e34ab634ebfa7394971037ddced9469e36ee8bb",
+      "ttft_s": 0.5324612352997065,
+      "content_ttft_s": 0.5324621312320232,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0294,
+        "decode_s": 13.4587,
+        "rounds": 80,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 267,
+        "accepted": 175,
+        "token_sha": "35daf05a82c4"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.992311565205455,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read data that has been modified but not yet committed by another transaction. |\n| 2 | **Read Committed** | A transaction can only read data that has been committed. Prevents *dirty reads*. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data as it existed at the start of the transaction. Prevents *non-repeatable reads*. |\n| 4 | **Serializable** | Transactions are executed as if they were run sequentially, one after another. Prevents *phantom reads*. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "0d8e3580f0596482e918907281910da3fdd114b924ca59acb81d0c633ed8b5b2",
+      "ttft_s": 0.533380888402462,
+      "content_ttft_s": 0.5333816409111023,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0293,
+        "decode_s": 13.5003,
+        "rounds": 81,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 267,
+        "accepted": 174,
+        "token_sha": "35daf05a82c4"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 14.033667382784188,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read data that has been modified but not yet committed by another transaction. |\n| 2 | **Read Committed** | A transaction can only read data that has been committed. Prevents *dirty reads*. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data as it existed at the start of the transaction. Prevents *non-repeatable reads*. |\n| 4 | **Serializable** | Transactions are executed as if they were run sequentially, one after another. Prevents *phantom reads*. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "d2b8d9aefdaff8e3fa87fbff54ab8026e31acdad0ebc36ec48d01e256b971242",
+      "ttft_s": 0.5365117629989982,
+      "content_ttft_s": 0.536513059400022,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0292,
+        "decode_s": 13.158,
+        "rounds": 76,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 275,
+        "accepted": 179,
+        "token_sha": "9cd4618c8238"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.695987723767757,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between consistency and concurrency.\n\n### The Four Isolation Levels\n\n| Level | Name | Dirty Read | Non-Repeatable Read | Phantom Read |\n|-------|------|:----------:|:-------------------:|:------------:|\n| 1 | `READ UNCOMMITTED` | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| 2 | `READ COMMITTED` | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| 3 | `REPEATABLE READ` | \u274c Prevented | \u274c Prevented | \u2705 Possible* |\n| 4 | `SERIALIZABLE` | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n*\\*Note: In PostgreSQL, `REPEATABLE READ` also prevents phantom reads via snapshot isolation.*\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "83c3c3560e2950026c56a676f5f653aab834bc4e950073771cb8c88269059310",
+      "ttft_s": 0.5371643751859665,
+      "content_ttft_s": 0.5371657190844417,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0293,
+        "decode_s": 13.0343,
+        "rounds": 75,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 252,
+        "accepted": 180,
+        "token_sha": "e702db1a1336"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.5725107640028,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read data that has been modified by another transaction but not yet committed. |\n| 2 | **Read Committed** | A transaction can only read data that has been committed by other transactions. |\n| 3 | **Repeatable Read** | A transaction can repeatedly read the same data and always see the same value, even if other transactions have modified it. |\n| 4 | **Serializable** | The highest level. Transactions are executed as if they were run sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 10",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "1e15a1fa2e29e374dba632c7a349ce85c4179f2321b683fee89212459d49cd46",
+      "ttft_s": 0.5301332492381334,
+      "content_ttft_s": 0.5301346248015761,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0304,
+        "decode_s": 13.24,
+        "rounds": 77,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 272,
+        "accepted": 178,
+        "token_sha": "6dade8afda26"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.770934615284204,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read uncommitted changes from other transactions. |\n| 2 | **Read Committed** | A transaction can only read committed data. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data as it existed at the start of the transaction. |\n| 4 | **Serializable** | Transactions are executed as if they ran sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts SET balance = balance + 100 WHERE id =",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "a0256e698778f14ddec226ac3e90a6a6afe12ee02a2cabc2aacf0bd4cfb2e218",
+      "ttft_s": 0.5277747502550483,
+      "content_ttft_s": 0.5277766063809395,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0416,
+        "decode_s": 13.4631,
+        "rounds": 80,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 260,
+        "accepted": 175,
+        "token_sha": "35daf05a82c4"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.991481333971024,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read data that has been modified but not yet committed by another transaction. |\n| 2 | **Read Committed** | A transaction can only read data that has been committed. Prevents *dirty reads*. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data as it existed at the start of the transaction. Prevents *non-repeatable reads*. |\n| 4 | **Serializable** | Transactions are executed as if they were run sequentially, one after another. Prevents *phantom reads*. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "246fd80409f9a889ee4d29d27d50db5f44616f26c4cae293be8ed2f90da90bcb",
+      "ttft_s": 0.5313698342069983,
+      "content_ttft_s": 0.5313703780993819,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0295,
+        "decode_s": 14.2799,
+        "rounds": 84,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 285,
+        "accepted": 171,
+        "token_sha": "cc7bb80cfa76"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 14.81286629382521,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read uncommitted changes from other transactions. |\n| 2 | **Read Committed** | A transaction can only read committed data. Prevents dirty reads. |\n| 3 | **Repeatable Read** | Guarantees that if a transaction reads a row twice, it sees the same value both times. Prevents non-repeatable reads. |\n| 4 | **Serializable** | The highest level. Transactions are executed as if they were run sequentially. Prevents phantom reads. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "a3412fde608adb83ec219cb0cf034d61eb14ca04cb3dd5657c855d4aa2a919d4",
+      "ttft_s": 0.5380288623273373,
+      "content_ttft_s": 0.5380299976095557,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0292,
+        "decode_s": 13.1539,
+        "rounds": 76,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 279,
+        "accepted": 179,
+        "token_sha": "4f11ab640e41"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.694309805519879,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read data that has been modified by another transaction but not yet committed. |\n| 2 | **Read Committed** | A transaction can only read data that has been committed by other transactions. |\n| 3 | **Repeatable Read** | A transaction can re-read the same data and see the same values throughout its duration. |\n| 4 | **Serializable** | Transactions are executed as if they were run sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "70cfcbd1846ca4f520d23737c3a8f674295498e43a25f251ebbefea759a0b586",
+      "ttft_s": 0.5288304220885038,
+      "content_ttft_s": 0.5288315108045936,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 256,
+        "total_tokens": 297,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0355,
+        "decode_s": 12.7504,
+        "rounds": 73,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 283,
+        "accepted": 182,
+        "token_sha": "dd35711ffffc"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.283743728883564,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between consistency and concurrency.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read uncommitted changes from other transactions. |\n| 2 | **Read Committed** | A transaction can only read committed data. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data as it existed at the start of the transaction. |\n| 4 | **Serializable** | Transactions are executed as if they ran sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts SET balance = balance + 100 WHERE id = 'B';\nCOM",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "4db76d980ed218ab29c915be5b6757a2081e4de7f3206d786727422aeda533cb",
+      "ttft_s": 0.5588017283007503,
+      "content_ttft_s": 0.5588026558980346,
+      "usage": {
+        "prompt_tokens": 42,
+        "completion_tokens": 256,
+        "total_tokens": 298,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0292,
+        "decode_s": 13.1455,
+        "rounds": 76,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 265,
+        "accepted": 179,
+        "token_sha": "f3514dddaffc"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.696019579656422,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. The SQL standard defines four isolation levels, each offering a trade-off between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|-------|-----------|---------------------|--------------|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible* |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n*\\*Note: Some databases (e.g., PostgreSQL) prevent phantom reads at the Repeatable Read level via snapshot isolation.*\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id =",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "503c2c534d5dea7248c4e4fc604260a26c30459c8ba7f8e73c94f28126e96431",
+      "ttft_s": 0.54168482683599,
+      "content_ttft_s": 0.5416854349896312,
+      "usage": {
+        "prompt_tokens": 42,
+        "completion_tokens": 256,
+        "total_tokens": 298,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0402,
+        "decode_s": 13.0302,
+        "rounds": 75,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 270,
+        "accepted": 180,
+        "token_sha": "09d2c52d358a"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.573767205700278,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read uncommitted changes from other transactions. |\n| 2 | **Read Committed** | A transaction can only read committed data. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data; repeated reads return the same values. |\n| 4 | **Serializable** | Transactions are executed as if they ran sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts SET balance = balance + 100 WHERE id = 'B",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "d4659598dd934b77f001cb4f304ef0523b082074f6169d6b0258174949a3dbb6",
+      "ttft_s": 0.5438778679817915,
+      "content_ttft_s": 0.5438784593716264,
+      "usage": {
+        "prompt_tokens": 42,
+        "completion_tokens": 256,
+        "total_tokens": 298,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0296,
+        "decode_s": 12.5312,
+        "rounds": 72,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 258,
+        "accepted": 183,
+        "token_sha": "65d76e07ed51"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.091466485522687,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. The SQL standard defines four isolation levels, each offering a trade-off between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|-------|-----------|---------------------|--------------|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible* |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n*\\*Note: In PostgreSQL, `REPEATABLE READ` also prevents phantom reads via snapshot isolation.*\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\n",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "0a564a8ea5c6d5375f0c11e453ba809b60f10d1caca968ead7082a16b019660a",
+      "ttft_s": 0.5472419736906886,
+      "content_ttft_s": 0.547242933884263,
+      "usage": {
+        "prompt_tokens": 42,
+        "completion_tokens": 256,
+        "total_tokens": 298,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0293,
+        "decode_s": 12.3292,
+        "rounds": 71,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 256,
+        "accepted": 184,
+        "token_sha": "956b21f70081"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 12.879774102941155,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. The SQL standard defines four isolation levels, each offering a trade-off between **consistency** and **concurrency/performance**.\n\n### The Four Isolation Levels\n\n| Isolation Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|---|---|---|---|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible* |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n*\\*Note: In PostgreSQL, `REPEATABLE READ` also prevents phantom reads via snapshot isolation.*\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = '",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "49df75e9f11be2e3e288c3929b2e9326227a6fd0fb8d75095aae634d0cea370c",
+      "ttft_s": 0.54488171543926,
+      "content_ttft_s": 0.5448826588690281,
+      "usage": {
+        "prompt_tokens": 42,
+        "completion_tokens": 256,
+        "total_tokens": 298,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0294,
+        "decode_s": 12.7336,
+        "rounds": 73,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 277,
+        "accepted": 182,
+        "token_sha": "0fa606b78f9f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.283251965418458,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. The SQL standard defines four isolation levels, each offering a trade-off between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|-------|-----------|---------------------|--------------|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n### Key Anomalies\n\n- **Dirty Read**: Reading uncommitted data from another transaction that may later roll back.\n- **Non-Repeatable Read**: Re-reading the same row within a transaction yields different values because another transaction modified it.\n- **Phantom Read**: Re-executing a range query yields different rows because another transaction inserted/deleted rows matching the predicate.\n\n###",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "c99479c9bccded4679ad68cd63ef342c75de3d08a5dd01f1a88df7c4a0356d4f",
+      "ttft_s": 0.5440127495676279,
+      "content_ttft_s": 0.5440134210512042,
+      "usage": {
+        "prompt_tokens": 42,
+        "completion_tokens": 256,
+        "total_tokens": 298,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0305,
+        "decode_s": 13.1512,
+        "rounds": 76,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 262,
+        "accepted": 179,
+        "token_sha": "4f11ab640e41"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 13.695649799890816,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read data that has been modified by another transaction but not yet committed. |\n| 2 | **Read Committed** | A transaction can only read data that has been committed by other transactions. |\n| 3 | **Repeatable Read** | A transaction can re-read the same data and see the same values throughout its duration. |\n| 4 | **Serializable** | Transactions are executed as if they were run sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts",
+      "reasoning": "",
+      "tool_calls": []
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1792317551.2334297,
+      "available_gib": 10.296993255615234,
+      "swap_used_gib": 1.1845359802246094,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": false,
+        "requests_running": 0,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 212052,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 0,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317552.2349088,
+      "available_gib": 10.29245376586914,
+      "swap_used_gib": 1.1842613220214844,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 212339,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317553.2382746,
+      "available_gib": 10.29245376586914,
+      "swap_used_gib": 1.1841926574707031,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 212713,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317554.2423685,
+      "available_gib": 10.292110443115234,
+      "swap_used_gib": 1.1841659545898438,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 213029,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317555.2450337,
+      "available_gib": 10.292526245117188,
+      "swap_used_gib": 1.1841659545898438,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 213446,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317556.25219,
+      "available_gib": 10.292991638183594,
+      "swap_used_gib": 1.1841545104980469,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 213694,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317557.256393,
+      "available_gib": 10.293220520019531,
+      "swap_used_gib": 1.1840934753417969,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 214013,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317558.2606187,
+      "available_gib": 10.293220520019531,
+      "swap_used_gib": 1.1840858459472656,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 214400,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317559.263958,
+      "available_gib": 10.294391632080078,
+      "swap_used_gib": 1.18408203125,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 214709,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317560.2665832,
+      "available_gib": 10.294082641601562,
+      "swap_used_gib": 1.1840705871582031,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 214912,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317561.2703552,
+      "available_gib": 10.283416748046875,
+      "swap_used_gib": 1.1840705871582031,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 215181,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317562.274389,
+      "available_gib": 10.278018951416016,
+      "swap_used_gib": 1.1840667724609375,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 215418,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317563.2781518,
+      "available_gib": 10.278594970703125,
+      "swap_used_gib": 1.1840629577636719,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 10315,
+        "prompt_tokens_total": 6223954,
+        "completion_tokens_total": 215642,
+        "prefill_seconds_total": 1412.2562,
+        "decode_seconds_total": 6775.762,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81661,
+        "drafted_total": 253714,
+        "accepted_total": 120151,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317564.281583,
+      "available_gib": 10.279457092285156,
+      "swap_used_gib": 1.1840591430664062,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 14,
+        "requests_total": 10317,
+        "prompt_tokens_total": 6224037,
+        "completion_tokens_total": 215864,
+        "prefill_seconds_total": 1412.3147,
+        "decode_seconds_total": 6799.6878,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 81799,
+        "drafted_total": 254236,
+        "accepted_total": 120523,
+        "streams": {
+          "decoding": 14,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792317565.2843788,
+      "available_gib": 10.280536651611328,
+      "swap_used_gib": 1.1840591430664062,
+      "pswpout": 86957295,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 10330,
+        "prompt_tokens_total": 6224575,
+        "completion_tokens_total": 216137,
+        "prefill_seconds_total": 1412.7275,
+        "decode_seconds_total": 6970.0382,
+        "cached_tokens_total": 4151418,
+        "rounds_total": 82789,
+        "drafted_total": 257723,
+        "accepted_total": 122848,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    }
+  ]
+}

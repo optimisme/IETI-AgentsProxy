@@ -1,0 +1,437 @@
+{
+  "summary": {
+    "name": "prose4-trial1",
+    "requests": 4,
+    "successes": 4,
+    "full_output_requests": 4,
+    "wall_s": 7.968242845498025,
+    "aggregate_output_tok_s": 128.5101395445734,
+    "ttft_p50_s": 0.2285274169407785,
+    "ttft_p95_s": 0.23036774159409107,
+    "latency_p50_s": 6.872042986098677,
+    "output_tokens": 1024,
+    "cached_tokens": 0,
+    "input_tokens": [
+      40,
+      40,
+      40,
+      40
+    ],
+    "min_available_gib": 20.328285217285156,
+    "max_swap_used_gib": 0.25653076171875,
+    "swap_out_pages": 0,
+    "oom_kills": 0,
+    "peak_engine_running": 4,
+    "external_requests": 0
+  },
+  "before": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 10113,
+    "prompt_tokens_total": 4537527,
+    "completion_tokens_total": 190043,
+    "prefill_seconds_total": 724.7543,
+    "decode_seconds_total": 4123.053,
+    "cached_tokens_total": 3890024,
+    "rounds_total": 74050,
+    "drafted_total": 232576,
+    "accepted_total": 105931,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "after": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 10117,
+    "prompt_tokens_total": 4537687,
+    "completion_tokens_total": 191067,
+    "prefill_seconds_total": 724.9663,
+    "decode_seconds_total": 4150.4924,
+    "cached_tokens_total": 3890024,
+    "rounds_total": 74340,
+    "drafted_total": 233621,
+    "accepted_total": 106661,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "requests": [
+    {
+      "request_sha256": "2063a958aa8329ae93efabf9935201eb2345f6a0595ff6c308b85402993e2941",
+      "ttft_s": 0.2306838110089302,
+      "content_ttft_s": 0.23068445082753897,
+      "usage": {
+        "prompt_tokens": 40,
+        "completion_tokens": 256,
+        "total_tokens": 296,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0524,
+        "decode_s": 6.7123,
+        "rounds": 73,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 273,
+        "accepted": 182,
+        "token_sha": "dd35711ffffc"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 6.942932328209281,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are separated from those of other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between consistency and concurrency.\n\n### The Four Isolation Levels\n\n| Level | Name | Description |\n|-------|------|-------------|\n| 1 | **Read Uncommitted** | A transaction can read uncommitted changes from other transactions. |\n| 2 | **Read Committed** | A transaction can only read committed data. |\n| 3 | **Repeatable Read** | A transaction sees a consistent snapshot of data as it existed at the start of the transaction. |\n| 4 | **Serializable** | Transactions are executed as if they ran sequentially, one after another. |\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\nUPDATE accounts SET balance = balance + 100 WHERE id = 'B';\nCOM",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "6c3486463bdc9229b7ac532730f94b681e2c16549b7cfb407a70e250a4a9ff27",
+      "ttft_s": 0.22857668157666922,
+      "content_ttft_s": 0.22857756167650223,
+      "usage": {
+        "prompt_tokens": 40,
+        "completion_tokens": 256,
+        "total_tokens": 296,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0524,
+        "decode_s": 7.7377,
+        "rounds": 77,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 255,
+        "accepted": 178,
+        "token_sha": "df88053985be"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 7.966585137881339,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. It is governed by the **ACID** properties, specifically the **I** (Isolation). The SQL standard defines four isolation levels, each offering a trade-off between consistency and performance.\n\n### The Four SQL Isolation Levels\n\n| Isolation Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|-----------------|------------|---------------------|--------------|\n| **Read Uncommitted** | Possible | Possible | Possible |\n| **Read Committed** | Prevented | Possible | Possible |\n| **Repeatable Read** | Prevented | Prevented | Possible* |\n| **Serializable** | Prevented | Prevented | Prevented |\n\n*\\*Note: In PostgreSQL, `Repeatable Read` also prevents phantom reads via snapshot isolation.*\n\n### Example: Bank Transfer\n\nConsider two transactions transferring money between accounts A and B.\n\n```sql\n-- Transaction T1: Transfer $100 from A to B\nBEGIN;\nUPDATE accounts SET balance = balance - 100 WHERE id = 'A';\n",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "d61d22b5b5fc59cb72886d485a8a5dd29c4bc3729cff1f1ac8606a3338524f8a",
+      "ttft_s": 0.22194100264459848,
+      "content_ttft_s": 0.2219422673806548,
+      "usage": {
+        "prompt_tokens": 40,
+        "completion_tokens": 256,
+        "total_tokens": 296,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0543,
+        "decode_s": 6.5779,
+        "rounds": 71,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 255,
+        "accepted": 184,
+        "token_sha": "f23b56a59ba6"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 6.801153643988073,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. It is governed by the **ACID** properties, specifically the **I** (Isolation).\n\n### The Four Standard Isolation Levels (ANSI SQL)\n\n| Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|-------|-----------|---------------------|--------------|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n### Key Anomalies\n\n- **Dirty Read**: Reading uncommitted data from another transaction.\n- **Non-Repeatable Read**: Re-reading the same row yields different values because another transaction updated it.\n- **Phantom Read**: Re-executing a range query yields different rows because another transaction inserted/deleted rows.\n\n### Example: Bank Transfer\n\n```sql\n",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "138de18bcacdee3bdac2e21512bb30b1cbb45eb4e1ed8f66ea3919fd7ad8f687",
+      "ttft_s": 0.22847815230488777,
+      "content_ttft_s": 0.22847864869982004,
+      "usage": {
+        "prompt_tokens": 40,
+        "completion_tokens": 256,
+        "total_tokens": 296,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0529,
+        "decode_s": 6.4115,
+        "rounds": 69,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 262,
+        "accepted": 186,
+        "token_sha": "047341879295"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 6.640440304763615,
+      "content": "# Transaction Isolation, Race Conditions, and Deadlock Prevention\n\n## 1. Transaction Isolation\n\n### What It Is\nTransaction isolation defines the degree to which the operations of one transaction are visible to other concurrent transactions. The SQL standard defines four isolation levels, each offering a different balance between **consistency** and **concurrency**.\n\n### The Four Isolation Levels\n\n| Level | Dirty Read | Non-Repeatable Read | Phantom Read |\n|---|---|---|---|\n| **Read Uncommitted** | \u2705 Possible | \u2705 Possible | \u2705 Possible |\n| **Read Committed** | \u274c Prevented | \u2705 Possible | \u2705 Possible |\n| **Repeatable Read** | \u274c Prevented | \u274c Prevented | \u2705 Possible |\n| **Serializable** | \u274c Prevented | \u274c Prevented | \u274c Prevented |\n\n### Example: Bank Transfer\n\n```sql\n-- Transaction A: Transfer $100 from Account X to Account Y\nBEGIN TRANSACTION;\n    UPDATE accounts SET balance = balance - 100 WHERE id = 'X';\n    UPDATE accounts SET balance = balance + 100 WHERE id = 'Y';\nCOMMIT;\n\n-- Transaction B: Read",
+      "reasoning": "",
+      "tool_calls": []
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1792312105.2010877,
+      "available_gib": 20.366741180419922,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 2,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190043,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 0,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312106.2118099,
+      "available_gib": 20.364639282226562,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 4,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190188,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 4,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312107.2154915,
+      "available_gib": 20.365589141845703,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 4,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190314,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 4,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312108.2197363,
+      "available_gib": 20.365657806396484,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 4,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190481,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 4,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312109.223777,
+      "available_gib": 20.366668701171875,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 4,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190644,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 4,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312110.2272296,
+      "available_gib": 20.366695404052734,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 4,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190804,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 4,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312111.2305474,
+      "available_gib": 20.35882568359375,
+      "swap_used_gib": 0.25653076171875,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 4,
+        "requests_total": 10113,
+        "prompt_tokens_total": 4537527,
+        "completion_tokens_total": 190917,
+        "prefill_seconds_total": 724.7543,
+        "decode_seconds_total": 4123.053,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74050,
+        "drafted_total": 232576,
+        "accepted_total": 105931,
+        "streams": {
+          "decoding": 4,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792312112.2332132,
+      "available_gib": 20.328285217285156,
+      "swap_used_gib": 0.2565269470214844,
+      "pswpout": 86736355,
+      "oom_kill": 0,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 10116,
+        "prompt_tokens_total": 4537647,
+        "completion_tokens_total": 191050,
+        "prefill_seconds_total": 724.9139,
+        "decode_seconds_total": 4142.7547,
+        "cached_tokens_total": 3890024,
+        "rounds_total": 74263,
+        "drafted_total": 233366,
+        "accepted_total": 106483,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# Diagnostic only: same command under an idle Nsight Systems session (nsys start/stop --session=tf).
+services:
+  qwen-tensorfold-114-ple:
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        test "$$(cat /opt/ieti-native114/source-ready)" = "$${TF_PLE_PATCH_SHA256}"
+        cd /opt/ieti-native114/install/native/bin
+        sha256sum -c SHA256SUMS
+        "$${NATIVE_BINARY}" --version
+        echo "TF_FLASHNEXT_PLE_BATCH=$${TF_FLASHNEXT_PLE_BATCH}"
+        MODEL_PATH="/root/.cache/huggingface/hub/models--TensorFold--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/$${MODEL_REVISION}"
+        test -f "$$MODEL_PATH/config.json"
+        options=()
+        if [ "$${DRAFTS_ENABLED}" = 0 ]; then options+=(--no-drafts); fi
+        if [ "$${VISION_ENABLED}" = 1 ]; then options+=(--vision --vision-max-images 1 --vision-image-tokens 4096); fi
+        exec nsys launch --trace=cuda,osrt,nvtx --cuda-graph-trace=node --session-new=tf "$${NATIVE_BINARY}" serve "$$MODEL_PATH" \
+          --host 0.0.0.0 --port 8000 --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" --parallel "$${PARALLEL_STREAMS}" \
+          --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \
+          --thinking --reasoning-effort low --thinking-budget 1024 \
+          --prompt-cache-gib "$${TENSORFOLD_PROMPT_CACHE_GIB}" \
+          "$${options[@]}" --no-update-check

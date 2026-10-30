@@ -1,0 +1,618 @@
+{
+  "summary": {
+    "name": "short-n1-case2",
+    "requests": 1,
+    "successes": 1,
+    "full_output_requests": 1,
+    "wall_s": 5.223125190008432,
+    "aggregate_output_tok_s": 49.01280185466639,
+    "output_tokens": 256,
+    "ttft_p50_s": 0.16377977398224175,
+    "ttft_p95_s": 0.16377977398224175,
+    "cached_tokens": 0,
+    "input_tokens": [
+      35
+    ],
+    "external_requests": 0,
+    "initial_running": 0,
+    "final_running": 0,
+    "preemptions": 0,
+    "prefix_hits_delta": 0,
+    "min_available_gib": 26.092784881591797,
+    "swap_out_pages": 0,
+    "oom_kills": 0,
+    "peak_running": 1,
+    "peak_waiting": 0,
+    "peak_overlapping_output_streams": 1,
+    "peak_kv_usage": 0,
+    "nvme_read_gib": 0.000240325927734375,
+    "nvme_write_gib": 7.2479248046875e-05,
+    "dispatch_skew_s": 0.0,
+    "sse_gap_p95_per_user_median_s": 0.2594979086657985,
+    "worst_sse_gap_s": 0.3528951241169125,
+    "completion_p50_s": 5.222502198070288,
+    "completion_p95_s": 5.222502198070288,
+    "content_ttft_p50_s": 0.16378290997818112,
+    "content_ttft_p95_s": 0.16378290997818112,
+    "cached_users": 0,
+    "post_first_token_per_token_p50_s": 0.019836475074692977
+  },
+  "before": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 98,
+    "prompt_tokens_total": 402903,
+    "completion_tokens_total": 18944,
+    "prefill_seconds_total": 73.481,
+    "decode_seconds_total": 1557.9463,
+    "cached_tokens_total": 262178,
+    "rounds_total": 5222,
+    "drafted_total": 18158,
+    "accepted_total": 13624,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "after": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 99,
+    "prompt_tokens_total": 402938,
+    "completion_tokens_total": 19200,
+    "prefill_seconds_total": 73.5306,
+    "decode_seconds_total": 1563.0101,
+    "cached_tokens_total": 262178,
+    "rounds_total": 5281,
+    "drafted_total": 18403,
+    "accepted_total": 13820,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "client_sha256": "1213d73a334c33e41c03c78a46fc84fa819e6ab29deb9955dcb68f2991f1ce4e",
+  "requests": [
+    {
+      "request_sha256": "dfd3781eb1a03e14db488aa4c49aa30fe4101c2c9f99afa0562d41f4249a246b",
+      "token_sha256": "ddf938bbba4514f183dbfba62904d0a790f24b70426bc6da96c27989271907c0",
+      "started_monotonic": 1747970.277506778,
+      "started_epoch": 1792821045.151083,
+      "ttft_s": 0.16377977398224175,
+      "content_ttft_s": 0.16378290997818112,
+      "usage": {
+        "prompt_tokens": 35,
+        "completion_tokens": 256,
+        "total_tokens": 291,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0496,
+        "decode_s": 5.0638,
+        "rounds": 59,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 245,
+        "accepted": 196,
+        "token_sha": "b237af63b87d"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 5.222502198070288,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints and tests.\n\"\"\"\n\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\nfrom collections import OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache evicts the least recently used items when the cache is full.\n    It uses an OrderedDict to maintain the order of access.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n            \n        Raises:\n            ValueError: If capacity is less than or equal to 0.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.16377977398224175,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5166748980991542,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7705628520343453,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0488398550078273,
+          "content_bytes": 42,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3238910830114037,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3820633220020682,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4276209720410407,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5927453848998994,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6276249908842146,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.7822140310890973,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9379766560159624,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.975020820973441,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.152939101913944,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.2025080469902605,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4602778090629727,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5157114879693836,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.555990098975599,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.606927155982703,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.644750631880015,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.6962077838834375,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7388025550171733,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.789647771976888,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.842086971970275,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.873542018001899,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9050387130118906,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.944315036991611,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.080122163053602,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.250036735087633,
+          "content_bytes": 9,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2894497469533235,
+          "content_bytes": 9,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.3471131699625403,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.3868070140015334,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4289800729602575,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6122744490858167,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6535332039929926,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.709783826954663,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7657540659420192,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.823596145026386,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.8789389599114656,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.930243823910132,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.0005732269492,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.059555609012023,
+          "content_bytes": 43,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.112156647955999,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.178081299876794,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.232337907887995,
+          "content_bytes": 39,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.281833940884098,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.475277866004035,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.532748440047726,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.576105579035357,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.6360647128894925,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.694244886981323,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.756318643921986,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.816408033948392,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.86592707503587,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.904918886953965,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.9583337190561,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.015523700974882,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.083420769078657,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.138254496036097,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.181461475091055,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.222080918028951,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2594979086657985,
+      "sse_gap_max_s": 0.3528951241169125,
+      "mean_time_per_output_token_after_first_s": 0.019836475074692977
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1792821045.150875,
+      "available_gib": 26.092784881591797,
+      "swap_used_gib": 0.370819091796875,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14464279860736,
+      "nvme_write_bytes": 1012554767360,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": false,
+        "requests_running": 0,
+        "requests_total": 98,
+        "prompt_tokens_total": 402903,
+        "completion_tokens_total": 18944,
+        "prefill_seconds_total": 73.481,
+        "decode_seconds_total": 1557.9463,
+        "cached_tokens_total": 262178,
+        "rounds_total": 5222,
+        "drafted_total": 18158,
+        "accepted_total": 13624,
+        "streams": {
+          "decoding": 0,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821046.1528544,
+      "available_gib": 26.198760986328125,
+      "swap_used_gib": 0.370819091796875,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14464279934464,
+      "nvme_write_bytes": 1012554767360,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 98,
+        "prompt_tokens_total": 402903,
+        "completion_tokens_total": 18952,
+        "prefill_seconds_total": 73.481,
+        "decode_seconds_total": 1557.9463,
+        "cached_tokens_total": 262178,
+        "rounds_total": 5222,
+        "drafted_total": 18158,
+        "accepted_total": 13624,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821047.1921473,
+      "available_gib": 26.198524475097656,
+      "swap_used_gib": 0.370819091796875,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14464279934464,
+      "nvme_write_bytes": 1012554767360,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 98,
+        "prompt_tokens_total": 402903,
+        "completion_tokens_total": 18976,
+        "prefill_seconds_total": 73.481,
+        "decode_seconds_total": 1557.9463,
+        "cached_tokens_total": 262178,
+        "rounds_total": 5222,
+        "drafted_total": 18158,
+        "accepted_total": 13624,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821048.2511714,
+      "available_gib": 26.198509216308594,
+      "swap_used_gib": 0.370819091796875,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14464279971328,
+      "nvme_write_bytes": 1012554767360,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 98,
+        "prompt_tokens_total": 402903,
+        "completion_tokens_total": 19035,
+        "prefill_seconds_total": 73.481,
+        "decode_seconds_total": 1557.9463,
+        "cached_tokens_total": 262178,
+        "rounds_total": 5222,
+        "drafted_total": 18158,
+        "accepted_total": 13624,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821049.2549472,
+      "available_gib": 26.182376861572266,
+      "swap_used_gib": 0.370819091796875,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14464280081920,
+      "nvme_write_bytes": 1012554783744,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 98,
+        "prompt_tokens_total": 402903,
+        "completion_tokens_total": 19095,
+        "prefill_seconds_total": 73.481,
+        "decode_seconds_total": 1557.9463,
+        "cached_tokens_total": 262178,
+        "rounds_total": 5222,
+        "drafted_total": 18158,
+        "accepted_total": 13624,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821050.2584987,
+      "available_gib": 26.195945739746094,
+      "swap_used_gib": 0.370819091796875,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14464280118784,
+      "nvme_write_bytes": 1012554845184,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 98,
+        "prompt_tokens_total": 402903,
+        "completion_tokens_total": 19185,
+        "prefill_seconds_total": 73.481,
+        "decode_seconds_total": 1557.9463,
+        "cached_tokens_total": 262178,
+        "rounds_total": 5222,
+        "drafted_total": 18158,
+        "accepted_total": 13624,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    }
+  ],
+  "harness_sha256": "cd94c93d19398cb87ae663b4179ef90b03b8d217b01599081e5cdd281c0bf437",
+  "case_metadata": {
+    "name": "short-n1-case2",
+    "kind": "short",
+    "n": 1,
+    "fixed_output": true
+  },
+  "matrix_source_sha256": "787dffa01dbcc5456f0fe47789e2f18a64da0025d19a2dadaef925dd3fce5e61"
+}

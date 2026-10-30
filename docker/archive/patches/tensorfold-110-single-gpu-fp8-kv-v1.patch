@@ -1,0 +1,355 @@
+diff --git a/zig/kernels/cuda/flashnext_attn.cu b/zig/kernels/cuda/flashnext_attn.cu
+index 2f66798..559b204 100644
+--- a/zig/kernels/cuda/flashnext_attn.cu
++++ b/zig/kernels/cuda/flashnext_attn.cu
+@@ -3,6 +3,8 @@
+ // glue.py and attention.py's arithmetic and bf16 rounding points; the attention dots on mma tiles, K ascending.
+ 
+ #include <cuda_bf16.h>
++#include <cuda_fp8.h>
++#include <type_traits>
+ #include <math.h>
+ #include <stdint.h>
+ 
+@@ -63,12 +65,19 @@ __device__ __forceinline__ int media_pos(int pos, int d, int half, const int* ro
+     return pos < n ? rope3[axis * n + pos] : pos + delta;
+ }
+ 
++template <typename CacheT>
++__device__ __forceinline__ CacheT cache_pack(__nv_bfloat16 value) {
++    if constexpr (std::is_same_v<CacheT, __nv_bfloat16>) return value;
++    else return CacheT(__bfloat162float(value));
++}
++
+ // glue._attn_prep (text positions, bf16 cache), program (row, head): heads normed, rounded, roped, rounded, stored.
++template <typename CacheT>
+ __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
+                                                                const float* __restrict__ QW, const float* __restrict__ KW,
+                                                                const float* __restrict__ IW, const float* __restrict__ INV,
+-                                                               __nv_bfloat16* __restrict__ Q, __nv_bfloat16* __restrict__ KC,
+-                                                               __nv_bfloat16* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
++                                                               __nv_bfloat16* __restrict__ Q, CacheT* __restrict__ KC,
++                                                               CacheT* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
+                                                                __nv_bfloat16* __restrict__ IKC, float eps, int PW, int NQ, int NKV,
+                                                                int NI, int IHD, int HALF, const int* rope3, int n, int delta) {
+     __shared__ float scratch[32];
+@@ -95,8 +104,8 @@ __device__ __forceinline__ void fn_attn_prep_body(const __nv_bfloat16* __restric
+         Q[(static_cast<long long>(r) * NQ + head) * HD + d] = out;
+     } else if (!index) {
+         const long long slot = static_cast<long long>(pos) * NKV + head - NQ;
+-        KC[slot * HD + d] = out;
+-        VC[slot * HD + d] = P[row + NQ * 2 * HD + NKV * HD + (head - NQ) * HD + d];
++        KC[slot * HD + d] = cache_pack<CacheT>(out);
++        VC[slot * HD + d] = cache_pack<CacheT>(P[row + NQ * 2 * HD + NKV * HD + (head - NQ) * HD + d]);
+     } else {
+         IQ[(static_cast<long long>(r) * NI + head - NQ - NKV) * IHD + d] = out;
+     }
+@@ -205,9 +214,9 @@ extern "C" __global__ void __launch_bounds__(256) fn_qsa_scores(const __nv_bfloa
+ }
+ 
+ // attention._chunks, program (row, KV head, chunk): the chunk's keys TK at a time, online softmax, partial o, m, l.
+-template <int NB>
+-__device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ KC,
+-                                            const __nv_bfloat16* __restrict__ VC, const int* __restrict__ POS0,
++template <int NB, typename CacheT>
++__device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q, const CacheT* __restrict__ KC,
++                                            const CacheT* __restrict__ VC, const int* __restrict__ POS0,
+                                             float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
+                                             const int* __restrict__ IDS, const int* __restrict__ NKR, const int* __restrict__ SPR,
+                                             int H, int HK, int G, int CH, int NCH, float SCALE, int IDW, int QSA) {
+@@ -240,11 +249,17 @@ __device__ __forceinline__ void attn_chunks(const __nv_bfloat16* __restrict__ Q,
+         }
+         __syncthreads();
+         for (int pass = 0; pass < 2; ++pass) {
+-            const __nv_bfloat16* src = pass == 0 ? KC : VC;
++            const CacheT* src = pass == 0 ? KC : VC;
+             Row* dst = tiles_kv + (buf * 2 + pass) * TK;
+             for (int e = threadIdx.x; e < TK * HD / 8; e += blockDim.x) {
+                 const int k = e / (HD / 8), v = e % (HD / 8), key = key_ids[buf][k];
+-                qmm_frag::cp16z(&dst[k][8 * v], src + (static_cast<long long>(max(key, 0)) * HK + hk) * HD + 8 * v, key >= 0);
++                if constexpr (std::is_same_v<CacheT, __nv_bfloat16>) {
++                    qmm_frag::cp16z(&dst[k][8 * v], src + (static_cast<long long>(max(key, 0)) * HK + hk) * HD + 8 * v, key >= 0);
++                } else {
++#pragma unroll
++                    for (int j = 0; j < 8; ++j)
++                        dst[k][8 * v + j] = key >= 0 ? __float2bfloat16_rn(static_cast<float>(src[(static_cast<long long>(key) * HK + hk) * HD + 8 * v + j])) : __float2bfloat16_rn(0.0f);
++                }
+             }
+             qmm_frag::commit();
+         }
+@@ -408,3 +423,45 @@ extern "C" __global__ void __launch_bounds__(256) fn_attn_merge(const float* __r
+         OUT[(static_cast<long long>(r) * H + head) * HD + d] = __float2bfloat16_rn(__fdiv_rn(o, l));
+     }
+ }
++
++
++extern "C" __global__ void __launch_bounds__(256) fn_attn_prep_fp8(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
++                                                               const float* __restrict__ QW, const float* __restrict__ KW,
++                                                               const float* __restrict__ IW, const float* __restrict__ INV,
++                                                               __nv_bfloat16* __restrict__ Q, __nv_fp8_e4m3* __restrict__ KC,
++                                                               __nv_fp8_e4m3* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
++                                                               __nv_bfloat16* __restrict__ IKC, float eps, int PW, int NQ, int NKV,
++                                                               int NI, int IHD, int HALF) {
++    fn_attn_prep_body(P, POS0, QW, KW, IW, INV, Q, KC, VC, IQ, IKC, eps, PW, NQ, NKV, NI, IHD, HALF, nullptr, 0, 0);
++}
++
++
++extern "C" __global__ void __launch_bounds__(256) fn_attn_prep_media_fp8(const __nv_bfloat16* __restrict__ P, const int* __restrict__ POS0,
++                                                               const float* __restrict__ QW, const float* __restrict__ KW,
++                                                               const float* __restrict__ IW, const float* __restrict__ INV,
++                                                               __nv_bfloat16* __restrict__ Q, __nv_fp8_e4m3* __restrict__ KC,
++                                                               __nv_fp8_e4m3* __restrict__ VC, __nv_bfloat16* __restrict__ IQ,
++                                                               __nv_bfloat16* __restrict__ IKC, float eps, int PW, int NQ, int NKV,
++                                                               int NI, int IHD, int HALF, const int* rope3, int n, int delta) {
++    fn_attn_prep_body(P, POS0, QW, KW, IW, INV, Q, KC, VC, IQ, IKC, eps, PW, NQ, NKV, NI, IHD, HALF, rope3, n, delta);
++}
++
++
++extern "C" __global__ void __launch_bounds__(128) fn_attn_chunks_fp8(const __nv_bfloat16* __restrict__ Q, const __nv_fp8_e4m3* __restrict__ KC,
++                                                                 const __nv_fp8_e4m3* __restrict__ VC, const int* __restrict__ POS0,
++                                                                 float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
++                                                                 const int* __restrict__ IDS, const int* __restrict__ NKR,
++                                                                 const int* __restrict__ SPR, int H, int HK, int G, int CH, int NCH,
++                                                                 float SCALE, int IDW, int QSA) {
++    attn_chunks<1>(Q, KC, VC, POS0, PO, PM, PL, IDS, NKR, SPR, H, HK, G, CH, NCH, SCALE, IDW, QSA);
++}
++
++
++extern "C" __global__ void __launch_bounds__(128) fn_attn_chunks_ahead_fp8(const __nv_bfloat16* __restrict__ Q, const __nv_fp8_e4m3* __restrict__ KC,
++                                                                       const __nv_fp8_e4m3* __restrict__ VC, const int* __restrict__ POS0,
++                                                                       float* __restrict__ PO, float* __restrict__ PM, float* __restrict__ PL,
++                                                                       const int* __restrict__ IDS, const int* __restrict__ NKR,
++                                                                       const int* __restrict__ SPR, int H, int HK, int G, int CH, int NCH,
++                                                                       float SCALE, int IDW, int QSA) {
++    attn_chunks<2>(Q, KC, VC, POS0, PO, PM, PL, IDS, NKR, SPR, H, HK, G, CH, NCH, SCALE, IDW, QSA);
++}
+diff --git a/zig/src/families/flashnext/cuda_cache_type.zig b/zig/src/families/flashnext/cuda_cache_type.zig
+new file mode 100644
+index 0000000..72b832f
+--- /dev/null
++++ b/zig/src/families/flashnext/cuda_cache_type.zig
+@@ -0,0 +1,7 @@
++//! Opt-in FP8 E4M3 KV storage. Indexer keys and pooled keys remain bf16.
++const std = @import("std");
++pub fn enabled() bool {
++    const v = std.c.getenv("TF_FLASHNEXT_KV_FP8") orelse return false;
++    return std.mem.eql(u8, std.mem.span(v), "1");
++}
++pub fn elementBytes() usize { return if (enabled()) 1 else 2; }
+diff --git a/zig/src/families/flashnext/cuda_glue.zig b/zig/src/families/flashnext/cuda_glue.zig
+index 643015d..f69a93d 100644
+--- a/zig/src/families/flashnext/cuda_glue.zig
++++ b/zig/src/families/flashnext/cuda_glue.zig
+@@ -107,14 +107,14 @@ pub const Glue = struct {
+             .ple_gate = try g.hc.function("fn_ple_gate"),
+             .ple_conv = try g.hc.function("fn_ple_conv"),
+             .add_streams = try g.hc.function("fn_add_streams"),
+-            .prep = try g.attn.function("fn_attn_prep"),
+-            .prep_media = try g.attn.function("fn_attn_prep_media"),
++            .prep = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_prep_fp8" else "fn_attn_prep"),
++            .prep_media = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_prep_media_fp8" else "fn_attn_prep_media"),
+             .pool_media = try g.attn.function("fn_qsa_pool_media"),
+             .gate = try g.attn.function("fn_attn_gate"),
+             .pool = try g.attn.function("fn_qsa_pool"),
+             .scores = try g.attn.function("fn_qsa_scores"),
+-            .chunks = try g.attn.function("fn_attn_chunks"),
+-            .chunks_ahead = try g.attn.function("fn_attn_chunks_ahead"),
++            .chunks = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_chunks_fp8" else "fn_attn_chunks"),
++            .chunks_ahead = try g.attn.function(if (@import("cuda_cache_type.zig").enabled()) "fn_attn_chunks_ahead_fp8" else "fn_attn_chunks_ahead"),
+             .merge = try g.attn.function("fn_attn_merge"),
+         };
+         try g.f.chunks.allowDynamicShared(chunkSmem(1));
+diff --git a/zig/src/families/flashnext/cuda_lanes.zig b/zig/src/families/flashnext/cuda_lanes.zig
+index 67356ec..fc841c7 100644
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -358,6 +358,8 @@ pub fn Namespace(comptime Tri: type) type {
+         }
+ 
+         fn dropLane(self: *Cuda, l: *Lane) void {
++            // A graph must never retain pointers into released sequence caches.
++            self.engine.round_graph.clear();
+             if (l.draft) |*d| d.deinit();
+             if (self.ranks) |r| r.drop(&l.seq) else l.seq.deinit(self.gpa);
+         }
+diff --git a/zig/src/families/flashnext/cuda_lanes_load.zig b/zig/src/families/flashnext/cuda_lanes_load.zig
+index 34b84a9..ab819e0 100644
+--- a/zig/src/families/flashnext/cuda_lanes_load.zig
++++ b/zig/src/families/flashnext/cuda_lanes_load.zig
+@@ -9,6 +9,10 @@ const Glue = @import("cuda_glue.zig").Glue;
+ const images = @import("cuda_images.zig");
+ pub fn open(comptime F: type, gpa: std.mem.Allocator, io: std.Io, ctx: *const cuda.Context, dir: []const u8, captured: ?[]const u8, o: F.Options) !F.Loaded {
+     if (o.vision) |v| try @import("qwen_vision").media.checkLimits(v);
++    if (@import("cuda_cache_type.zig").enabled()) {
++        if (o.tp != 1 or captured != null) return error.UnsupportedFp8Configuration;
++        std.log.info("flashnext: experimental FP8 E4M3 keys/values, bf16 indexer; single GPU native kernels", .{});
++    }
+     const Cuda = F.Cuda;
+     const round_streams = 32;
+ 
+diff --git a/zig/src/families/flashnext/cuda_mtp_draft.zig b/zig/src/families/flashnext/cuda_mtp_draft.zig
+index 1ae18ae..4ee57ec 100644
+--- a/zig/src/families/flashnext/cuda_mtp_draft.zig
++++ b/zig/src/families/flashnext/cuda_mtp_draft.zig
+@@ -91,15 +91,15 @@ pub const Draft = struct {
+ 
+     /// Device bytes `init(cap, draft_n, rows)` allocates.
+     pub fn bytes(cap: usize, draft_n: usize, rows: usize) usize {
+-        return cap * (2 * prompt.kv_row_bytes + index_dim * 2) + prompt.pooledBytes(cap) + @max(rows, max_rows) * wide * 2 + wide * 2 + max_rows * vocab * 2 + draft_n * 2 + max_rows * 16 + saved_bytes + linear_n * state_n * 4;
++        return cap * (2 * prompt.kvRowBytes() + index_dim * 2) + prompt.pooledBytes(cap) + @max(rows, max_rows) * wide * 2 + wide * 2 + max_rows * vocab * 2 + draft_n * 2 + max_rows * 16 + saved_bytes + linear_n * state_n * 4;
+     }
+ 
+     /// A head cache of `cap` entries; `rows` the widest prompt chunk whose streams it keeps.
+     pub fn init(gpa: std.mem.Allocator, driver: *cuda.Driver, stream: cuda.Stream, cap: usize, draft_n: usize, rows: usize) !Draft {
+         var d: Draft = .{ .gpa = gpa, .cap = cap, .rows_cap = @max(rows, max_rows), .kc = undefined, .vc = undefined, .ikc = undefined, .pooled = undefined, .streams = undefined, .out = undefined, .logits = undefined, .dlogits = undefined, .best = undefined, .saved = undefined, .host = undefined };
+-        d.kc = try cuda.DeviceBuffer.alloc(driver, cap * kv_heads * head_dim * 2);
++        d.kc = try cuda.DeviceBuffer.alloc(driver, cap * prompt.kvRowBytes());
+         errdefer d.kc.free();
+-        d.vc = try cuda.DeviceBuffer.alloc(driver, cap * kv_heads * head_dim * 2);
++        d.vc = try cuda.DeviceBuffer.alloc(driver, cap * prompt.kvRowBytes());
+         errdefer d.vc.free();
+         d.ikc = try cuda.DeviceBuffer.alloc(driver, cap * index_dim * 2);
+         errdefer d.ikc.free();
+diff --git a/zig/src/families/flashnext/cuda_prompt.zig b/zig/src/families/flashnext/cuda_prompt.zig
+index 5009a98..54ae984 100644
+--- a/zig/src/families/flashnext/cuda_prompt.zig
++++ b/zig/src/families/flashnext/cuda_prompt.zig
+@@ -97,11 +97,12 @@ pub const max_tokens: usize = weights.window;
+ 
+ /// One position's keys and values in one attention layer, bf16.
+ pub const kv_row_bytes: usize = kv_heads * head_dim * 2;
++pub fn kvRowBytes() usize { return kv_heads * head_dim * @import("cuda_cache_type.zig").elementBytes(); }
+ 
+ /// Device bytes `Engine.newSeq(cap)` allocates: conv tails, recurrent states, KV with indexer keys, the n-gram tail.
+ pub fn seqBytes(cap: usize) usize {
+     const linear = linear_n * ((gdn.taps - 1) * gdn.conv_dim * 2 + state_n * 4);
+-    const attn = attn_n * (cap * (2 * kv_row_bytes + index_dim * 2) + pooledBytes(cap));
++    const attn = attn_n * (cap * (2 * kvRowBytes() + index_dim * 2) + pooledBytes(cap));
+     return linear + attn + ple_tail_n * wide * 2;
+ }
+ 
+@@ -136,6 +137,7 @@ pub const Engine = struct {
+     /// Rows a batched chunk takes at most (TF_FLASHNEXT_CHUNK; batch.default_chunk by default).
+     chunk: usize,
+     round_graph: round_graph.Cache = .{},
++    next_graph_owner: u64 = 1,
+     image_factory: ?*@import("cuda_images.zig").Vision = null,
+     collective: ?*@import("cuda_collective.zig").Collective = null,
+ 
+@@ -156,6 +158,7 @@ pub const Engine = struct {
+         e.collective = null;
+         e.image_factory = null;
+         e.round_graph = .{};
++        e.next_graph_owner = 1;
+         errdefer for (e.layers[0..e.n_layers]) |*l| l.free(gpa);
+         e.model_dir = try gpa.dupe(u8, model_dir);
+         errdefer gpa.free(e.model_dir);
+@@ -229,15 +232,17 @@ pub const Engine = struct {
+     pub fn newSeq(e: *Engine, cap: usize) !Seq {
+         e.round_graph.clear();
+         if (cap == 0) return error.UnexpectedTensor;
++        const graph_owner = e.next_graph_owner;
++        e.next_graph_owner = std.math.add(u64, graph_owner, 1) catch return error.GraphOwnerExhausted;
+         const logits = try e.gpa.alloc(u8, vocab * 2);
+         errdefer e.gpa.free(logits);
+         const conv = try zeros(e.gpa, e.driver, e.stream.*, linear_n, (gdn.taps - 1) * gdn.conv_dim * 2);
+         errdefer freeOwned(e.gpa, conv);
+         const state = try zeros(e.gpa, e.driver, e.stream.*, linear_n, state_n * 4);
+         errdefer freeOwned(e.gpa, state);
+-        const kc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kv_heads * head_dim * 2);
++        const kc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kvRowBytes());
+         errdefer freeOwned(e.gpa, kc);
+-        const vc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kv_heads * head_dim * 2);
++        const vc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * kvRowBytes());
+         errdefer freeOwned(e.gpa, vc);
+         const ikc = try zeros(e.gpa, e.driver, e.stream.*, attn_n, cap * index_dim * 2);
+         errdefer freeOwned(e.gpa, ikc);
+@@ -247,6 +252,7 @@ pub const Engine = struct {
+         errdefer tail.free();
+         try tail.fill8(0, e.stream.handle);
+         return .{
++            .graph_owner = graph_owner,
+             .conv = conv,
+             .state = state,
+             .kc = kc,
+@@ -357,7 +363,7 @@ pub const Engine = struct {
+         const has_media = for (seqs) |q| {
+             if (q.media != null) break true;
+         } else false;
+-        if (e.collective != null and round_graph.enabled() and !has_media) {
++        if (round_graph.enabled() and !has_media) {
+             const key = try round_graph.Key.init(seqs, s.ids, scores, out);
+             try e.round_graph.run(key, &p, ids);
+         } else try p.chunk(ids, 0, null);
+@@ -374,6 +380,8 @@ pub const Engine = struct {
+ pub const Seq = struct {
+     media: ?@import("cuda_media.zig").State = null,
+     rank_id: u64 = 0,
++    /// Unique within this engine; prevents decode-graph reuse after a cache owner changes.
++    graph_owner: u64 = 0,
+     conv: []cuda.DeviceBuffer,
+     state: []cuda.DeviceBuffer,
+     kc: []cuda.DeviceBuffer,
+diff --git a/zig/src/families/flashnext/cuda_round_graph.zig b/zig/src/families/flashnext/cuda_round_graph.zig
+index e367e31..7ea659b 100644
+--- a/zig/src/families/flashnext/cuda_round_graph.zig
++++ b/zig/src/families/flashnext/cuda_round_graph.zig
+@@ -21,8 +21,9 @@ pub const Key = struct {
+         if (seqs.len == 0 or seqs.len > 32) return error.UnexpectedTensor;
+         var key: Key = .{ .count = seqs.len, .scratch = scratch, .scores = scores, .output = output };
+         for (seqs, 0..) |q, i| {
+-            if (q.rank_id == 0) return error.UnsupportedRankOperation;
+-            key.owners[i] = q.rank_id;
++            const owner = if (q.rank_id != 0) q.rank_id else q.graph_owner;
++            if (owner == 0) return error.UnsupportedRankOperation;
++            key.owners[i] = owner;
+             const end = q.fed + 1;
+             key.chunks[i] = @intCast((@min(end, 2051) + 511) / 512);
+             key.score_tiles[i] = if (end / 4 > 512) @intCast(((end + 3) / 4 + 63) / 64) else 0;
+@@ -78,7 +79,7 @@ pub const Cache = struct {
+ };
+ 
+ test "decode graph keys invalidate on owner order, attention seams and score tile seams" {
+-    const Seq = struct { rank_id: u64, fed: usize };
++    const Seq = struct { rank_id: u64, graph_owner: u64 = 0, fed: usize };
+     var first: Seq = .{ .rank_id = 1, .fed = 10 };
+     var second: Seq = .{ .rank_id = 2, .fed = 10 };
+     const base = try Key.init(@as([]const *Seq, &.{ &first, &second }), 1, 2, 3);
+@@ -96,3 +97,13 @@ test "decode graph keys invalidate on owner order, attention seams and score til
+     first.fed = 2304;
+     try std.testing.expect(!std.meta.eql(score, try Key.init(@as([]const *Seq, &.{&first}), 1, 2, 3)));
+ }
++
++ test "single GPU graph owners reject unknown caches and invalidate replacement" {
++    const Seq = struct { rank_id: u64 = 0, graph_owner: u64 = 0, fed: usize = 10 };
++    var q: Seq = .{};
++    try std.testing.expectError(error.UnsupportedRankOperation, Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3));
++    q.graph_owner = 1;
++    const first = try Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3);
++    q.graph_owner = 2;
++    try std.testing.expect(!std.meta.eql(first, try Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3)));
++}
+diff --git a/zig/src/families/flashnext/cuda_snap.zig b/zig/src/families/flashnext/cuda_snap.zig
+index 0e55180..919c593 100644
+--- a/zig/src/families/flashnext/cuda_snap.zig
++++ b/zig/src/families/flashnext/cuda_snap.zig
+@@ -14,7 +14,7 @@ const tail_bytes = wt.ple_tail_n * wt.wide * 2;
+ 
+ /// One attention cache's first `at` key, value and indexer-key rows, and the pooled blocks they complete.
+ fn attnBytes(at: usize) usize {
+-    return at * (2 * prompt.kv_row_bytes + index_row) + at / wt.index_ratio * index_row;
++    return at * (2 * prompt.kvRowBytes() + index_row) + at / wt.index_ratio * index_row;
+ }
+ 
+ /// Device bytes a state after `at` tokens takes: the DeltaNet's are fixed, each attention cache grows by the token.
+@@ -38,8 +38,8 @@ const Piece = struct { bufs: []cuda.DeviceBuffer, n: usize };
+ /// An attention cache's pieces for `at` rows: complete pooled blocks only (the rest pool again as later rows land).
+ fn attnPieces(kc: []cuda.DeviceBuffer, vc: []cuda.DeviceBuffer, ikc: []cuda.DeviceBuffer, pooled: []cuda.DeviceBuffer, at: usize) [4]Piece {
+     return .{
+-        .{ .bufs = kc, .n = at * prompt.kv_row_bytes },
+-        .{ .bufs = vc, .n = at * prompt.kv_row_bytes },
++        .{ .bufs = kc, .n = at * prompt.kvRowBytes() },
++        .{ .bufs = vc, .n = at * prompt.kvRowBytes() },
+         .{ .bufs = ikc, .n = at * index_row },
+         .{ .bufs = pooled, .n = at / wt.index_ratio * index_row },
+     };

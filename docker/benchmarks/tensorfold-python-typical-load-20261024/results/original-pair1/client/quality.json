@@ -1,0 +1,374 @@
+{
+  "cases": [
+    {
+      "case": "reasoning-n1",
+      "checks": [
+        {
+          "expected": 58,
+          "passed": false,
+          "reasoning_bytes": 2086,
+          "content": "## Engineering Risk Summary\n\n**1. Severe Version Fragmentation**\n78 items span versions 0\u201399 with no discernible clustering or pinning strategy. This creates a large compatibility surface area, increases the risk of integration conflicts, and makes coordinated upgrades nearly impossible.\n\n**2. Duplicate / Stale Version Usage**\nSeveral versions are reused across unrelated items (e.g., version 4 appears in entries 34, 43, 49, 72; version 82 in 6, 13, 73; version 91 in 1, 27, 39). This may indicate copy-paste dependency declarations, lack of a central lockfile, or drift from a shared baseline.\n\n**3. Version 0 (Entry 9)**\n`item_246882` pinned to version 0 likely represents an uninitialized, placeholder, or default dependency \u2014 a common source of silent breakage when the real dependency is eventually resolved.\n\n**4. Uniform \"Tests Pass\" Signal**\nEvery single entry reports \"tests pass.\" While superficially healthy, this uniformity raises suspicion:\n- Tests may be too shallow (smoke-level only).\n- The test harness may not actually exercise the version-specific code paths.\n- There is no differentiation in test depth or coverage across 78 heterogeneous items.\n\n**5. No Failure / Rollback / Audit Trail**\nThe log contains no entries for failures, rollbacks, or version bumps, suggesting either a very young project or an incomplete logging practice that would hinder incident forensics.\n\n**6. High Cardinality of Item IDs**\nItem IDs appear to be large, non-sequential integers (e.g., 631533, 652596, 24677), hinting at auto-generated identifiers with no grouping or module structure \u2014 making ownership and blast-radius analysis difficult.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [7, 3, 8] if x%2)\n```\n\n- 7 % 2 \u2192 truthy \u2192 49\n- 3 % 2 \u2192 truthy \u2192 9\n- 8 % 2 \u2192 falsy \u2192 excluded\n\n**58**"
+        }
+      ],
+      "passed": 0,
+      "requests": 1
+    },
+    {
+      "case": "tool-n1",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "arguments": {
+            "value": 42
+          },
+          "reasoning_bytes": 68
+        }
+      ],
+      "passed": 1,
+      "requests": 1
+    },
+    {
+      "case": "tool-return-n1",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "content": "42"
+        }
+      ],
+      "passed": 1,
+      "requests": 1
+    },
+    {
+      "case": "reasoning-n2",
+      "checks": [
+        {
+          "expected": 58,
+          "passed": false,
+          "reasoning_bytes": 2048,
+          "content": "## Engineering Risk Summary\n\n### 1. Extreme Version Fragmentation\nVersions span the entire range from **0 to 99** across 78 items. This wide dispersion suggests a lack of version governance or a centralized dependency/versioning policy. Items on version 0 (entry 9) and version 99 (entry 52) coexist, indicating no enforced baseline or upgrade cadence.\n\n### 2. High Duplicate-Version Concentration\nMultiple items share identical version numbers, which may indicate:\n- **Stale or un-updated dependencies** (e.g., version 4 appears in 4 entries: 34, 43, 49, 72).\n- **Potential copy-paste or template-driven versioning** rather than per-item evaluation.\n- Clusters like version 82 ("
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 2224,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\n78 items span versions 0\u201399 with no apparent consolidation strategy. Many items share the same version (e.g., version 4 appears 4 times, version 82 appears 3 times, version 91 appears 3 times), suggesting ad-hoc versioning rather than a controlled release process.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` uses version 0, which typically signals an uninitialized, default, or placeholder version \u2014 a strong indicator of incomplete integration or a forgotten dependency.\n\n**3. \"Tests Pass\" Without Context**\nEvery single entry reports \"tests pass\" with no differentiation in test scope, coverage, or environment. This uniformity raises the risk that:\n- Tests are shallow or not actually executed.\n- There is no mechanism to detect regressions between versions.\n- A false sense of confidence is created across the entire system.\n\n**4. No Dependency or Interaction Tracking**\nThe log records items and versions in isolation. There is no evidence of tracking inter-item dependencies, making it impossible to assess blast radius if one item's version changes.\n\n**5. No Failure or Rollback Pathways**\nThe log contains no entries for test failures, rollbacks, or version downgrades \u2014 suggesting either a lack of failure handling or that failures are not being recorded.\n\n**6. High Version Spread Without Rationale**\nVersions range from 0 to 99 with no visible pattern (e.g., version 95 used twice, version 99 used once, version 1 used once). This makes it difficult to reason about compatibility matrices or upgrade paths.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [8, 3, 8] if x%2)\n```\n\n- `8 % 2 == 0` \u2192 excluded\n- `3 % 2 == 1` \u2192 included \u2192 3\u00b2 = 9\n- `8 % 2 == 0` \u2192 excluded\n\n**9**"
+        }
+      ],
+      "passed": 0,
+      "requests": 2
+    },
+    {
+      "case": "tool-n2",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "arguments": {
+            "value": 42
+          },
+          "reasoning_bytes": 107
+        },
+        {
+          "expected": 43,
+          "passed": true,
+          "arguments": {
+            "value": 43
+          },
+          "reasoning_bytes": 68
+        }
+      ],
+      "passed": 2,
+      "requests": 2
+    },
+    {
+      "case": "tool-return-n2",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "content": "42"
+        },
+        {
+          "expected": 43,
+          "passed": true,
+          "content": "43"
+        }
+      ],
+      "passed": 2,
+      "requests": 2
+    },
+    {
+      "case": "reasoning-n4",
+      "checks": [
+        {
+          "expected": 58,
+          "passed": false,
+          "reasoning_bytes": 2508,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\n78 items span versions 0\u201399 with no discernible clustering. This wide spread (e.g., version 0 alongside version 99) suggests items are at wildly different maturity levels, making coordinated upgrades, rollback strategies, and compatibility testing extremely difficult.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` uses version 0, which typically signals an uninitialized, default, or placeholder version. This is a latent defect risk \u2014 the item may never have been properly versioned or reviewed.\n\n**3. Repeated Version Collisions**\nMultiple items share the same version number (e.g., version 4 appears in entries 34, 43, 49, 72; version 82 in entries 6, 13, 73; version 9"
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 2492,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\n78 items span versions 0\u201399 with very few repeats. This wide dispersion suggests a lack of centralized dependency/version governance, increasing the risk of incompatible interactions, untested version combinations, and difficulty reproducing builds.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` uses version **0**, which typically indicates an uninitialized, placeholder, or development-only version. This is a high-severity risk: it may represent an unversioned or untracked dependency that could silently break.\n\n**3. Low-Version Concentration (Versions 1\u20134)**\nVersions 1, 3, and 4 appear across multiple items (version 4 alone appears in entries 34, 43, 49"
+        },
+        {
+          "expected": 90,
+          "passed": false,
+          "reasoning_bytes": 1601,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\nThe log shows 78 items spanning versions 0 through 99 with no discernible clustering. This wide spread (nearly every integer in the range appears) suggests a lack of version governance or pinning strategy, increasing the risk of incompatible interactions between components.\n\n**2. Duplicate Version Collisions**\nSeveral versions are reused across unrelated items (e.g., version 4 \u2192 entries 34, 43, 49, 72; version 45 \u2192 entries 7, 16, 42; version 82 \u2192 entries 6, 13, 73; version 91 \u2192 entries 1, 27, 39). If these represent the same dependency, the lack of a single source of truth for version pinning is a maintenance and reproducibility risk.\n\n**3. Version 0 Usage (Entry 9)**\n`item_246882` uses version 0, which typically signals an uninitialized, placeholder, or default version. This is a latent defect risk\u2014tests may pass in isolation but the component may be functionally inert or misconfigured.\n\n**4. \"Tests Pass\" as a Sole Signal**\nEvery entry reports \"tests pass\" with no additional context (coverage %, flakiness, environment). This uniformity is itself a risk: it may indicate insufficient test depth, a rubber-stamp CI gate, or that the test suite does not exercise cross-version interaction paths.\n\n**5. No Dependency Graph or Conflict Reporting**\nThe log records only (item, version, pass/fail). There is no evidence of conflict detection, transitive-dependency resolution, or compatibility matrix validation\u2014common failure modes in large dependency trees.\n\n**6. Scale Without Governance**\n78 items with near-unique versions and no visible grouping into families or tiers suggests the project may be approaching a complexity threshold where manual tracking becomes error-prone, raising the risk of silent regressions during upgrades.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [9, 3, 8] if x%2)\n```\n\n- 9 % 2 = 1 \u2192 81\n- 3 % 2 = 1 \u2192 9\n- 8 % 2 = 0 \u2192 excluded\n\n81 + 9 = **90**"
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 2176,
+          "content": "## Engineering Risk Summary\n\n**1. Version Fragmentation / Sprawl**\n78 items span versions 0\u201399 with no evident consolidation strategy. Many distinct version numbers are in circulation simultaneously, increasing the risk of incompatibility, patch drift, and untracked regressions when upgrades are attempted.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` is pinned to version 0, which typically signals an uninitialized, default, or untracked dependency. This is a latent risk: if version 0 is a sentinel meaning \"unresolved,\" the item may silently pull an untested or placeholder build.\n\n**3. Duplicate Version Pinning**\nMultiple items share identical version numbers (e.g., version 4 \u2192 entries 34, 43, 49, 72; version 82 \u2192 entries 6, 13, 73; version 91 \u2192 entries 1, 27, 39). If a shared version contains a latent defect, a single CVE or regression could cascade across all dependents simultaneously.\n\n**4. \"Tests Pass\" as a Sole Signal**\nEvery entry reports \"tests pass,\" yet the log provides no evidence of integration, fuzz, or property-based testing. Uniformly green results across 78 heterogeneous items may indicate insufficient test depth or a test suite that doesn't exercise cross-item interaction paths.\n\n**5. No Dependency / Compatibility Graph**\nThe log records version numbers in isolation with no declared inter-item dependencies. Without a dependency graph, a version bump in one item cannot be assessed for blast radius on others.\n\n**6. Lack of Version Provenance**\nThere is no indication of *why* a particular version was chosen (e.g., \"pinned to 45 due to API break in 46\"). This makes future upgrades or rollbacks a guesswork exercise.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [10, 3, 8] if x%2)\n```\n\n- `10 % 2 == 0` \u2192 excluded\n- `3 % 2 == 1` \u2192 included \u2192 3\u00b2 = 9\n- `8 % 2 == 0` \u2192 excluded\n\n**9**"
+        }
+      ],
+      "passed": 0,
+      "requests": 4
+    },
+    {
+      "case": "tool-n4",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "arguments": {
+            "value": 42
+          },
+          "reasoning_bytes": 103
+        },
+        {
+          "expected": 43,
+          "passed": true,
+          "arguments": {
+            "value": 43
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 44,
+          "passed": true,
+          "arguments": {
+            "value": 44
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 45,
+          "passed": true,
+          "arguments": {
+            "value": 45
+          },
+          "reasoning_bytes": 68
+        }
+      ],
+      "passed": 4,
+      "requests": 4
+    },
+    {
+      "case": "tool-return-n4",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "content": "42"
+        },
+        {
+          "expected": 43,
+          "passed": true,
+          "content": "43"
+        },
+        {
+          "expected": 44,
+          "passed": true,
+          "content": "44"
+        },
+        {
+          "expected": 45,
+          "passed": true,
+          "content": "45"
+        }
+      ],
+      "passed": 4,
+      "requests": 4
+    },
+    {
+      "case": "reasoning-n8",
+      "checks": [
+        {
+          "expected": 58,
+          "passed": false,
+          "reasoning_bytes": 2356,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\n78 items span versions 0\u201399 with no discernible pattern. This makes it nearly impossible to reason about compatibility, apply coordinated upgrades, or identify which items share a common baseline.\n\n**2. Version 0 Usage (Entry 9)**\nVersion 0 likely represents an uninitialized, default, or sentinel value \u2014 a silent risk if it bypasses version-gated logic or dependency resolution.\n\n**3. Uniform \"Tests Pass\" with No Failure Signal**\nEvery single entry reports \"tests pass.\" This is itself a risk signal: it may indicate insufficient test depth, missing integration/contract tests, or a test harness that doesn't actually validate cross-version interactions.\n\n**4. No Dependency or Interaction Metadata**\nThe log records only (item, version, pass/fail). There is no information about inter-item dependencies, so cascade-failure risk from a version change in one item propagating to others is unassessable.\n\n**5. Repeated Version Numbers Across Unrelated Items**\nVersion 82 appears in entries 6, 13, 73; version 45 in 7, 16, 42; version 4 in 34, 43, 49, 72; etc. Without knowing whether these refer to the same artifact or coincidentally identical version strings, there is ambiguity that can mask real coupling.\n\n**6. No Environment, Platform, or Time Context**\nNo timestamps, no platform tags, no environment labels \u2014 making reproducibility and rollback planning impossible from this log alone.\n\n---\n\n## Computation\n\n```python\nsum(x*x for x in [7, 3, 8] if x%2)\n```\n\n- 7 % 2 = 1 \u2192 49\n- 3 % 2 = 1 \u2192 9\n- 8 % 2 = 0 \u2192 excluded\n\n**58**"
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 2111,
+          "content": "## Engineering Risk Summary\n\n**1. Dependency Fragmentation / Version Sprawl**\nThe log shows an extremely wide spread of version numbers (0 through 99) across 78 items. Many items share the same version (e.g., version 4 appears in 4 entries, version 82 in 3, version 91 in 3, version 45 in 3, version 11 in 3, version 30 in 3). This suggests either a lack of version pinning discipline or a large, fragmented dependency graph that increases integration risk and makes coordinated upgrades difficult.\n\n**2. Suspicious Version 0 (Entry 9)**\n`item_246882` uses version 0, which typically indicates an uninitialized, placeholder, or default/unpinned dependency. This is a red flag for an untested or unmanaged component.\n\n**3. \"Tests Pass\" Without Context**\nEvery single entry reports \"tests pass\" with no additional detail (coverage %, test type, environment). This uniformity raises the risk that tests are shallow, not representative of production conditions, or that the log is auto-generated without meaningful validation.\n\n**4. No Failure or Regression Signals**\nThe absence of any failing or skipped test across 78 entries may indicate insufficient test sensitivity or an over-reliance on a single test harness that cannot detect regressions.\n\n**5. No Traceability or Ownership**\nThe log lacks author, date, commit hash, or reviewer information, making it impossible to trace changes, assign accountability, or perform root-cause analysis if a defect is later discovered.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x"
+        },
+        {
+          "expected": 90,
+          "passed": false,
+          "reasoning_bytes": 1763,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\n78 items span versions 0\u201399 with no discernible pattern or grouping. This suggests no coordinated versioning strategy, increasing the risk of incompatibility, untested interaction surfaces, and upgrade confusion.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` is pinned to version 0, which commonly signals an uninitialized, placeholder, or development-state dependency \u2014 a latent failure point.\n\n**3. Uniformly Passing Tests (Possible Coverage Gap)**\nEvery single entry reports \"tests pass.\" In a system with this much version diversity, a 100 % pass rate may indicate insufficient test depth, missing integration tests, or tests that don't exercise cross-version interactions.\n\n**4. No Dependency Graph or Rationale**\nThe log records *what* version each item uses but never *why* or *what it depends on*. Without a dependency map, a single version bump could silently cascade failures.\n\n**5. No Pinning / Lockfile Evidence**\nThe absence of any lockfile, constraint, or range notation implies versions may be resolved dynamically at build time, risking non-reproducible builds.\n\n**6. High-Cardinality Version Space**\nWith ~50+ distinct version numbers across 78 items, the combinatorial test matrix is enormous, making it practically impossible to validate all interaction pairs.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [9, 3, 8] if x%2)\n```\n\n- 9 % 2 \u2192 truthy \u2192 81\n- 3 % 2 \u2192 truthy \u2192 9\n- 8 % 2 \u2192 falsy \u2192 excluded\n\n81 + 9 = **90**"
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 2205,
+          "content": "## Engineering Risk Summary\n\n**1. Severe Version Fragmentation**\n78 items span versions 0\u201399 with no discernible clustering or consolidation strategy. This makes dependency tracking, rollback, and compatibility auditing extremely difficult.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` is pinned to version 0, which typically signals an uninitialized, placeholder, or default version \u2014 a latent defect risk.\n\n**3. Widespread Version Duplication**\nMultiple items share identical versions (e.g., version 4 appears in 4 entries, version 82 in 3, version 91 in 3, version 45 in 3, version 11 in 3, version 30 in 3). This suggests copy-paste pinning or a lack of per-item version governance.\n\n**4. Uniform \"Tests Pass\" Signal**\nEvery single entry reports \"tests pass.\" While superficially healthy, this uniformity raises suspicion of:\n- Insufficient test depth (tests may not exercise real integration paths).\n- A rubber-stamp CI gate that doesn't actually validate cross-version compatibility.\n\n**5. No Failure or Regression Signals**\nThe log contains zero negative signals (no \"tests fail,\" no \"deprecated,\" no \"conflict\"). In a real system of this size, the absence of any failure is itself a risk indicator \u2014 it may mean the observability/monitoring layer is too weak to surface problems.\n\n**6. High-Version Sprawl Without Consolidation**\nVersions in the 90s (91, 92, 94, 95, 99) coexist with versions in the 0s (0, 1, 3, 4, 7). This spread implies no upgrade cadence or deprecation policy is enforced.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [10, 3, 8] if x%2)\n```\n\n- `10 % 2 == 0` \u2192 excluded\n- `3 % 2 == 1` \u2192 included \u2192 3\u00b2 = 9\n- `8 % 2 == 0` \u2192 excluded\n\n**9**"
+        },
+        {
+          "expected": 130,
+          "passed": true,
+          "reasoning_bytes": 3008,
+          "content": "130"
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 1995,
+          "content": "## Engineering Risk Summary\n\n**1. Extreme Version Fragmentation**\n78 items span versions 0\u201399 with no discernible clustering. This suggests a lack of version pinning or a shared dependency baseline, raising the risk of incompatible interactions, untested version combinations, and an unmanageable upgrade surface.\n\n**2. Version 0 Usage (Entry 9)**\n`item_246882` is pinned to version 0, which typically signals an uninitialized, placeholder, or default version \u2014 a latent defect waiting to surface.\n\n**3. Suspiciously Uniform \"Tests Pass\"**\nEvery single entry reports \"tests pass\" with zero failures. This is itself a risk signal: it may indicate insufficient test depth, missing integration/interaction tests, or a test suite that doesn't exercise the actual version-specific code paths.\n\n**4. No Dependency or Interaction Information**\nThe log records each item in isolation. There is no evidence of cross-item compatibility testing, meaning version conflicts between co-deployed items would go undetected.\n\n**5. Repeated Version Numbers Without Coordination**\nSeveral version numbers recur across unrelated items (e.g., version 82 in entries 6, 13, 73; version 4 in entries 34, 43, 49, 72). Without a shared changelog or compatibility matrix, it's unclear whether these represent the same artifact or coincidental numbering \u2014 a traceability gap.\n\n**6. No Rollback or Canary Strategy Visible**\nThe flat, uniform structure gives no indication of staged rollouts, canary deployments, or rollback procedures, increasing blast radius if a version regression is discovered post-deploy.\n\n---\n\n## Python Expression Result\n\n```\nsum(x*x for x in [12, 3, 8] if x%2)\n```\n\n- `12 % 2 = 0` \u2192 excluded\n- `3 % 2 = 1` \u2192 included \u2192 3\u00b2 = 9\n- `8 % 2 = 0` \u2192 excluded\n\n**9**"
+        },
+        {
+          "expected": 178,
+          "passed": false,
+          "reasoning_bytes": 2692,
+          "content": "## Engineering Risk Summary\n\n**1. Version Fragmentation / Proliferation**\n- 78 entries span versions 0\u201399 with no clear grouping or alignment. Many items sit on unique or near-unique versions (e.g., version 4 appears 4\u00d7, version 11 appears 3\u00d7, version 30 appears 3\u00d7, version 45 appears 3\u00d7, version 82 appears 3\u00d7, version 91 appears 3\u00d7). This suggests a lack of version pinning or a monorepo-style drift where components evolve independently without coordinated upgrades.\n\n**2. Version 0 Usage (Entry 9)**\n- `item_246882` is pinned to version 0, which typically signals an uninitialized, placeholder, or default dependency. This is a"
+        },
+        {
+          "expected": 9,
+          "passed": false,
+          "reasoning_bytes": 2127,
+          "content": "## Engineering Risk Summary\n\n### 1. Extreme Version Fragmentation\n78 items span versions 0\u201399 with no discernible upgrade cadence. This wide spread (e.g., version 0 alongside version 99) suggests a lack of a unified dependency/versioning strategy, increasing the risk of incompatible interactions between components.\n\n### 2. Version 0 Usage (Entry 9)\n`item_246882` is pinned to **version 0**, which typically signals an uninitialized, placeholder, or default version. This is a high-severity risk: the component may be untested against any real release, or it may represent a forgotten dependency that was never properly versioned.\n\n### 3. Shared Version Clusters (Potential Single-Point-of-Failure)\nSeveral version numbers are reused across multiple items:\n- **Version 4**: entries 34, 43, 49, 72 (4 items)\n- **Version 82**: entries 6, 13, 73\n- **Version 45**: entries 7, 16, 42\n- **Version 91**: entries 1, 27, 39\n- **Version 11**: entries 21, 22, 55\n- **Version 30**: entries 10, 47, 63\n\nIf any of these shared versions contains a latent defect, the blast radius is multiplied across all dependent items.\n\n### 4. \"Tests Pass\" \u2260 \"Safe\"\nEvery entry reports \"tests pass,\" yet the log provides **no evidence of integration, regression, or cross-component testing**. A uniform pass signal across 78 heterogeneous versions may indicate shallow unit tests that do not exercise inter-component contracts.\n\n### 5. No Version Progression or Rollback Evidence\nThe log shows no upgrade or rollback events over time. This could mean:\n- Versions were assigned arbitrarily (configuration drift risk), or\n- The log format omits change history, hiding potential silent regressions.\n\n### 6. Lack of Version Pinning Discipline\nThe absence of any pattern (e.g., \"all items on v95 by entry 77\") suggests no enforced policy for converging on a common baseline, making coordinated security patches or feature rollouts difficult.\n\n---\n\n## Python Expression Result\n\n```python\nsum(x*x for x in [14, 3"
+        }
+      ],
+      "passed": 1,
+      "requests": 8
+    },
+    {
+      "case": "tool-n8",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "arguments": {
+            "value": 42
+          },
+          "reasoning_bytes": 103
+        },
+        {
+          "expected": 43,
+          "passed": true,
+          "arguments": {
+            "value": 43
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 44,
+          "passed": true,
+          "arguments": {
+            "value": 44
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 45,
+          "passed": true,
+          "arguments": {
+            "value": 45
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 46,
+          "passed": true,
+          "arguments": {
+            "value": 46
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 47,
+          "passed": true,
+          "arguments": {
+            "value": 47
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 48,
+          "passed": true,
+          "arguments": {
+            "value": 48
+          },
+          "reasoning_bytes": 68
+        },
+        {
+          "expected": 49,
+          "passed": true,
+          "arguments": {
+            "value": 49
+          },
+          "reasoning_bytes": 68
+        }
+      ],
+      "passed": 8,
+      "requests": 8
+    },
+    {
+      "case": "tool-return-n8",
+      "checks": [
+        {
+          "expected": 42,
+          "passed": true,
+          "content": "42"
+        },
+        {
+          "expected": 43,
+          "passed": true,
+          "content": "43"
+        },
+        {
+          "expected": 44,
+          "passed": true,
+          "content": "44"
+        },
+        {
+          "expected": 45,
+          "passed": true,
+          "content": "45"
+        },
+        {
+          "expected": 46,
+          "passed": true,
+          "content": "46"
+        },
+        {
+          "expected": 47,
+          "passed": true,
+          "content": "47"
+        },
+        {
+          "expected": 48,
+          "passed": true,
+          "content": "48"
+        },
+        {
+          "expected": 49,
+          "passed": true,
+          "content": "49"
+        }
+      ],
+      "passed": 8,
+      "requests": 8
+    }
+  ],
+  "note": "Model semantic misses are preserved separately; transport failures abort the run. Actual tool-result follow-ups are not fixed-input timing pairs."
+}

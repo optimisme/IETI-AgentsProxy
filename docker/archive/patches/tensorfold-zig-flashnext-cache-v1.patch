@@ -1,0 +1,89 @@
+--- a/zig/src/native/cuda.zig
++++ b/zig/src/native/cuda.zig
+@@ -290,7 +290,10 @@
+     if (@hasField(@TypeOf(loaded), "cache")) if (loaded.cache) |c| if (c.budget > 0) {
+         // the family keeps and restores the states; the store picks them (exact reuse, core/prompt_cache.zig)
+         h.store_vt = .{ .bytes = c.bytes, .save = c.save, .restore = c.restore, .drop = c.drop };
+-        h.store = api.prompt_cache.Store.init(gpa, .{ .ptr = c.ptr, .vtable = &h.store_vt }, if (@hasDecl(F, "cache_rules")) .{ .lookahead = F.cache_rules.lookahead, .planned = F.cache_rules.planned, .repeat_min = if ((if (std.c.getenv("TF_FLASHNEXT_REPEAT_CACHE")) |v| v[0] == 0x30 else false)) 0 else if (@hasField(@TypeOf(F.cache_rules), "repeat_min")) F.cache_rules.repeat_min else 0 } else .{}, c.budget);
++        var rules: api.prompt_cache.Rules = if (@hasDecl(F, "cache_rules")) .{ .lookahead = F.cache_rules.lookahead, .planned = F.cache_rules.planned, .repeat_min = if ((if (std.c.getenv("TF_FLASHNEXT_REPEAT_CACHE")) |v| v[0] == 0x30 else false)) 0 else if (@hasField(@TypeOf(F.cache_rules), "repeat_min")) F.cache_rules.repeat_min else 0 } else .{};
++        rules.min_prompt = try cacheMinPrompt(if (std.c.getenv("TF_FLASHNEXT_CACHE_MIN_PROMPT")) |v| std.mem.span(v) else null);
++        std.log.info("IETI conversation cache minimum: {d} tokens; retained budget {d} MiB", .{ rules.min_prompt, c.budget >> 20 });
++        h.store = api.prompt_cache.Store.init(gpa, .{ .ptr = c.ptr, .vtable = &h.store_vt }, rules, c.budget);
+         h.host.cache = &h.store.?;
+     };
+     h.host.round_log = std.c.getenv("TF_FLASHNEXT_ROUND_LOG") != null;
+@@ -299,6 +302,22 @@
+     return .{ .engine = h.host.engine(), .close = Host.close, .ctx = h, .follow = if (h.follow_fn != null) Host.follow else null };
+ }
+ 
++fn cacheMinPrompt(value: ?[]const u8) !u32 {
++    const text = value orelse return 4096;
++    const n = std.fmt.parseInt(u32, text, 10) catch return error.BadCacheMinPrompt;
++    if (n < 256 or n > 65536) return error.BadCacheMinPrompt;
++    return n;
++}
++
++test "IETI cache threshold validates the environment override and preserves the upstream default" {
++    try std.testing.expectEqual(@as(u32, 4096), try cacheMinPrompt(null));
++    try std.testing.expectEqual(@as(u32, 1024), try cacheMinPrompt("1024"));
++    try std.testing.expectEqual(@as(u32, 4096), try cacheMinPrompt("4096"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("0"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("65537"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("invalid"));
++}
++
+ test "chip classes name the compute capability" {
+     const a = std.testing.allocator;
+     const name = chipClass(a, 121).?;
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -573,6 +573,9 @@
+         fn pass(self: *Self, s: *lanes.Stream, l: *Lane, from: ?*Kept) !u32 {
+             const e = self.e;
+             const ids = s.prompt();
++            const profile_copy = comptime @hasField(E, "io") and @hasField(E, "stream");
++            const copy_times = profile_copy and std.c.getenv("TF_FLASHNEXT_PASS_TIMES") != null;
++            var copy_start: std.Io.Timestamp = if (copy_times) passNow(e) else undefined;
+             var cur: ?SnapPtr = null; // the state the next segment resumes
+             var owned = false; // `cur` is this pass's own (no Kept holds it)
+             defer if (owned) e.freeSnapshot(cur.?);
+@@ -584,6 +587,7 @@
+             }
+             s.cached = @intCast(at);
+             s.reuse_failed = s.reuse.at > 0 and from == null;
++            if (copy_times) std.log.info("IETI resume copy: {d} cached tokens, {d:.1} ms", .{ at, passSince(e, &copy_start) });
+             self.dropTentative();
+             // TF_FLASHNEXT_PASS_TIMES=1: each part's wall time (the stream drained at each edge), in the log
+             const timed = comptime @hasField(E, "io") and @hasField(E, "stream");
+--- a/zig/src/core/prompt_cache_test.zig
++++ b/zig/src/core/prompt_cache_test.zig
+@@ -271,6 +271,29 @@
+     try std.testing.expectEqual(@as(u32, 8), s.find(&.{ 1, 2, 3, 4, 5, 9, 7, 7, 9, 9, 4 }, &.{}).?.at);
+ }
+ 
++test "IETI 1024 threshold reuses short conversation history and preserves exact continuation and branch state" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 1024 }, 1 << 20);
++    defer s.deinit();
++    var ids: [1850]u32 = undefined;
++    for (&ids, 0..) |*id, i| id.* = @intCast(i % 97);
++    var plan = try s.begin(a, ids[0..1800], 1799, &.{}, &.{}, null);
++    try std.testing.expectEqualSlices(u32, &.{1799}, plan.marks);
++    try std.testing.expectEqual(fresh(ids[0..1800]), f.pass(&s, ids[0..1800], plan));
++    plan = try s.begin(a, &ids, 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    ids[1810] +%= 1;
++    plan = try s.begin(a, &ids, 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    try std.testing.expect(s.held <= s.budget);
++}
++
+ test "kept states charge their real storage, a save takes spare storage first, and spare stays inside the budget" {
+     const gpa = std.testing.allocator;
+     var arena: std.heap.ArenaAllocator = .init(gpa);

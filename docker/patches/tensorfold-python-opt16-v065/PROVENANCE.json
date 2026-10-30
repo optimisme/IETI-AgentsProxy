@@ -1,0 +1,39 @@
+{
+  "status": "GPU-qualified for the documented sixteen-user workloads; original service restored after testing",
+  "tensorfold_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+  "source_campaign": "docker/benchmarks/tensorfold-python-opt16-20261023",
+  "source_files": {
+    "candidate_coalesce_paired.py": "2eeca73f9c134a4a9c36410f03377f51e81702ac682819db327276848772b03a",
+    "candidate_adaptive_paired.py": "a52d234ed42ca784618d3f20495b3ceb4aa1b952154cb0623ae683ab3b33fa9b",
+    "candidate_tail_paired.py": "54392a38e1a68b6f7f6a8bfe2e6c92f1a33e4c035204356446dfd3ac6ec94425",
+    "candidate_order64_paired.py": "f35845d9d16189d8bbf37ca34de548a28768b146006dda271a434d48fe657ee1"
+  },
+  "changes_from_screened_sources": [
+    "Replace benchmark instrumentation imports with no-op trace sink, retain policy counters",
+    "Replace local upstream-file byte comparisons with identical pinned SHA256 guards",
+    "Rename modules and omit per-module CLI launchers; shared launcher installs same policy functions"
+  ],
+  "note": "Serving functions preserve model/precision/cache policy; prefill ordering in serve.py must match qualified finalist.",
+  "constraints_reference": "candidate-capacity-3/resolved-inventory.json",
+  "constraints_reference_sha256": "c83e996edec16cc4f46e62291390f85a40a14e4473834594f450851c9e8982c6",
+  "effective_distribution_count": 225,
+  "qualified_utc": "2026-10-24T04:15:03.751040+00:00",
+  "release_runs": [
+    "release-untraced-capacity1",
+    "release-untraced-sustained1",
+    "release-untraced-representative1"
+  ],
+  "gpu_evidence_audit_checks": 308,
+  "executed_private_profile_sha256": "e7616c27b6aea0526ad8e88899d4000a7c1abc683e48d94dcc1da2987869a258",
+  "qualified_serving_command_sha256": "474e8010dc2526bbd71a5af5fe9fd535dd3afb2ff41ddfef13f36092cb8a7710",
+  "qualification_comment_updates_only": "Final public/private YAML headers and reserve-setting comment change after qualification; executed private source remains in campaign snapshots.",
+  "limits": [
+    "Cold batch completion about 7% slower",
+    "Three timing pairs use bounded host-pageout criterion; only one strict full-sequence pair",
+    "65k growth qualification lost four prefix hits",
+    "Project-number probe 13/16; exact cold serial known misses also fail baseline",
+    "No sixteen-way image-heavy or long reasoning accuracy qualification",
+    "Short/mixed performance at 1, 2, 4 and 8 concurrent users is not qualified",
+    "One warm mixed sixteen-user turn: median TTFT 1.568s original vs 3.163s tuned; unprofiled tuned 2.987s; one controlled representative pair"
+  ]
+}

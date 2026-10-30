@@ -1,0 +1,106 @@
+# Shared recurrent batching adapted from BobClawblaw native-v1.0.12; full upstream 1.1.0 base.
+# This is a single-GPU port, not an unmodified build of the two-GPU contributor branch.
+# Source/measurements: benchmarks/tensorfold-zig-shared-rounds-20261018/.
+# Defaults match the cold GPU comparison: cache0, vision off.
+# Enabling vision/prefix retention requires separate qualification.
+# Memory policy: Living Weights (--slide), Recall (--recall*), disk learning
+# (--learn*), conversation persistence, and compact-memory are OFF (opt-in flags omitted).
+# KV and optional RAM prompt caches are computation caches, not persistent learning.
+# TensorFold 1.1.0 + local batched MTP head and verification and FP8 KV experiment (GB10).
+# Experimental: full 16 x 75000 admission must pass before promotion.
+# Reuses the existing pinned Python checkpoint cache read-only; no Python engine.
+# The upstream CUDA path supports MLX affine group-32, not GPTQ AutoRound.
+# Sources/results: benchmarks/tensorfold-zig-release110-20261018/.
+name: ieti-qwen38-flash-next-tensorfold-110
+services:
+  qwen-tensorfold-110:
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    platform: linux/arm64
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-tensorfold-110-shared-recurrent-mlx-4bit-128gb.yml"
+    container_name: qwen38_flash_next_tensorfold_110_cuda
+    restart: "no"
+    init: true
+    stop_grace_period: 60s
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "${TENSORFOLD_BIND_PORT:-8007}:8000"
+    volumes:
+      - graph-runtime:/opt/ieti-native110:ro
+      - upstream-runtime:/opt/ieti-tf110
+      - checkpoint-cache:/root/.cache/huggingface:ro
+    environment:
+      MODEL_ID: TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP
+      MODEL_REVISION: 2b170fa6309d5d1ee380b35636075fac7945f286
+      TF_RELEASE: "1.1.0"
+      NATIVE_BINARY: /opt/ieti-native110/install/native/bin/tensorfold-native
+      TF_FLASHNEXT_KV_FP8: "1"
+      TF_FLASHNEXT_DECODE_GRAPH: "${TENSORFOLD_DECODE_GRAPH:-0}"
+      TF_REVISION: 76aafcf274e60a5e31a59ce145b2f71f7b366e9d
+      TF_ARCHIVE_SHA256: 8f18033fca9df0c56c19afb2f11b55175151ff886c2603b01c0390bf48773e59
+      CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
+      PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
+      TENSORFOLD_MEMORY_RESERVE_GIB: "${TENSORFOLD_RESERVE_GIB:-10}"
+      TENSORFOLD_PROMPT_CACHE_GIB: "${TENSORFOLD_PROMPT_CACHE_GIB:-0}"
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      TENSORFOLD_CUDA_KERNELS: native
+      TF_FLASHNEXT_BATCH_GDN: "${TENSORFOLD_BATCH_GDN:-1}"
+      TF_FLASHNEXT_BATCH_DRAFT: "${TENSORFOLD_BATCH_DRAFT:-1}"
+      TF_FLASHNEXT_BATCH_VERIFY: "${TENSORFOLD_BATCH_VERIFY:-1}"
+      TF_FLASHNEXT_DRAFTS: "${TENSORFOLD_DRAFT_DEPTH:-6}"
+      TF_FLASHNEXT_CHUNK: "${TENSORFOLD_PREFILL_CHUNK:-1536}"
+      DRAFTS_ENABLED: "${TENSORFOLD_DRAFTS_ENABLED:-1}"
+      VISION_ENABLED: "${TENSORFOLD_VISION_ENABLED:-0}"
+      TF_FLASHNEXT_CONFIDENCE: "0.60"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        cd /opt/ieti-tf110
+        if [ "$$(cat ready 2>/dev/null || true)" != "$${TF_ARCHIVE_SHA256}" ]; then
+          curl -fsSL -o release.tar.gz "https://github.com/ashhart/TensorFold/releases/download/v$${TF_RELEASE}/tensorfold-$${TF_RELEASE}-linux-aarch64.tar.gz"
+          echo "$${TF_ARCHIVE_SHA256}  release.tar.gz" | sha256sum -c -
+          tar -xzf release.tar.gz
+          cd "tensorfold-$${TF_RELEASE}-linux-aarch64"
+          sha256sum -c SHA256SUMS
+          cd ..
+          echo "$${TF_ARCHIVE_SHA256}" > ready
+        fi
+        test "$$(cat /opt/ieti-native110/ready)" = "fdfc3f2e137ffaf7b60e274861d5af186282ef1130289fed6f7c25039c4a79c9"
+        if [ "$${TF_FLASHNEXT_BATCH_GDN}" != 0 ] && [ "$${TF_FLASHNEXT_DECODE_GRAPH}" != 0 ]; then
+          echo 'Shared recurrent descriptors require TF_FLASHNEXT_DECODE_GRAPH=0; graph replay is not qualified.' >&2
+          exit 2
+        fi
+        MODEL_PATH="/root/.cache/huggingface/hub/models--TensorFold--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/$${MODEL_REVISION}"
+        test -f "$$MODEL_PATH/config.json"
+        options=()
+        if [ "$${DRAFTS_ENABLED}" = 0 ]; then options+=(--no-drafts); fi
+        if [ "$${VISION_ENABLED}" = 1 ]; then options+=(--vision --vision-max-images 50 --vision-image-tokens 4096); fi
+        exec "$${NATIVE_BINARY}" serve "$$MODEL_PATH" \
+          --host 0.0.0.0 --port 8000 --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" --parallel "$${PARALLEL_STREAMS}" \
+          --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \
+          --thinking --reasoning-effort low --thinking-budget 1024 \
+          --prompt-cache-gib "$${TENSORFOLD_PROMPT_CACHE_GIB}" \
+          "$${options[@]}" --no-update-check
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+volumes:
+  graph-runtime:
+    external: true
+    name: ieti-native110-shared-recurrent-v4-build
+  upstream-runtime:
+    name: ieti-tensorfold-110-runtime
+  checkpoint-cache:
+    external: true
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache

@@ -1,0 +1,97 @@
+{
+  "status": "complete",
+  "promoted": false,
+  "selected_runtime": "original_python",
+  "target_streams": 11,
+  "context_limit": 75000,
+  "vision": true,
+  "capacity": {
+    "qualified": true,
+    "scope": "11 simultaneous text contexts near 75k, vision tower enabled, one-image budget; not maximum-size images embedded in all long contexts.",
+    "profile": "models/qwen38-flash-next-tensorfold-112-mlx-4bit-vision-128gb.yml",
+    "binary_sha256": "a18a3e2d087fa4dac34b10009b4ba4c815d4c474cc6d0c8704b29702373dd1ab",
+    "release": "1.1.2",
+    "checkpoint_revision": "2b170fa6309d5d1ee380b35636075fac7945f286",
+    "context_limit": 75000,
+    "streams": 11,
+    "kv": "bf16",
+    "vision": true,
+    "prompt_cache_gib": 0,
+    "prompt_chunk": 1536,
+    "mtp_drafts": 6,
+    "reserve_gib": 10,
+    "input_tokens_total": 814056,
+    "output_tokens_total": 2816,
+    "wall_s": 530.8077201100532,
+    "ttft_p50_s": 479.7796645979397,
+    "min_available_gib": 11.641029357910156,
+    "swap_out_pages": 194906,
+    "page_size_bytes": 4096,
+    "swap_out_mib": 761.3515625,
+    "oom_kills": 0,
+    "external_requests": 0,
+    "peak_resident_streams": 11,
+    "peak_kv_pools": 11,
+    "note": "Completion with swapping; not a clean no-swap performance qualification. JPEG codec was added after this text-only capacity run; binary and inference arguments unchanged."
+  },
+  "performance": {
+    "code1-": {
+      "trials": 3,
+      "python_tok_s": 45.547022023067164,
+      "zig_tok_s": 72.92083281413078,
+      "zig_change_percent": 60.10011099562167,
+      "python_ttft_p50_s": 0.18127004243433475,
+      "zig_ttft_p50_s": 0.15436006803065538,
+      "zig_ttft_change_percent": -14.845240858498466
+    },
+    "code11-": {
+      "trials": 3,
+      "python_tok_s": 265.489946767761,
+      "zig_tok_s": 73.11246062813325,
+      "zig_change_percent": -72.461307285549,
+      "python_ttft_p50_s": 0.4397082356736064,
+      "zig_ttft_p50_s": 1.5064768709708005,
+      "zig_ttft_change_percent": 242.60829085062943
+    }
+  },
+  "clean_cold16k": {
+    "python_ttft_s": 6.757753553800285,
+    "zig_ttft_s": 9.065372603945434,
+    "zig_change_percent": 34.14772426626064
+  },
+  "images": {
+    "png_singles": 3,
+    "png_burst_passed": 11,
+    "png_burst_total": 11,
+    "jpeg": true,
+    "scope": "Synthetic colors, one image/request. Maximum-size images in all full contexts unqualified."
+  },
+  "memory_features_off": true,
+  "baseline_restarted": false,
+  "upstream_native_int8_pr_found": false,
+  "related_open_prs": [
+    1069,
+    1155,
+    1169,
+    1170,
+    1195,
+    1217
+  ],
+  "concurrency_assessment": {
+    "same_weight_quantization": true,
+    "weights": "Same pinned MLX affine 4-bit/group-32 checkpoint",
+    "different_kv_format": {
+      "python": "INT8 with group scales",
+      "zig": "BF16"
+    },
+    "python_scaling_1_to_11": 5.828919981493068,
+    "zig_scaling_1_to_11": 1.0026278884456918,
+    "likely_primary_cause": "Current native Flash Next per-stream MTP verification and drafting rather than shared windows/heads",
+    "kv_speed_contribution_isolated": false,
+    "zig_language_limit_established": false,
+    "required_to_isolate": "Controlled cache-format \u00d7 batching matrix plus GPU timeline; unchanged model and requests"
+  },
+  "both_python_services_healthy": true,
+  "native112_stopped": true,
+  "runtime_health": "runtime-health-final.json"
+}

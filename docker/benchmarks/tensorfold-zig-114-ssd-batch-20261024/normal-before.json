@@ -1,0 +1,109 @@
+{
+  "Id": "117c4cfbdac85c4e3902e7720d83d7cc5b343228c3a23ad1f01b7690cb03a7a8",
+  "Image": "sha256:15b8de8baabe68e46afc51e88f3ccad5042013bafe8f244ec082ce0bb06d47e3",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 1842919,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-10-24T20:14:12.634812838Z",
+    "FinishedAt": "2026-10-24T20:03:14.594463558Z",
+    "Health": {
+      "Status": "healthy",
+      "FailingStreak": 0,
+      "Log": [
+        {
+          "Start": "2026-10-24T22:53:47.832680641+02:00",
+          "End": "2026-10-24T22:53:47.910933967+02:00",
+          "ExitCode": 0,
+          "Output": ""
+        },
+        {
+          "Start": "2026-10-24T22:54:17.913287878+02:00",
+          "End": "2026-10-24T22:54:18.022753715+02:00",
+          "ExitCode": 0,
+          "Output": ""
+        },
+        {
+          "Start": "2026-10-24T22:54:48.02502877+02:00",
+          "End": "2026-10-24T22:54:48.105905658+02:00",
+          "ExitCode": 0,
+          "Output": ""
+        },
+        {
+          "Start": "2026-10-24T22:55:18.107691714+02:00",
+          "End": "2026-10-24T22:55:18.209392399+02:00",
+          "ExitCode": 0,
+          "Output": ""
+        },
+        {
+          "Start": "2026-10-24T22:55:48.211810125+02:00",
+          "End": "2026-10-24T22:55:48.30328064+02:00",
+          "ExitCode": 0,
+          "Output": ""
+        }
+      ]
+    }
+  },
+  "Mounts": [
+    {
+      "Type": "volume",
+      "Name": "ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-runtime-cache",
+      "Source": "/var/lib/docker/volumes/ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-runtime-cache/_data",
+      "Destination": "/root/.cache/tensorfold",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    },
+    {
+      "Type": "volume",
+      "Name": "ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-kernel-cache",
+      "Source": "/var/lib/docker/volumes/ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-kernel-cache/_data",
+      "Destination": "/root/.cache/tensorfold-kernels",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    },
+    {
+      "Type": "volume",
+      "Name": "ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache",
+      "Source": "/var/lib/docker/volumes/ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache/_data",
+      "Destination": "/root/.cache/huggingface",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    },
+    {
+      "Type": "bind",
+      "Source": "/home/<user>/docker/tokens.env",
+      "Destination": "/run/secrets/tokens.env",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    }
+  ],
+  "Cmd": [
+    "/bin/bash",
+    "-lc",
+    "set -euo pipefail\nset -a\n. /run/secrets/tokens.env\nset +a\nif [ -n \"${HUGGINGFACE_ACCESS_TOKENS:-}\" ]; then\n  export HF_TOKEN=\"${HUGGINGFACE_ACCESS_TOKENS}\"\n  export HUGGING_FACE_HUB_TOKEN=\"${HUGGINGFACE_ACCESS_TOKENS}\"\nfi\n\n# Keep NVIDIA's PyTorch, Triton, CUDA libraries and extension compiler.\n# The venv is recreated with the container; only downloads and caches persist.\npython3 -m venv --system-site-packages /opt/tensorfold-venv\n. /opt/tensorfold-venv/bin/activate\n# Recreate the container-only checkout at the official v0.6.5 commit.\nrm -rf /opt/tensorfold-source\ngit clone --filter=blob:none --no-checkout https://github.com/ashhart/TensorFold.git /opt/tensorfold-source\ngit -C /opt/tensorfold-source checkout --detach 609ca419abecebdc5a059498a613680bd3aa847f\n# Custom setting, not an upstream CLI option. Fail if the pinned source drifts.\npython - /opt/tensorfold-source/src/tensorfold/families/qwen4_exp/cuda/engine.py <<'PY_PATCH_SNAPSHOTS'\nimport os\nfrom pathlib import Path\nimport re\nimport sys\n\nvalue = os.environ['TENSORFOLD_PROMPT_SNAPSHOTS']\nif not re.fullmatch(r'[0-9]{1,2}', value) or not 1 <= int(value) <= 64:\n    raise SystemExit('TENSORFOLD_PROMPT_SNAPSHOTS must be an integer from 1 to 64')\npath = Path(sys.argv[1])\nsource = path.read_text()\nexpected = 'KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from'\nuses = (\n    'indexed_stream_geometry(text, streams + int(graphs and mtp), each, KEEP, mtp=mtp,\\n                                                          kv_bits=bits, world=tp, prefill_rows=rows0)',\n    'confidence=self.confidence, keep=KEEP, points=self.points,',\n)\nif re.findall(r'^KEEP\\s*=.*', source, re.MULTILINE) != [expected] or any(source.count(use) != 1 for use in uses):\n    raise SystemExit('TensorFold snapshot patch failed: pinned engine.py KEEP=8 or its planning/runtime uses no longer match')\npath.write_text(source.replace(expected, expected.replace('KEEP = 8 ', f'KEEP = {int(value)} '), 1))\nprint(f'[ieti] Patched Flash Next retained prompt snapshots: {int(value)}', flush=True)\nPY_PATCH_SNAPSHOTS\n# Apply only the measured SSD batching diff, guarded by full-file hashes.\n# This inline patch makes every normal restart reproduce the tested source.\npython - /opt/tensorfold-source/src/tensorfold/families/qwen4_exp/cuda/forward.py <<'PY_PATCH_SSD_BATCH'\nimport hashlib\nimport os\nfrom pathlib import Path\nimport sys\n\nenabled = os.environ['TENSORFOLD_SSD_BATCH_GATHER']\nif enabled not in ('0', '1'):\n    raise SystemExit('TENSORFOLD_SSD_BATCH_GATHER must be exactly 0 or 1')\npath = Path(sys.argv[1])\ndata = path.read_bytes()\nbaseline = 'a0d19115834bd6144a638cd5ceaac60767dcb5afe097316bfe3e0dc4c66b20fe'\npatched = 'fa06db912a4d02437875a7e146f1ccf4daf36fcf1093df9b50caf9ea316b03bf'\nif hashlib.sha256(data).hexdigest() != baseline:\n    raise SystemExit('TensorFold SSD batch patch failed: pinned forward.py SHA-256 no longer matches')\nold = '''    for layer in w.layers:\n        if layer.ple is not None:\n            p = layer.ple\n            for (st, tokens), (_, a0, _) in zip(windows, segs):\n                toks = np.asarray(tokens, dtype=np.int64)\n                ids = p.ngram.ids(st.ple_history, toks)\n                st.ple_last = (st.ple_history, toks)\n                lookups.append((p, ids, a0 * (ids.size // len(toks))))\n'''\nnew = '''    for layer in w.layers:\n        if layer.ple is not None:\n            p = layer.ple\n            per_window = []\n            for (st, tokens), (_, a0, _) in zip(windows, segs):\n                toks = np.asarray(tokens, dtype=np.int64)\n                ids = p.ngram.ids(st.ple_history, toks)\n                st.ple_last = (st.ple_history, toks)\n                if w.x3 is None:\n                    per_window.append(ids)\n                else:\n                    lookups.append((p, ids, a0 * (ids.size // len(toks))))\n            if w.x3 is None:\n                ids = per_window[0] if len(per_window) == 1 else np.concatenate(per_window, axis=0)\n                lookups.append((p, ids, 0))\n'''\nif enabled == '1':\n    source = data.decode('utf-8')\n    if source.count(old) != 1:\n        raise SystemExit('TensorFold SSD batch patch failed: expected staging block no longer matches once')\n    data = source.replace(old, new, 1).encode('utf-8')\n    if hashlib.sha256(data).hexdigest() != patched:\n        raise SystemExit('TensorFold SSD batch patch failed: result differs from the benchmarked patch')\n    path.write_bytes(data)\nprint(f'[ieti] Flash Next SSD batch gather={enabled}, SHA-256={hashlib.sha256(data).hexdigest()}', flush=True)\nPY_PATCH_SSD_BATCH\n# The test extra supplies pytest, also required by NGC's triton-kernels.\n# v0.6.5's vision extra adds PyAV; pin its Python 3.12 ARM64 wheel.\npython -m pip install \\\n  '/opt/tensorfold-source[test,vision]' \\\n  'transformers==5.18.0' 'huggingface-hub==1.33.0' \\\n  'hf-xet==1.6.0' 'pytest==9.1.1' 'av==19.0.1'\n\n# Ordinary pip copies the checkout: inspect/import the installed package too.\npython - /opt/tensorfold-source <<'PY_VERIFY_SNAPSHOTS'\nimport importlib\nimport inspect\nimport os\nfrom pathlib import Path\nimport sys\n\nengine = importlib.import_module('tensorfold.families.qwen4_exp.cuda.engine')\ninstalled = Path(engine.__file__).resolve()\nkeep = getattr(engine, 'KEEP', None)\nexpected = int(os.environ['TENSORFOLD_PROMPT_SNAPSHOTS'])\nsource = inspect.getsource(engine)\nuses = (\n    'indexed_stream_geometry(text, streams + int(graphs and mtp), each, KEEP, mtp=mtp,\\n                                                          kv_bits=bits, world=tp, prefill_rows=rows0)',\n    'confidence=self.confidence, keep=KEEP, points=self.points,',\n)\nif installed.is_relative_to(Path(sys.argv[1]).resolve()) or keep != expected or any(source.count(use) != 1 for use in uses):\n    raise SystemExit(f'TensorFold installed snapshot verification failed: {installed}, KEEP={keep!r}, expected={expected}')\nprint(f'[ieti] Verified installed Flash Next KEEP={keep}: {installed}', flush=True)\nPY_VERIFY_SNAPSHOTS\n\n# Pip must install the exact tested forward.py, not a stale wheel or checkout.\npython - /opt/tensorfold-source <<'PY_VERIFY_SSD_BATCH'\nimport hashlib\nimport importlib.util\nimport os\nfrom pathlib import Path\nimport sys\n\nenabled = os.environ['TENSORFOLD_SSD_BATCH_GATHER']\nhashes = {\n    '0': 'a0d19115834bd6144a638cd5ceaac60767dcb5afe097316bfe3e0dc4c66b20fe',\n    '1': 'fa06db912a4d02437875a7e146f1ccf4daf36fcf1093df9b50caf9ea316b03bf',\n}\nroot = Path(importlib.util.find_spec('tensorfold').origin).resolve().parent\ninstalled = root / 'families/qwen4_exp/cuda/forward.py'\nactual = hashlib.sha256(installed.read_bytes()).hexdigest()\nif installed.is_relative_to(Path(sys.argv[1]).resolve()) or actual != hashes.get(enabled):\n    raise SystemExit(f'TensorFold installed SSD batch verification failed: {installed}, SHA-256={actual}, enabled={enabled!r}')\nprint(f'[ieti] Verified installed Flash Next SSD batch gather={enabled}: {installed}', flush=True)\nPY_VERIFY_SSD_BATCH\n\n# Flash Next includes its own MTP head; its n-gram tables stay on SSD.\n# Download only the pinned checkpoint; pull follows the upstream default revision.\nMODEL_PATH=$(python - <<'PY_MODEL_SNAPSHOT'\nimport json\nimport os\nfrom pathlib import Path\nimport sys\n\nfrom huggingface_hub import snapshot_download\n\nrevision = os.environ['MODEL_REVISION']\nsnapshot = Path(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=revision, max_workers=4))\nif snapshot.name != revision or not (snapshot / 'config.json').is_file():\n    raise SystemExit(f'Unexpected model snapshot: {snapshot}')\nindex = json.loads((snapshot / 'model.safetensors.index.json').read_text())\nshards = set(index['weight_map'].values())\nif not shards or any(Path(name).is_absolute() or '..' in Path(name).parts or not (snapshot / name).is_file() for name in shards):\n    raise SystemExit('Pinned model snapshot is missing weights or has an invalid shard index')\nprint(f'[ieti] Verified pinned model {os.environ[\"MODEL_ID\"]}@{revision}', file=sys.stderr, flush=True)\nprint(snapshot)\nPY_MODEL_SNAPSHOT\n)\n# CLI settings below are unchanged from the measured baseline:\n# --backend cuda: use GB10; --host/--port: listen inside the container.\n# --name: canonical model ID returned by /v1/models; weights use local path.\n# --context/--parallel: request token limit and maximum concurrent streams.\n# --thinking/low/1024: enable reasoning with low effort and a 1024-token\n# reasoning budget. --temperature 0.1: default sampling randomness.\n# Requests may override supported reasoning/sampling defaults.\n# --kv-dtype int8: quantize attention KV cache; weights remain affine 4-bit.\n# --ple-on-ssd: read PLE n-gram tables from SSD rather than preload them.\n# --vision: load the upstream image tower and reserve its workspace.\n# --mtp-drafts 6: at most six internal draft tokens per round.\n# --mtp-confidence 0.60: stop later drafts below this probability (the\n# upstream CUDA default is 0.70; 0.60 is the previously tested setting).\n# --no-update-check: keep serving without background version checks.\nexec tensorfold serve \"${MODEL_PATH}\" \\\n  --backend cuda \\\n  --host 0.0.0.0 \\\n  --port 8000 \\\n  --name \"${MODEL_ID}\" \\\n  --context \"${CONTEXT_LENGTH}\" \\\n  --parallel \"${PARALLEL_STREAMS}\" \\\n  --thinking \\\n  --reasoning-effort low \\\n  --thinking-budget 1024 \\\n  --temperature 0.1 \\\n  --kv-dtype int8 \\\n  --ple-on-ssd \\\n  --vision \\\n  --mtp-drafts 6 \\\n  --mtp-confidence 0.60 \\\n  --no-update-check\n"
+  ],
+  "Entrypoint": [
+    "/opt/nvidia/nvidia_entrypoint.sh"
+  ],
+  "Resources": {
+    "NanoCpus": 0,
+    "Memory": 0,
+    "CpuQuota": 0,
+    "CpusetCpus": ""
+  },
+  "PLE_flag": [],
+  "profile": "qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml"
+}

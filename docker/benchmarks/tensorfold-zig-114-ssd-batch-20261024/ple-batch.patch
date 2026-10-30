@@ -1,0 +1,208 @@
+diff --git a/zig/src/families/flashnext/cuda_batch_state.zig b/zig/src/families/flashnext/cuda_batch_state.zig
+index 078cb46..bbe7176 100644
+--- a/zig/src/families/flashnext/cuda_batch_state.zig
++++ b/zig/src/families/flashnext/cuda_batch_state.zig
+@@ -577,6 +577,11 @@ pub const Gather = struct {
+             };
+             return;
+         }
++        const batched = @import("cuda_ple_windows.zig").gather(g) catch |err| {
++            g.failed = err;
++            return;
++        };
++        if (batched) return;
+         var row0: usize = 0;
+         for (g.lanes) |l| {
+             g.ngram.rows(l.seq.history[0..], g.ids[row0..][0..l.rows], g.emb[row0 * dims ..][0 .. l.rows * dims], g.xs[row0 * (dims / 32) ..][0 .. l.rows * (dims / 32)]) catch |err| {
+diff --git a/zig/src/families/flashnext/cuda_ple.zig b/zig/src/families/flashnext/cuda_ple.zig
+index 3d3bb36..92ec6b2 100644
+--- a/zig/src/families/flashnext/cuda_ple.zig
++++ b/zig/src/families/flashnext/cuda_ple.zig
+@@ -428,7 +428,7 @@ pub const Ngram = struct {
+     }
+ 
+     /// Rows [lo, hi) of a chunk's token-major row ids `ids`, each dequantized into its head's slice of `out`.
+-    fn fill(g: *const Ngram, ids: []const i64, out: []u16, lo: usize, hi: usize) !void {
++    pub fn fill(g: *const Ngram, ids: []const i64, out: []u16, lo: usize, hi: usize) !void {
+         const dh = g.hash.dh;
+         for (lo..hi) |i| {
+             const loc = try g.hash.locate(ids[i]);
+@@ -488,6 +488,13 @@ pub const Ngram = struct {
+         }
+         @memcpy(history, hist[0..history.len]);
+     }
++    pub const Window = @import("cuda_ple_windows.zig").Window;
++
++    /// Independent histories share one gather; the original single-window path remains the control.
++    pub fn rowsMany(g: *const Ngram, windows: []const Window, out: []u16, xs: []f32) !void {
++        return @import("cuda_ple_windows.zig").rows(g, windows, out, xs);
++    }
++
+ };
+ 
+ test "a fresh window hashes token 7 into sixteen rows" {
+diff --git a/zig/src/families/flashnext/cuda_ple_pool_gather_test.zig b/zig/src/families/flashnext/cuda_ple_pool_gather_test.zig
+index 5c6dda3..d8ccab0 100644
+--- a/zig/src/families/flashnext/cuda_ple_pool_gather_test.zig
++++ b/zig/src/families/flashnext/cuda_ple_pool_gather_test.zig
+@@ -131,3 +131,61 @@ test "PLE gather: shared table callers retain independent histories and destinat
+         try t.expectEqual(@as(u16, 0xcafe), j.out[j.out.len - 1]);
+     }
+ }
++
++test "PLE windows: mixed lengths and histories equal separate gathers byte for byte" {
++    var fixture: Fixture = undefined;
++    try fixture.init();
++    defer fixture.g.deinit();
++    fixture.g.hash = try ple.Hash.init(.{ .vocab = 100, .ngram = 3, .per = 1, .base = 13,
++        .divisor = 2, .shards = 2, .seed = 1234, .eos = 99, .ple_dim = 64, .ple_index = 0 });
++    const lengths = [_]usize{ 1, 6, 3, 17, 2, 1, 8, 7 };
++    var tokens: [8][17]u32 = undefined;
++    var expected_history: [8][2]i64 = undefined;
++    var actual_history: [8][2]i64 = undefined;
++    var windows: [8]ple.Ngram.Window = undefined;
++    var expected: [45 * 64]u16 = undefined;
++    var expected_xs: [45 * 2]f32 = undefined;
++    var actual: [45 * 64 + 2]u16 = @splat(0xbeef);
++    var actual_xs: [45 * 2]f32 = undefined;
++    for (0..5) |repeat| {
++        var at: usize = 0;
++        for (lengths, 0..) |n, i| {
++            for (&tokens[i], 0..) |*v, j| v.* = @intCast((j * 13 + i * 7 + repeat) % 100);
++            tokens[i][0] = 99;
++            expected_history[i] = .{ @intCast((i * 11 + repeat) % 100), @intCast((i * 3 + repeat) % 100) };
++            actual_history[i] = expected_history[i];
++            windows[i] = .{ .history = &actual_history[i], .tokens = tokens[i][0..n] };
++            try fixture.g.rows(&expected_history[i], tokens[i][0..n], expected[at * 64 ..][0 .. n * 64],
++                expected_xs[at * 2 ..][0 .. n * 2]);
++            at += n;
++        }
++        try fixture.g.rowsMany(&windows, actual[1 .. actual.len - 1], &actual_xs);
++        try t.expectEqualSlices(u16, &expected, actual[1 .. actual.len - 1]);
++        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(&expected_xs), std.mem.sliceAsBytes(&actual_xs));
++        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(&expected_history), std.mem.sliceAsBytes(&actual_history));
++        try t.expectEqual(@as(u16, 0xbeef), actual[0]);
++        try t.expectEqual(@as(u16, 0xbeef), actual[actual.len - 1]);
++    }
++}
++
++test "PLE windows: malformed geometry and aliased histories fail before outputs or histories change" {
++    var fixture: Fixture = undefined;
++    try fixture.init();
++    defer fixture.g.deinit();
++    const tokens = [_]u32{ 7, 99, 8 };
++    var h = [_]i64{42};
++    var out: [6 * 64]u16 = @splat(0xcafe);
++    var xs: [6 * 2]f32 = @splat(123);
++    const alias = [_]ple.Ngram.Window{
++        .{ .history = &h, .tokens = &tokens }, .{ .history = &h, .tokens = &tokens },
++    };
++    try t.expectError(error.UnexpectedTensor, fixture.g.rowsMany(&alias, &out, &xs));
++    const one = [_]ple.Ngram.Window{.{ .history = &h, .tokens = &tokens }};
++    try t.expectError(error.UnexpectedTensor, fixture.g.rowsMany(&one, &out, &xs));
++    const empty = [_]ple.Ngram.Window{.{ .history = &h, .tokens = &.{} }};
++    try t.expectError(error.UnexpectedTensor, fixture.g.rowsMany(&empty, &out, &xs));
++    try t.expectError(error.UnexpectedTensor, fixture.g.rowsMany(&.{}, &out, &xs));
++    try t.expectEqual(@as(i64, 42), h[0]);
++    for (out) |value| try t.expectEqual(@as(u16, 0xcafe), value);
++    for (xs) |value| try t.expectEqual(@as(f32, 123), value);
++}
+diff --git a/zig/src/families/flashnext/cuda_ple_windows.zig b/zig/src/families/flashnext/cuda_ple_windows.zig
+new file mode 100644
+index 0000000..d5c8db2
+--- /dev/null
++++ b/zig/src/families/flashnext/cuda_ple_windows.zig
+@@ -0,0 +1,93 @@
++//! Independent stream histories share one token-major table gather without sharing their hash state.
++const std = @import("std");
++const ple = @import("cuda_ple.zig");
++const pool = @import("cuda_ple_pool.zig");
++
++pub const Window = struct { history: []i64, tokens: []const u32 };
++
++pub fn enabled() bool {
++    const value = std.c.getenv("TF_FLASHNEXT_PLE_BATCH") orelse return true;
++    return !std.mem.eql(u8, std.mem.span(value), "0");
++}
++
++/// Groups a shared pass; single windows and the explicit control use the upstream path.
++pub fn gather(g: anytype) !bool {
++    if (g.lanes.len <= 1 or g.lanes.len > 32 or !enabled()) return false;
++    var windows: [32]Window = undefined;
++    var row: usize = 0;
++    for (g.lanes, 0..) |l, i| {
++        windows[i] = .{ .history = l.seq.history[0..], .tokens = g.ids[row..][0..l.rows] };
++        row += l.rows;
++    }
++    try g.ngram.rowsMany(windows[0..g.lanes.len], g.emb, g.xs);
++    return true;
++}
++
++pub fn rows(g: anytype, windows: []const Window, out: []u16, xs: []f32) !void {
++    if (windows.len == 0 or windows.len > 32) return error.UnexpectedTensor;
++    const h = g.hash.n - 1;
++    if (h >= ple.max_n) return error.UnexpectedTensor;
++    var total: usize = 0;
++    for (windows, 0..) |w, i| {
++        if (w.history.len != h or w.tokens.len == 0) return error.UnexpectedTensor;
++        for (windows[0..i]) |prior| {
++            const begin = @intFromPtr(w.history.ptr);
++            const other = @intFromPtr(prior.history.ptr);
++            if (begin < other + h * 8 and other < begin + h * 8) return error.UnexpectedTensor;
++        }
++        total += w.tokens.len;
++    }
++    if (out.len != total * g.width() or xs.len != out.len / 32) return error.UnexpectedTensor;
++    const ids = try g.gpa.alloc(i64, total * g.hash.heads);
++    defer g.gpa.free(ids);
++    var histories: [32][ple.max_n]i64 = undefined;
++    var at: usize = 0;
++    for (windows, 0..) |w, i| {
++        const n = w.tokens.len * g.hash.heads;
++        @memcpy(histories[i][0..h], w.history);
++        for (w.tokens, 0..) |token, t| {
++            try ple.lastIds(g.hash, histories[i][0..h], @intCast(token),
++                ids[at + t * g.hash.heads ..][0..g.hash.heads]);
++            for (0..h - 1) |j| histories[i][j] = histories[i][j + 1];
++            histories[i][h - 1] = token;
++        }
++        at += n;
++    }
++    try gatherIds(g, ids, out, xs);
++    for (windows, 0..) |w, i| @memcpy(w.history, histories[i][0..h]);
++}
++
++const Split = struct {
++    g: *const ple.Ngram,
++    ids: []const i64,
++    out: []u16,
++    per: usize,
++
++    fn part(ctx: *const anyopaque, i: usize) anyerror!void {
++        const s: *const Split = @ptrCast(@alignCast(ctx));
++        const lo = @min(s.ids.len, i * s.per);
++        try s.g.fill(s.ids, s.out, lo, @min(s.ids.len, lo + s.per));
++    }
++};
++
++fn gatherIds(g: *const ple.Ngram, ids: []const i64, out: []u16, xs: []f32) !void {
++    const items = ids.len;
++    const width = g.width();
++    const parts = @min(pool.max_parts, items / 4);
++    if (parts <= 1 or g.pool == null) {
++        try g.fill(ids, out, 0, items);
++    } else {
++        const split: Split = .{ .g = g, .ids = ids, .out = out, .per = (items + parts - 1) / parts };
++        try g.pool.?.run(parts, .{ .ctx = &split, .run = Split.part });
++    }
++    for (0..items / g.hash.heads) |t| {
++        const row = out[t * width ..][0..width];
++        if (g.format == .mlx and g.scale != 1) {
++            for (row) |*v| {
++                const f: f32 = @bitCast(@as(u32, v.*) << 16);
++                v.* = ple.toBf16(f * g.scale);
++            }
++        }
++        ple.sumGroups(row, xs[t * (width / 32) ..][0 .. width / 32]);
++    }
++}
