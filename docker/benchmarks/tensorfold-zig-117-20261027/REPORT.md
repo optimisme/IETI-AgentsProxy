@@ -347,8 +347,15 @@ passa els trossos sols de 64 files o més (`TF_FLASHNEXT_PROMPT_GEMM=0` ho desac
   comparable.
 - **45k:** ronda freda de 389 s davant de 387 s del Python (empat), primer token
   p50 / p95 de 176 / 318 s davant de 318 / 323 s, retorn 1 de 66 s davant de 79 s.
-- **Queda per fer:** per 4096 files, HC 393 davant de 340 ms i atenció 434 davant de
-  397 ms.
+- **HC amb la mateixa multiplicació (`variants/tfhc`, descartada):** cal una segona
+  còpia de les matrius, perquè `uploadTiled` i `uploadQ4` no es poden barrejar. Les
+  respostes són bones, però HC puja de 393 a 425 ms per 4096 files: separar la
+  normalització (83 ms) i el descens (60 ms) costa més que el kernel fusionat
+  (112 ms). Dades a [`results/resident/tfhc.txt`](results/resident/tfhc.txt).
+- **Queda per fer:** per 4096 files, HC 393 davant de 348 ms i atenció 434 davant de
+  420 ms ([`results/resident/pyprof-steps.txt`](results/resident/pyprof-steps.txt)).
+  El Python hi guanya amb kernels fusionats (`write_norm` i `prefill_upmix`), que
+  caldria portar: uns 15 s a la ronda freda de 74k.
 
 ## Comprovacions d'exactitud
 
