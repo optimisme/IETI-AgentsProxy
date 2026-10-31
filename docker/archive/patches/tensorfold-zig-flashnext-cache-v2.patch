@@ -1,0 +1,167 @@
+--- a/zig/src/native/cuda.zig
++++ b/zig/src/native/cuda.zig
+@@ -290,7 +290,11 @@
+     if (@hasField(@TypeOf(loaded), "cache")) if (loaded.cache) |c| if (c.budget > 0) {
+         // the family keeps and restores the states; the store picks them (exact reuse, core/prompt_cache.zig)
+         h.store_vt = .{ .bytes = c.bytes, .save = c.save, .restore = c.restore, .drop = c.drop };
+-        h.store = api.prompt_cache.Store.init(gpa, .{ .ptr = c.ptr, .vtable = &h.store_vt }, if (@hasDecl(F, "cache_rules")) .{ .lookahead = F.cache_rules.lookahead, .planned = F.cache_rules.planned, .repeat_min = if ((if (std.c.getenv("TF_FLASHNEXT_REPEAT_CACHE")) |v| v[0] == 0x30 else false)) 0 else if (@hasField(@TypeOf(F.cache_rules), "repeat_min")) F.cache_rules.repeat_min else 0 } else .{}, c.budget);
++        var rules: api.prompt_cache.Rules = if (@hasDecl(F, "cache_rules")) .{ .lookahead = F.cache_rules.lookahead, .planned = F.cache_rules.planned, .repeat_min = if ((if (std.c.getenv("TF_FLASHNEXT_REPEAT_CACHE")) |v| v[0] == 0x30 else false)) 0 else if (@hasField(@TypeOf(F.cache_rules), "repeat_min")) F.cache_rules.repeat_min else 0 } else .{};
++        rules.min_prompt = try cacheMinPrompt(if (std.c.getenv("TF_FLASHNEXT_CACHE_MIN_PROMPT")) |v| std.mem.span(v) else null);
++        rules.min_history_gap = try cacheHistoryGap(if (std.c.getenv("TF_FLASHNEXT_CACHE_HISTORY_GAP")) |v| std.mem.span(v) else null);
++        std.log.info("IETI conversation cache minimum: {d} tokens; history gap {d}; retained budget {d} MiB", .{ rules.min_prompt, rules.min_history_gap, c.budget >> 20 });
++        h.store = api.prompt_cache.Store.init(gpa, .{ .ptr = c.ptr, .vtable = &h.store_vt }, rules, c.budget);
+         h.host.cache = &h.store.?;
+     };
+     h.host.round_log = std.c.getenv("TF_FLASHNEXT_ROUND_LOG") != null;
+@@ -299,6 +303,36 @@
+     return .{ .engine = h.host.engine(), .close = Host.close, .ctx = h, .follow = if (h.follow_fn != null) Host.follow else null };
+ }
+ 
++fn cacheMinPrompt(value: ?[]const u8) !u32 {
++    const text = value orelse return 4096;
++    const n = std.fmt.parseInt(u32, text, 10) catch return error.BadCacheMinPrompt;
++    if (n < 256 or n > 65536) return error.BadCacheMinPrompt;
++    return n;
++}
++
++fn cacheHistoryGap(value: ?[]const u8) !u32 {
++    const text = value orelse return 0;
++    const n = std.fmt.parseInt(u32, text, 10) catch return error.BadCacheHistoryGap;
++    if (n > 8192) return error.BadCacheHistoryGap;
++    return n;
++}
++
++test "IETI history spacing defaults off and validates its byte-budget-neutral override" {
++    try std.testing.expectEqual(@as(u32, 0), try cacheHistoryGap(null));
++    try std.testing.expectEqual(@as(u32, 256), try cacheHistoryGap("256"));
++    try std.testing.expectError(error.BadCacheHistoryGap, cacheHistoryGap("8193"));
++    try std.testing.expectError(error.BadCacheHistoryGap, cacheHistoryGap("invalid"));
++}
++
++test "IETI cache threshold validates the environment override and preserves the upstream default" {
++    try std.testing.expectEqual(@as(u32, 4096), try cacheMinPrompt(null));
++    try std.testing.expectEqual(@as(u32, 1024), try cacheMinPrompt("1024"));
++    try std.testing.expectEqual(@as(u32, 4096), try cacheMinPrompt("4096"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("0"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("65537"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("invalid"));
++}
++
+ test "chip classes name the compute capability" {
+     const a = std.testing.allocator;
+     const name = chipClass(a, 121).?;
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -573,6 +573,9 @@
+         fn pass(self: *Self, s: *lanes.Stream, l: *Lane, from: ?*Kept) !u32 {
+             const e = self.e;
+             const ids = s.prompt();
++            const profile_copy = comptime @hasField(E, "io") and @hasField(E, "stream");
++            const copy_times = profile_copy and std.c.getenv("TF_FLASHNEXT_PASS_TIMES") != null;
++            var copy_start: std.Io.Timestamp = if (copy_times) passNow(e) else undefined;
+             var cur: ?SnapPtr = null; // the state the next segment resumes
+             var owned = false; // `cur` is this pass's own (no Kept holds it)
+             defer if (owned) e.freeSnapshot(cur.?);
+@@ -584,6 +587,7 @@
+             }
+             s.cached = @intCast(at);
+             s.reuse_failed = s.reuse.at > 0 and from == null;
++            if (copy_times) std.log.info("IETI resume copy: {d} cached tokens, {d:.1} ms", .{ at, passSince(e, &copy_start) });
+             self.dropTentative();
+             // TF_FLASHNEXT_PASS_TIMES=1: each part's wall time (the stream drained at each edge), in the log
+             const timed = comptime @hasField(E, "io") and @hasField(E, "stream");
+@@ -846,6 +850,9 @@
+         /// The prefill's local steps: admission, the last round's commits, the stream's lane and a new sequence.
+         fn preparePrefill(self: *Self, s: *lanes.Stream) !*Lane {
+             const e = self.e;
++            const profile_prepare = comptime @hasField(E, "io") and @hasField(E, "stream");
++            const prepare_times = profile_prepare and std.c.getenv("TF_FLASHNEXT_PASS_TIMES") != null;
++            var prepare_start: std.Io.Timestamp = if (prepare_times) passNow(e) else undefined;
+             const ids = s.prompt();
+             if (ids.len == 0 or ids.len > self.context or s.max_new > self.context - ids.len) return error.PromptTooLong;
+             const limit = ids.len + s.max_new + self.window; // speculative rows are outside the public context
+@@ -872,6 +879,7 @@
+             } };
+             l.reserved = need;
+             self.reserved += need;
++            if (prepare_times) std.log.info("IETI prepare sequence: {d} prompt tokens, {d:.1} ms", .{ ids.len, passSince(e, &prepare_start) });
+             return l;
+         }
+ 
+--- a/zig/src/core/prompt_cache_test.zig
++++ b/zig/src/core/prompt_cache_test.zig
+@@ -271,6 +271,54 @@
+     try std.testing.expectEqual(@as(u32, 8), s.find(&.{ 1, 2, 3, 4, 5, 9, 7, 7, 9, 9, 4 }, &.{}).?.at);
+ }
+ 
++test "IETI spaced snapshots retain a cold history, skip nearby turns, and keep sufficiently advanced histories" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 1024, .min_history_gap = 256 }, 1 << 20);
++    defer s.deinit();
++    var ids: [2200]u32 = undefined;
++    for (&ids, 0..) |*id, i| id.* = @intCast(i % 97);
++    var plan = try s.begin(a, ids[0..1800], 1799, &.{}, &.{}, null);
++    try std.testing.expectEqualSlices(u32, &.{1799}, plan.marks);
++    try std.testing.expectEqual(fresh(ids[0..1800]), f.pass(&s, ids[0..1800], plan));
++    plan = try s.begin(a, ids[0..1850], 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(@as(usize, 0), plan.marks.len);
++    try std.testing.expectEqual(fresh(ids[0..1850]), f.pass(&s, ids[0..1850], plan));
++    ids[1810] +%= 1;
++    plan = try s.begin(a, &ids, 2199, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqualSlices(u32, &.{2199}, plan.marks);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    try std.testing.expect(s.held <= s.budget);
++}
++
++test "IETI 1024 threshold reuses short conversation history and preserves exact continuation and branch state" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 1024 }, 1 << 20);
++    defer s.deinit();
++    var ids: [1850]u32 = undefined;
++    for (&ids, 0..) |*id, i| id.* = @intCast(i % 97);
++    var plan = try s.begin(a, ids[0..1800], 1799, &.{}, &.{}, null);
++    try std.testing.expectEqualSlices(u32, &.{1799}, plan.marks);
++    try std.testing.expectEqual(fresh(ids[0..1800]), f.pass(&s, ids[0..1800], plan));
++    plan = try s.begin(a, &ids, 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    ids[1810] +%= 1;
++    plan = try s.begin(a, &ids, 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    try std.testing.expect(s.held <= s.budget);
++}
++
+ test "kept states charge their real storage, a save takes spare storage first, and spare stays inside the budget" {
+     const gpa = std.testing.allocator;
+     var arena: std.heap.ArenaAllocator = .init(gpa);
+--- a/zig/src/core/prompt_cache.zig
++++ b/zig/src/core/prompt_cache.zig
+@@ -39,6 +39,9 @@
+     min_gap: u32 = 256,
+     /// Shorter prompts keep nothing: below it a mark's extra prompt call costs more than a later turn's reuse saves.
+     min_prompt: u32 = 4096,
++    /// IETI opt-in: keep an existing history state until a new history advances this far.
++    /// Zero preserves upstream's every-turn history snapshots. Cold histories are always eligible.
++    min_history_gap: u32 = 0,
+     /// A prompt this long or longer that the store has served before (the same tokens, any earlier request) keeps a state
+     /// at its second-to-last token, so the next repeat resumes there and prefills one row. 0: off. The first sighting
+     /// pays nothing; a repeat pays one extra call once.
+@@ -258,6 +261,7 @@
+         for (want.items, 0..) |w, k| {
+             const at = if (s.rules.planned) floorStart(starts, w) else w;
+             if (at <= from or at + s.rules.lookahead > prompt.len or at >= prompt.len or !s.usable(at, starts)) continue;
++            if (k == 0 and from > 0 and at - from < s.rules.min_history_gap) continue;
+             if (k > 0) { // the history's mark always; the others only away from it, each other and the resume point
+                 if (at - from < s.rules.min_gap) continue;
+                 const near = for (out.items) |o| {

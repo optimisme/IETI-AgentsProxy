@@ -1,0 +1,1059 @@
+{
+  "summary": {
+    "name": "code16-trial0",
+    "requests": 16,
+    "successes": 16,
+    "full_output_requests": 16,
+    "wall_s": 30.384667687816545,
+    "aggregate_output_tok_s": 134.80483124198815,
+    "output_tokens": 4096,
+    "ttft_p50_s": 1.4618418425088748,
+    "ttft_p95_s": 1.4627112429589033,
+    "cached_tokens": 0,
+    "input_tokens": [
+      51,
+      51,
+      51,
+      51,
+      51,
+      51,
+      51,
+      51,
+      51,
+      51,
+      52,
+      52,
+      52,
+      52,
+      52,
+      52
+    ],
+    "external_requests": 0.0,
+    "initial_running": 0.0,
+    "final_running": 0.0,
+    "preemptions": 0.0,
+    "prefix_hits_delta": 0.0,
+    "min_available_gib": 13.201568603515625,
+    "swap_out_pages": 1,
+    "oom_kills": 0,
+    "peak_running": 16.0,
+    "peak_waiting": 0.0,
+    "peak_overlapping_output_streams": 16,
+    "peak_kv_usage": 0.1732851985559567,
+    "nvme_read_gib": 0.042572021484375,
+    "nvme_write_gib": 0.035511016845703125
+  },
+  "before": {
+    "requests_running": 0.0,
+    "requests_waiting": 0.0,
+    "requests_total": 3.0,
+    "preemptions": 0.0,
+    "kv_cache_usage": 0.0,
+    "prefix_queries": 414.0,
+    "prefix_hits": 0.0
+  },
+  "after": {
+    "requests_running": 0.0,
+    "requests_waiting": 0.0,
+    "requests_total": 19.0,
+    "preemptions": 0.0,
+    "kv_cache_usage": 0.0,
+    "prefix_queries": 1236.0,
+    "prefix_hits": 0.0
+  },
+  "client_sha256": "1213d73a334c33e41c03c78a46fc84fa819e6ab29deb9955dcb68f2991f1ce4e",
+  "requests": [
+    {
+      "request_sha256": "7ceecdd93ec292b6e5328942e4514c97c2f2aae77e715b8975bf043ee387164c",
+      "ttft_s": 1.4613692099228501,
+      "content_ttft_s": 1.461370233912021,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.368041341891512,
+      "started_monotonic": 1702620.079231658,
+      "content": "```python\n\"\"\"\nLRU (Least Recently Used) Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\nimport unittest\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A generic Least Recently Used (LRU) cache implementation.\n    \n    This cache stores key-value pairs and evicts the least recently used items\n    when the cache reaches its maximum capacity.\n    \n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for key-value pairs, maintaining insertion order.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold. Must be positive.\n            \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "48005d2c2f3cf5aceec1ac66bc2887e4a2ebe496299384cdeaa7231372903a5f",
+      "ttft_s": 1.36959411483258,
+      "content_ttft_s": 1.3695989148691297,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.22850413597189,
+      "started_monotonic": 1702620.078103369,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with Type Hints, Docstrings, and Extensive Unit Tests.\n\nThis module provides a Least Recently Used (LRU) cache implementation using\na doubly-linked list and a hash map for O(1) get and put operations.\n\"\"\"\n\nfrom __future__ import annotations\n\nfrom typing import Optional, TypeVar, Generic, Dict, List, Tuple, Any\nimport unittest\n\nK = TypeVar(\"K\")\nV = TypeVar(\"V\")\n\n\nclass _Node(Generic[K, V]):\n    \"\"\"\n    Internal node for the doubly-linked list used in the LRU cache.\n\n    Attributes:\n        key: The key associated with this node.\n        value: The value associated with this key.\n        prev: Reference to the previous node in the linked list.\n        next: Reference to the next node in the linked list.\n    \"\"\"\n\n    __slots__ = (\"key\", \"value\", \"prev\", \"next\")\n\n    def __init__(self, key: K, value: V) -> None:\n        \"\"\"\n        Initialize a new node.\n\n        Args:\n            key: The key for this node.\n            value: The value",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "767462e23af1817720f7a76f458e58cb6b2e49d85a0136f8beef24094dcfb690",
+      "ttft_s": 1.46277388301678,
+      "content_ttft_s": 1.4627757868729532,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.370794703951105,
+      "started_monotonic": 1702620.078193881,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Optional, Any, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n\n    The cache stores key-value pairs and evicts the least recently used item\n    when the cache reaches its maximum capacity.\n\n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for key-value pairs, maintaining\n            insertion order to track usage recency.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n\n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n\n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer.\")\n        self.capacity: int = capacity\n        self._cache: OrderedDict[Hashable",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "b65bbeec23192c7408ecb23aa2f2525f9107ccac4bacdb2e83a766d6b516316f",
+      "ttft_s": 1.4609394981525838,
+      "content_ttft_s": 1.4609403142239898,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.36018685810268,
+      "started_monotonic": 1702620.078740297,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, TypeVar, Generic\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache stores key-value pairs with a maximum capacity. When the cache\n    is full and a new item needs to be inserted, the least recently used item\n    is evicted.\n    \n    Attributes:\n        capacity: The maximum number of items the cache can hold.\n        _cache: An OrderedDict storing the key-value pairs in access order.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold. Must be positive.\n            \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "7f81effcf5989c79fe880e5ba2751198d12e8a1cb8ddc9fde764fee8995719f9",
+      "ttft_s": 1.4610079461708665,
+      "content_ttft_s": 1.4610096260439605,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.35835492098704,
+      "started_monotonic": 1702620.078913865,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, TypeVar, Generic\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity.\n    \n    Attributes:\n        capacity: The maximum number of items the cache can hold.\n        _cache: An OrderedDict storing the key-value pairs in access order.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n        \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "05a6a14912f27f0942e341667a3bc0782db921d45c329fd510cfce626750a151",
+      "ttft_s": 1.4615197540260851,
+      "content_ttft_s": 1.4615200739353895,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.377326084068045,
+      "started_monotonic": 1702620.080177818,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache stores key-value pairs with a maximum capacity. When the cache\n    is full and a new item needs to be inserted, the least recently used item\n    is evicted.\n    \n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for cache entries.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n        \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "bf8a119c436f19152ac719b50cdce32de05c1539f00881fd61e459605937562c",
+      "ttft_s": 1.4618543300312012,
+      "content_ttft_s": 1.461854730034247,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.37298873695545,
+      "started_monotonic": 1702620.079351882,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n\n    The cache stores key-value pairs and evicts the least recently used item\n    when the cache reaches its capacity.\n\n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for key-value pairs, maintaining\n            insertion order to track usage.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n\n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n\n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self._cache: OrderedDict[Hashable, Any]",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "89109fd24a34bf7dbbd3e5df52f7a252f0b8fb03f0fa835c534c3081a09a3bf3",
+      "ttft_s": 1.461899738991633,
+      "content_ttft_s": 1.4619013229385018,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.364005787996575,
+      "started_monotonic": 1702620.078375033,
+      "content": "```python\n\"\"\"\nAn LRU (Least Recently Used) cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, TypeVar, Generic, Hashable\n\nK = TypeVar('K', bound=Hashable)\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A generic LRU (Least Recently Used) cache implementation.\n    \n    This cache stores key-value pairs and evicts the least recently used items\n    when the cache exceeds its maximum capacity.\n    \n    Attributes:\n        capacity: The maximum number of items the cache can hold.\n        _cache: An OrderedDict storing the key-value pairs in order of usage.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold. Must be positive.\n            \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n           ",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "78330ac4becd209d585a01d1729aeccee7aeb6730e2aef37ab7625a921d8578c",
+      "ttft_s": 1.4615582979749888,
+      "content_ttft_s": 1.4615597540978342,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.374279618030414,
+      "started_monotonic": 1702620.079765914,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    The cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity.\n    \n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for cache entries.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n        \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self._cache: OrderedDict[Hashable, Any] = OrderedDict()\n    \n",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "c4d3e549852f598c3e9e0a54bb8d12c07a0b5192a4bbfc799af946e48fe9c3f7",
+      "ttft_s": 1.4625272590201348,
+      "content_ttft_s": 1.462528171017766,
+      "usage": {
+        "prompt_tokens": 51,
+        "total_tokens": 307,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.372080032946542,
+      "started_monotonic": 1702620.078585817,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    The cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity.\n    \n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for the cache entries.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n        \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self._cache: OrderedDict[Hashable, Any] = OrderedDict()\n",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "21370acdb279d92b04436c2c6d099995b2872996f2d3a2dfd52a6cb0512c1e7c",
+      "ttft_s": 1.4619872111361474,
+      "content_ttft_s": 1.46198850707151,
+      "usage": {
+        "prompt_tokens": 52,
+        "total_tokens": 308,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.36534257302992,
+      "started_monotonic": 1702620.078502985,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with Type Hints, Docstrings, and Extensive Unit Tests.\n\nThis module provides a Least Recently Used (LRU) cache implementation using\na doubly-linked list and a hash map for O(1) get and put operations.\n\"\"\"\n\nfrom __future__ import annotations\n\nfrom collections import OrderedDict\nfrom typing import Any, Generic, TypeVar, Optional\n\nK = TypeVar(\"K\")\nV = TypeVar(\"V\")\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n\n    The cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity. Both get and put operations\n    run in O(1) average time complexity.\n\n    Attributes:\n        capacity: The maximum number of items the cache can hold.\n        _cache: An OrderedDict that maintains insertion/access order.\n\n    Example:\n        >>> cache = LRUCache[int, str](capacity=2)\n        >>> cache.put(1, \"a\")\n        >>> cache.put(2, \"b\")\n        >>> cache.get(1)\n        'a'\n       ",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "288bf8591a93dcc1b746212c575ed193b60cc407dc4f8ae8579009238dd973a8",
+      "ttft_s": 1.4617543299682438,
+      "content_ttft_s": 1.4617546978406608,
+      "usage": {
+        "prompt_tokens": 52,
+        "total_tokens": 308,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.379518917994574,
+      "started_monotonic": 1702620.080069306,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Optional, Any, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n\n    The cache stores key-value pairs and evicts the least recently used item\n    when the cache reaches its capacity.\n\n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for key-value pairs, maintaining\n            insertion/access order.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n\n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n\n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer.\")\n        self.capacity: int = capacity\n        self._cache: OrderedDict[Hashable, Any] = OrderedDict",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "501eedbe29114f934430e05f9d41ba3edc02d30bb1d213180cad9c6976043a4b",
+      "ttft_s": 1.46205601003021,
+      "content_ttft_s": 1.462056634016335,
+      "usage": {
+        "prompt_tokens": 52,
+        "total_tokens": 308,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.376501058926806,
+      "started_monotonic": 1702620.079461786,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, TypeVar, Generic\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity.\n    \n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for the cache entries.\n    \n    Example:\n        >>> cache = LRUCache[int, str](capacity=2)\n        >>> cache.put(1, \"one\")\n        >>> cache.put(2, \"two\")\n        >>> cache.get(1)\n        'one'\n        >>> cache.put(3, \"three\")  # Evicts key 2\n        >>> cache.get(2) is None\n        True\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n       ",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "26968d138f146b8c00f06a6ea3e363fec97ab4a4cb7c65b0b0319eeabd2a862e",
+      "ttft_s": 1.4618293549865484,
+      "content_ttft_s": 1.4618300751317292,
+      "usage": {
+        "prompt_tokens": 52,
+        "total_tokens": 308,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.366537326015532,
+      "started_monotonic": 1702620.079005993,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n\n    This cache stores key-value pairs with a maximum capacity. When the cache\n    is full and a new item is added, the least recently used item is evicted.\n\n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for key-value pairs, maintaining\n            insertion/access order.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n\n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n\n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self._",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "b81fc400b353957e566b80787943d31e5d976c0b3d012f92049155d884a6d934",
+      "ttft_s": 1.4620577229652554,
+      "content_ttft_s": 1.4620581548660994,
+      "usage": {
+        "prompt_tokens": 52,
+        "total_tokens": 308,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.36186661897227,
+      "started_monotonic": 1702620.078687817,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, TypeVar, Generic\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n\n    This cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity.\n\n    Attributes:\n        capacity: The maximum number of items the cache can hold.\n        _cache: An OrderedDict that stores the key-value pairs in order of\n                usage, with the most recently used item at the end.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n\n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n\n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "bf9f715e0b7b4d771cf74dfb079cfe55f14e14f09e426d3d190bdbe79606d444",
+      "ttft_s": 1.462690362939611,
+      "content_ttft_s": 1.4626910991501063,
+      "usage": {
+        "prompt_tokens": 52,
+        "total_tokens": 308,
+        "completion_tokens": 256,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {},
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 30.357462536077946,
+      "started_monotonic": 1702620.077987833,
+      "content": "```python\n\"\"\"\nLRU Cache Implementation with type hints, docstrings, and extensive unit tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Any, Optional, Hashable\n\n\nclass LRUCache:\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    The cache stores key-value pairs and evicts the least recently used\n    items when the cache reaches its capacity.\n    \n    Attributes:\n        capacity (int): The maximum number of items the cache can hold.\n        _cache (OrderedDict): Internal storage for key-value pairs.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n                      Must be a positive integer.\n        \n        Raises:\n            ValueError: If capacity is not a positive integer.\n        \"\"\"\n        if not isinstance(capacity, int) or capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self.capacity: int = capacity\n        self._cache: OrderedDict[Hashable, Any] = OrderedDict()\n",
+      "reasoning": "",
+      "tool_calls": []
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1792775694.9495742,
+      "available_gib": 15.873085021972656,
+      "swap_used_gib": 0.402130126953125,
+      "pswpout": 2338203,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376208754176,
+      "nvme_write_bytes": 970981444608,
+      "health": {
+        "requests_running": 0.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.0,
+        "prefix_queries": 414.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775695.9563239,
+      "available_gib": 13.248409271240234,
+      "swap_used_gib": 0.40212249755859375,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376211244544,
+      "nvme_write_bytes": 970981448704,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775696.966441,
+      "available_gib": 13.209251403808594,
+      "swap_used_gib": 0.40212249755859375,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376211486208,
+      "nvme_write_bytes": 970981448704,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775697.978258,
+      "available_gib": 13.209304809570312,
+      "swap_used_gib": 0.40212249755859375,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376212284928,
+      "nvme_write_bytes": 970986171392,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775698.9899945,
+      "available_gib": 13.208465576171875,
+      "swap_used_gib": 0.40212249755859375,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376212350464,
+      "nvme_write_bytes": 970986171392,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775700.000796,
+      "available_gib": 13.21044921875,
+      "swap_used_gib": 0.40212249755859375,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376213116416,
+      "nvme_write_bytes": 970986404864,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775701.0122588,
+      "available_gib": 13.210151672363281,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376213964288,
+      "nvme_write_bytes": 970986433536,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775702.0228796,
+      "available_gib": 13.21066665649414,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376215426560,
+      "nvme_write_bytes": 970986499072,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775703.03187,
+      "available_gib": 13.219989776611328,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376215967232,
+      "nvme_write_bytes": 970988424192,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775704.0443773,
+      "available_gib": 13.221393585205078,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376217638400,
+      "nvme_write_bytes": 970988424192,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775705.0534692,
+      "available_gib": 13.212203979492188,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376218953216,
+      "nvme_write_bytes": 970988424192,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775706.0642142,
+      "available_gib": 13.213699340820312,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376219497984,
+      "nvme_write_bytes": 970988424192,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775707.0750453,
+      "available_gib": 13.21407699584961,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376220050944,
+      "nvme_write_bytes": 970988653568,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775708.0853262,
+      "available_gib": 13.215644836425781,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376221005312,
+      "nvme_write_bytes": 970988653568,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775709.0960243,
+      "available_gib": 13.218181610107422,
+      "swap_used_gib": 0.4021186828613281,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376222565888,
+      "nvme_write_bytes": 970988653568,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775710.105869,
+      "available_gib": 13.201568603515625,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376239400448,
+      "nvme_write_bytes": 970988657664,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775711.1166868,
+      "available_gib": 13.208305358886719,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376241001984,
+      "nvme_write_bytes": 970988731392,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775712.1272554,
+      "available_gib": 13.207954406738281,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376242046464,
+      "nvme_write_bytes": 970988743680,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775713.1376796,
+      "available_gib": 13.209281921386719,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376243336704,
+      "nvme_write_bytes": 970989009920,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775714.1476204,
+      "available_gib": 13.209266662597656,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376244389376,
+      "nvme_write_bytes": 970989009920,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775715.1575437,
+      "available_gib": 13.210746765136719,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376244962816,
+      "nvme_write_bytes": 970989059072,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775716.1687217,
+      "available_gib": 13.212333679199219,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376245679616,
+      "nvme_write_bytes": 970989063168,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775717.1799986,
+      "available_gib": 13.213958740234375,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376246445568,
+      "nvme_write_bytes": 970989063168,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775718.190485,
+      "available_gib": 13.214466094970703,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376247682560,
+      "nvme_write_bytes": 971004705792,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775719.1998723,
+      "available_gib": 13.214839935302734,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376248468992,
+      "nvme_write_bytes": 971019541504,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775720.2073271,
+      "available_gib": 13.214820861816406,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376249964032,
+      "nvme_write_bytes": 971019557888,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775721.2182841,
+      "available_gib": 13.214797973632812,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376251237888,
+      "nvme_write_bytes": 971019557888,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775722.2299786,
+      "available_gib": 13.214576721191406,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376251864576,
+      "nvme_write_bytes": 971019557888,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775723.242391,
+      "available_gib": 13.214561462402344,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376252917248,
+      "nvme_write_bytes": 971019557888,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775724.2527897,
+      "available_gib": 13.214790344238281,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376253572608,
+      "nvme_write_bytes": 971019557888,
+      "health": {
+        "requests_running": 16.0,
+        "requests_waiting": 0.0,
+        "requests_total": 3.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.1732851985559567,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    },
+    {
+      "time": 1792775725.2644503,
+      "available_gib": 13.21444320678711,
+      "swap_used_gib": 0.4020195007324219,
+      "pswpout": 2338204,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11376254465536,
+      "nvme_write_bytes": 971019574272,
+      "health": {
+        "requests_running": 15.0,
+        "requests_waiting": 0.0,
+        "requests_total": 4.0,
+        "preemptions": 0.0,
+        "kv_cache_usage": 0.16245487364620936,
+        "prefix_queries": 1236.0,
+        "prefix_hits": 0.0
+      }
+    }
+  ]
+}

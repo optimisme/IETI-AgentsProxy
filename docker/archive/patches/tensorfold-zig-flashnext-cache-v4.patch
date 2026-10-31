@@ -1,0 +1,462 @@
+--- a/zig/src/native/cuda.zig
++++ b/zig/src/native/cuda.zig
+@@ -290,7 +290,12 @@
+     if (@hasField(@TypeOf(loaded), "cache")) if (loaded.cache) |c| if (c.budget > 0) {
+         // the family keeps and restores the states; the store picks them (exact reuse, core/prompt_cache.zig)
+         h.store_vt = .{ .bytes = c.bytes, .save = c.save, .restore = c.restore, .drop = c.drop };
+-        h.store = api.prompt_cache.Store.init(gpa, .{ .ptr = c.ptr, .vtable = &h.store_vt }, if (@hasDecl(F, "cache_rules")) .{ .lookahead = F.cache_rules.lookahead, .planned = F.cache_rules.planned, .repeat_min = if ((if (std.c.getenv("TF_FLASHNEXT_REPEAT_CACHE")) |v| v[0] == 0x30 else false)) 0 else if (@hasField(@TypeOf(F.cache_rules), "repeat_min")) F.cache_rules.repeat_min else 0 } else .{}, c.budget);
++        var rules: api.prompt_cache.Rules = if (@hasDecl(F, "cache_rules")) .{ .lookahead = F.cache_rules.lookahead, .planned = F.cache_rules.planned, .repeat_min = if ((if (std.c.getenv("TF_FLASHNEXT_REPEAT_CACHE")) |v| v[0] == 0x30 else false)) 0 else if (@hasField(@TypeOf(F.cache_rules), "repeat_min")) F.cache_rules.repeat_min else 0 } else .{};
++        rules.min_prompt = try cacheMinPrompt(if (std.c.getenv("TF_FLASHNEXT_CACHE_MIN_PROMPT")) |v| std.mem.span(v) else null);
++        rules.min_history_gap = try cacheHistoryGap(if (std.c.getenv("TF_FLASHNEXT_CACHE_HISTORY_GAP")) |v| std.mem.span(v) else null);
++        rules.prefer_superseded = !try cacheBranchLRU(if (std.c.getenv("TF_FLASHNEXT_CACHE_BRANCH_LRU")) |v| std.mem.span(v) else null);
++        std.log.info("IETI conversation cache minimum: {d} tokens; history gap {d}; branch LRU {}; retained budget {d} MiB", .{ rules.min_prompt, rules.min_history_gap, !rules.prefer_superseded, c.budget >> 20 });
++        h.store = api.prompt_cache.Store.init(gpa, .{ .ptr = c.ptr, .vtable = &h.store_vt }, rules, c.budget);
+         h.host.cache = &h.store.?;
+     };
+     h.host.round_log = std.c.getenv("TF_FLASHNEXT_ROUND_LOG") != null;
+@@ -299,6 +304,50 @@
+     return .{ .engine = h.host.engine(), .close = Host.close, .ctx = h, .follow = if (h.follow_fn != null) Host.follow else null };
+ }
+ 
++fn cacheMinPrompt(value: ?[]const u8) !u32 {
++    const text = value orelse return 4096;
++    const n = std.fmt.parseInt(u32, text, 10) catch return error.BadCacheMinPrompt;
++    if (n < 256 or n > 65536) return error.BadCacheMinPrompt;
++    return n;
++}
++
++fn cacheBranchLRU(value: ?[]const u8) !bool {
++    const text = value orelse return false;
++    if (std.mem.eql(u8, text, "0")) return false;
++    if (std.mem.eql(u8, text, "1")) return true;
++    return error.BadCacheBranchLRU;
++}
++
++test "IETI branch LRU opt-in is strict and preserves the stock default" {
++    try std.testing.expect(!try cacheBranchLRU(null));
++    try std.testing.expect(!try cacheBranchLRU("0"));
++    try std.testing.expect(try cacheBranchLRU("1"));
++    try std.testing.expectError(error.BadCacheBranchLRU, cacheBranchLRU("yes"));
++}
++
++fn cacheHistoryGap(value: ?[]const u8) !u32 {
++    const text = value orelse return 0;
++    const n = std.fmt.parseInt(u32, text, 10) catch return error.BadCacheHistoryGap;
++    if (n > 8192) return error.BadCacheHistoryGap;
++    return n;
++}
++
++test "IETI history spacing defaults off and validates its byte-budget-neutral override" {
++    try std.testing.expectEqual(@as(u32, 0), try cacheHistoryGap(null));
++    try std.testing.expectEqual(@as(u32, 256), try cacheHistoryGap("256"));
++    try std.testing.expectError(error.BadCacheHistoryGap, cacheHistoryGap("8193"));
++    try std.testing.expectError(error.BadCacheHistoryGap, cacheHistoryGap("invalid"));
++}
++
++test "IETI cache threshold validates the environment override and preserves the upstream default" {
++    try std.testing.expectEqual(@as(u32, 4096), try cacheMinPrompt(null));
++    try std.testing.expectEqual(@as(u32, 1024), try cacheMinPrompt("1024"));
++    try std.testing.expectEqual(@as(u32, 4096), try cacheMinPrompt("4096"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("0"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("65537"));
++    try std.testing.expectError(error.BadCacheMinPrompt, cacheMinPrompt("invalid"));
++}
++
+ test "chip classes name the compute capability" {
+     const a = std.testing.allocator;
+     const name = chipClass(a, 121).?;
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -573,6 +573,9 @@
+         fn pass(self: *Self, s: *lanes.Stream, l: *Lane, from: ?*Kept) !u32 {
+             const e = self.e;
+             const ids = s.prompt();
++            const profile_copy = comptime @hasField(E, "io") and @hasField(E, "stream");
++            const copy_times = profile_copy and std.c.getenv("TF_FLASHNEXT_PASS_TIMES") != null;
++            var copy_start: std.Io.Timestamp = if (copy_times) passNow(e) else undefined;
+             var cur: ?SnapPtr = null; // the state the next segment resumes
+             var owned = false; // `cur` is this pass's own (no Kept holds it)
+             defer if (owned) e.freeSnapshot(cur.?);
+@@ -584,6 +587,7 @@
+             }
+             s.cached = @intCast(at);
+             s.reuse_failed = s.reuse.at > 0 and from == null;
++            if (copy_times) std.log.info("IETI resume copy: {d} cached tokens, {d:.1} ms", .{ at, passSince(e, &copy_start) });
+             self.dropTentative();
+             // TF_FLASHNEXT_PASS_TIMES=1: each part's wall time (the stream drained at each edge), in the log
+             const timed = comptime @hasField(E, "io") and @hasField(E, "stream");
+@@ -846,6 +850,9 @@
+         /// The prefill's local steps: admission, the last round's commits, the stream's lane and a new sequence.
+         fn preparePrefill(self: *Self, s: *lanes.Stream) !*Lane {
+             const e = self.e;
++            const profile_prepare = comptime @hasField(E, "io") and @hasField(E, "stream");
++            const prepare_times = profile_prepare and std.c.getenv("TF_FLASHNEXT_PASS_TIMES") != null;
++            var prepare_start: std.Io.Timestamp = if (prepare_times) passNow(e) else undefined;
+             const ids = s.prompt();
+             if (ids.len == 0 or ids.len > self.context or s.max_new > self.context - ids.len) return error.PromptTooLong;
+             const limit = ids.len + s.max_new + self.window; // speculative rows are outside the public context
+@@ -872,6 +879,7 @@
+             } };
+             l.reserved = need;
+             self.reserved += need;
++            if (prepare_times) std.log.info("IETI prepare sequence: {d} prompt tokens, {d:.1} ms", .{ ids.len, passSince(e, &prepare_start) });
+             return l;
+         }
+ 
+--- a/zig/src/core/prompt_cache_test.zig
++++ b/zig/src/core/prompt_cache_test.zig
+@@ -211,6 +211,31 @@
+     try std.testing.expectEqual(s.entries.items.len, f.live);
+ }
+ 
++test "IETI branch LRU evicts stale unrelated history before a recently resumed earlier turn" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 0, .prefer_superseded = false }, 330);
++    defer s.deinit();
++    const other = [_]u32{ 5, 5, 5, 5 };
++    const t1 = [_]u32{ 1, 2, 3, 4, 5, 6 };
++    const t2 = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8 };
++    const t3 = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
++    _ = f.pass(&s, &other, try s.begin(a, &other, 3, &.{}, &.{}, null));
++    _ = f.pass(&s, &t1, try s.begin(a, &t1, 4, &.{}, &.{}, null));
++    _ = f.pass(&s, &t2, try s.begin(a, &t2, 6, &.{}, &.{}, null));
++    _ = f.pass(&s, &t3, try s.begin(a, &t3, 8, &.{}, &.{}, null));
++    try std.testing.expect(s.find(&other, &.{}) == null);
++    const branch = [_]u32{ 1, 2, 3, 4, 77, 88 };
++    const plan = try s.begin(a, &branch, 4, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 4), plan.from);
++    try std.testing.expectEqual(fresh(&branch), f.pass(&s, &branch, plan));
++    try std.testing.expect(s.held <= s.budget);
++    try std.testing.expectEqual(s.entries.items.len, f.live);
++}
++
+ test "a failed copy keeps nothing and a failed restore prefills from the start" {
+     const gpa = std.testing.allocator;
+     var arena: std.heap.ArenaAllocator = .init(gpa);
+@@ -269,6 +294,54 @@
+     try std.testing.expectEqualSlices(u32, &.{8}, q.marks);
+     try std.testing.expectEqual(fresh(&long), f.pass(&s, &long, q));
+     try std.testing.expectEqual(@as(u32, 8), s.find(&.{ 1, 2, 3, 4, 5, 9, 7, 7, 9, 9, 4 }, &.{}).?.at);
++}
++
++test "IETI spaced snapshots retain a cold history, skip nearby turns, and keep sufficiently advanced histories" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 1024, .min_history_gap = 256 }, 1 << 20);
++    defer s.deinit();
++    var ids: [2200]u32 = undefined;
++    for (&ids, 0..) |*id, i| id.* = @intCast(i % 97);
++    var plan = try s.begin(a, ids[0..1800], 1799, &.{}, &.{}, null);
++    try std.testing.expectEqualSlices(u32, &.{1799}, plan.marks);
++    try std.testing.expectEqual(fresh(ids[0..1800]), f.pass(&s, ids[0..1800], plan));
++    plan = try s.begin(a, ids[0..1850], 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(@as(usize, 0), plan.marks.len);
++    try std.testing.expectEqual(fresh(ids[0..1850]), f.pass(&s, ids[0..1850], plan));
++    ids[1810] +%= 1;
++    plan = try s.begin(a, &ids, 2199, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqualSlices(u32, &.{2199}, plan.marks);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    try std.testing.expect(s.held <= s.budget);
++}
++
++test "IETI 1024 threshold reuses short conversation history and preserves exact continuation and branch state" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 1024 }, 1 << 20);
++    defer s.deinit();
++    var ids: [1850]u32 = undefined;
++    for (&ids, 0..) |*id, i| id.* = @intCast(i % 97);
++    var plan = try s.begin(a, ids[0..1800], 1799, &.{}, &.{}, null);
++    try std.testing.expectEqualSlices(u32, &.{1799}, plan.marks);
++    try std.testing.expectEqual(fresh(ids[0..1800]), f.pass(&s, ids[0..1800], plan));
++    plan = try s.begin(a, &ids, 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    ids[1810] +%= 1;
++    plan = try s.begin(a, &ids, 1849, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 1799), plan.from);
++    try std.testing.expectEqual(fresh(&ids), f.pass(&s, &ids, plan));
++    try std.testing.expect(s.held <= s.budget);
+ }
+ 
+ test "kept states charge their real storage, a save takes spare storage first, and spare stays inside the budget" {
+--- a/zig/src/core/prompt_cache.zig
++++ b/zig/src/core/prompt_cache.zig
+@@ -39,6 +39,11 @@
+     min_gap: u32 = 256,
+     /// Shorter prompts keep nothing: below it a mark's extra prompt call costs more than a later turn's reuse saves.
+     min_prompt: u32 = 4096,
++    /// IETI opt-in: keep an existing history state until a new history advances this far.
++    /// Zero preserves upstream's every-turn history snapshots. Cold histories are always eligible.
++    min_history_gap: u32 = 0,
++    /// Upstream favors superseded histories; false uses LRU so recently used branch points survive.
++    prefer_superseded: bool = true,
+     /// A prompt this long or longer that the store has served before (the same tokens, any earlier request) keeps a state
+     /// at its second-to-last token, so the next repeat resumes there and prefills one row. 0: off. The first sighting
+     /// pays nothing; a repeat pays one extra call once.
+@@ -258,6 +263,7 @@
+         for (want.items, 0..) |w, k| {
+             const at = if (s.rules.planned) floorStart(starts, w) else w;
+             if (at <= from or at + s.rules.lookahead > prompt.len or at >= prompt.len or !s.usable(at, starts)) continue;
++            if (k == 0 and from > 0 and at - from < s.rules.min_history_gap) continue;
+             if (k > 0) { // the history's mark always; the others only away from it, each other and the resume point
+                 if (at - from < s.rules.min_gap) continue;
+                 const near = for (out.items) |o| {
+@@ -342,6 +348,7 @@
+ 
+     /// The entry to free first, never `skip` (a pass's resume): one a later prompt extends (never a shared cut), oldest first; else the oldest.
+     fn victimBut(s: *const Store, skip: ?*Entry, prompt: []const u32) ?usize {
++        if (!s.rules.prefer_superseded) return s.oldestBut(skip);
+         var best: ?usize = null;
+         for (s.entries.items, 0..) |e, i| {
+             if (e.shared or e == skip) continue; // a shared cut is evicted only as the least recently used
+@@ -352,6 +359,10 @@
+             if (moved_on and (best == null or e.used < s.entries.items[best.?].used)) best = i;
+         }
+         if (best) |i| return i;
++        return s.oldestBut(skip);
++    }
++
++    fn oldestBut(s: *const Store, skip: ?*Entry) ?usize {
+         var oldest: ?usize = null;
+         for (s.entries.items, 0..) |e, i| if (e != skip and (oldest == null or e.used < s.entries.items[oldest.?].used)) {
+             oldest = i;
+--- a/zig/src/server/prompt.zig
++++ b/zig/src/server/prompt.zig
+@@ -54,9 +54,32 @@
+     };
+     if (input.media) |raw| return prepareMedia(srv, cx, raw, input.tools, thinking, effort);
+     const prompt = try renderIds(srv, cx, input.messages, input.tools, thinking, effort, true);
+-    const history = try renderIds(srv, cx, input.messages, input.tools, thinking, effort, false);
+-    var history_len: usize = 0;
+-    if (history.len > 0 and history.len < prompt.len and std.mem.eql(u32, prompt[0..history.len], history)) history_len = history.len;
++    // A retained point before the current user survives edits of that user turn.
++    // Render it instead of the full history, so the normal path still renders twice.
++    var prior_messages = input.messages;
++    var trimmed = false;
++    if (std.c.getenv("TF_FLASHNEXT_CACHE_STABLE_HISTORY")) |enabled| if (enabled[0] == '1') {
++        if (input.messages == .array and input.messages.array.len > 1) {
++            const list = input.messages.array;
++            if (list[list.len - 1].strField("role")) |role| if (std.mem.eql(u8, role, "user")) {
++                prior_messages = .{ .array = list[0 .. list.len - 1] };
++                trimmed = true;
++            };
++        }
++    };
++    var scratch: Cx = .{ .a = cx.a };
++    var history = if (trimmed)
++        renderIds(srv, &scratch, prior_messages, input.tools, thinking, effort, false) catch |e| switch (e) {
++            error.OutOfMemory => return error.OutOfMemory,
++            error.Refused => &.{},
++        }
++    else try renderIds(srv, cx, input.messages, input.tools, thinking, effort, false);
++    var history_len = stableHistoryCut(prompt, history);
++    // Some templates rewrite a previous final turn. Only retain exact token prefixes.
++    if (trimmed and history_len == 0) {
++        history = try renderIds(srv, cx, input.messages, input.tools, thinking, effort, false);
++        history_len = stableHistoryCut(prompt, history);
++    }
+     if (history_len == 0 and prompt.len > 1 and std.mem.eql(u32, history, prompt)) history_len = prompt.len - 1; // a template with no generation suffix
+     return .{ .ids = prompt, .history_len = history_len };
+ }
+@@ -118,3 +141,20 @@
+     while (shared < @min(prompt_ids.len, other.len) and prompt_ids[shared] == other[shared]) shared += 1;
+     return if (shared >= 512) shared else 0;
+ }
++
++// Keep one lookahead token in the prompt for the MTP snapshot contract.
++fn stableHistoryCut(prompt: []const u32, prior: []const u32) usize {
++    if (prior.len == 0 or prior.len >= prompt.len) return 0;
++    return if (std.mem.eql(u32, prompt[0..prior.len], prior)) prior.len else 0;
++}
++
++test "IETI history boundary survives a changed current user and rejects incompatible rendering" {
++    const prior = [_]u32{ 1, 2, 3, 4 };
++    const first = [_]u32{ 1, 2, 3, 4, 5, 6, 7 };
++    const branch = [_]u32{ 1, 2, 3, 4, 5, 9, 8 };
++    try std.testing.expectEqual(@as(usize, 4), stableHistoryCut(&first, &prior));
++    try std.testing.expectEqual(@as(usize, 4), stableHistoryCut(&branch, &prior));
++    try std.testing.expectEqual(@as(usize, 0), stableHistoryCut(&branch, &.{ 1, 9, 3 }));
++    try std.testing.expectEqual(@as(usize, 0), stableHistoryCut(&branch, &branch));
++    try std.testing.expectEqual(@as(usize, 0), stableHistoryCut(&branch, &.{}));
++}
+--- a/zig/src/server/listener.zig
++++ b/zig/src/server/listener.zig
+@@ -53,8 +53,15 @@
+             const e = posix.errno(rc);
+             switch (e) {
+                 .SUCCESS => {
++                    const fd: posix.socket_t = @intCast(rc);
++                    const one: c_int = 1;
++                    posix.setsockopt(fd, posix.IPPROTO.TCP, posix.TCP.NODELAY, std.mem.asBytes(&one)) catch |err| {
++                        _ = posix.system.close(fd);
++                        log.line("could not configure accepted TCP connection: {s}", .{@errorName(err)});
++                        continue;
++                    };
+                     nofile_logged.store(false, .release);
+-                    return .{ .fd = @intCast(rc), .peer = Threaded.addressFromPosix(&storage) };
++                    return .{ .fd = fd, .peer = Threaded.addressFromPosix(&storage) };
+                 },
+                 .INTR, .AGAIN, .CONNABORTED, .MFILE, .NFILE, .NOBUFS, .NOMEM => {
+                     if (e != .INTR) {
+@@ -132,3 +139,52 @@
+     try std.testing.expectEqualStrings("127.0.0.1", peerText(&buf, .{ .ip4 = .loopback(0) }));
+     try std.testing.expectEqualStrings("::1", peerText(&buf, .{ .ip6 = .loopback(0) }));
+ }
++
++test "accepted IPv4 and IPv6 TCP streams disable Nagle for incremental responses" {
++    for ([_]net.IpAddress{ .{ .ip4 = .loopback(0) }, .{ .ip6 = .loopback(0) } }) |address| {
++        const listener = try Listener.open(address);
++        defer listener.close();
++        const rc = posix.system.socket(if (address == .ip4) posix.AF.INET else posix.AF.INET6, posix.SOCK.STREAM, 0);
++        if (posix.errno(rc) != .SUCCESS) return error.SocketFailed;
++        const client: posix.socket_t = @intCast(rc);
++        defer _ = posix.system.close(client);
++        const peer: net.IpAddress = if (address == .ip4) .{ .ip4 = .loopback(listener.port()) } else .{ .ip6 = .loopback(listener.port()) };
++        var storage: Threaded.PosixAddress = undefined;
++        const len = Threaded.addressToPosix(&peer, &storage);
++        if (posix.errno(posix.system.connect(client, &storage.any, len)) != .SUCCESS) return error.ConnectFailed;
++        const accepted = acceptWithin(listener, 2000) orelse return error.AcceptFailed;
++        defer _ = posix.system.close(accepted.fd);
++        var value: c_int = 0;
++        var size: posix.socklen_t = @sizeOf(c_int);
++        try std.testing.expect(std.c.getsockopt(accepted.fd, posix.IPPROTO.TCP, posix.TCP.NODELAY, &value, &size) == 0);
++        try std.testing.expect(value != 0);
++    }
++}
++
++fn acceptWithin(listener: Listener, timeout_ms: u32) ?Listener.Accepted {
++    const Watchdog = struct {
++        stop: std.atomic.Value(bool) = .init(false),
++        done: std.atomic.Value(bool) = .init(false),
++
++        fn run(w: *@This(), milliseconds: u32) void {
++            var elapsed: u32 = 0;
++            while (elapsed < milliseconds and !w.done.load(.acquire)) : (elapsed += 10) {
++                std.Io.sleep(log.io(), .fromMilliseconds(10), .awake) catch break;
++            }
++            if (!w.done.load(.acquire)) w.stop.store(true, .release);
++        }
++    };
++    var watchdog: Watchdog = .{};
++    const thread = std.Thread.spawn(.{}, Watchdog.run, .{ &watchdog, timeout_ms }) catch return null;
++    defer {
++        watchdog.done.store(true, .release);
++        thread.join();
++    }
++    return listener.accept(&watchdog.stop);
++}
++
++test "the accepted-stream test stops when no usable connection arrives" {
++    const listener = try Listener.open(.{ .ip4 = .loopback(0) });
++    defer listener.close();
++    try std.testing.expect(acceptWithin(listener, 20) == null);
++}
+--- a/zig/src/core/template/eval.zig
++++ b/zig/src/core/template/eval.zig
+@@ -24,6 +24,7 @@
+     vars: *const v.Map,
+     out: *std.ArrayList(u8),
+     depth: usize = 0,
++    acc: std.ArrayList(u8) = .empty,
+ 
+     fn resolve(c: *Ctx, name: []const u8) Error!Value {
+         if (c.vars.get(name)) |x| return x;
+@@ -31,6 +32,25 @@
+         return c.rt.undef("'{s}' is undefined", .{name});
+     }
+ };
++
++const acc_min = 4096;
++
++fn isAcc(c: *const Ctx, s: []const u8) bool {
++    return s.len > 0 and s.ptr == c.acc.items.ptr and s.len == c.acc.items.len;
++}
++
++fn join(c: *Ctx, l: []const u8, r: []const u8) Error![]const u8 {
++    const a = c.rt.a;
++    if (l.len < acc_min and !isAcc(c, l)) return std.mem.concat(a, u8, &.{ l, r });
++    const fresh = !isAcc(c, l);
++    if (fresh or c.acc.items.len + r.len > c.acc.capacity) {
++        var grown: std.ArrayList(u8) = try .initCapacity(a, if (fresh) l.len + r.len else (l.len + r.len) * 2);
++        grown.appendSliceAssumeCapacity(l);
++        c.acc = grown;
++    }
++    c.acc.appendSliceAssumeCapacity(r);
++    return c.acc.items;
++}
+ 
+ const Flow = enum { normal, brk, cont };
+ 
+@@ -329,7 +349,7 @@
+         const safe = l.str.safe or r.str.safe;
+         const ls = if (safe and !l.str.safe) try htmlEscape(c, l.str.s) else l.str.s;
+         const rs = if (safe and !r.str.safe) try htmlEscape(c, r.str.s) else r.str.s;
+-        return .{ .str = .{ .s = try std.mem.concat(rt.a, u8, &.{ ls, rs }), .safe = safe } };
++        return .{ .str = .{ .s = try join(c, ls, rs), .safe = safe } };
+     }
+     if (op == .add and l == .list and r == .list and l.list.seq == r.list.seq and (l.list.seq == .list or l.list.seq == .tuple))
+         return rt.list(try std.mem.concat(rt.a, Value, &.{ l.list.items, r.list.items }), l.list.seq);
+@@ -442,8 +462,15 @@
+         },
+         .binop => |b| binop(c, b.op, try eval(c, act, b.l), try eval(c, act, b.r)),
+         .concat => |items| blk: {
++            const first = try v.toStr(rt, try eval(c, act, items[0]));
++            if (isAcc(c, first) or first.len >= acc_min) {
++                var out = first;
++                for (items[1..]) |x| out = try join(c, out, try v.toStr(rt, try eval(c, act, x)));
++                break :blk Value.string(out);
++            }
+             var out: std.ArrayList(u8) = .empty;
+-            for (items) |x| try out.appendSlice(rt.a, try v.toStr(rt, try eval(c, act, x)));
++            try out.appendSlice(rt.a, first);
++            for (items[1..]) |x| try out.appendSlice(rt.a, try v.toStr(rt, try eval(c, act, x)));
+             break :blk Value.string(out.items);
+         },
+         .list, .tuple => |items| blk: {
+--- a/zig/src/core/template/tests.zig
++++ b/zig/src/core/template/tests.zig
+@@ -119,3 +119,31 @@
+     try expect("{% if %}", shared, .{ .text = null, .raised = null });
+     try expect("{% for x in y %}", shared, .{ .text = null, .raised = null });
+ }
++
++test "appending to a long string in a namespace stays linear in memory" {
++    const a = std.testing.allocator;
++    const filler: [1000]u8 = @splat('x');
++    var json: std.ArrayList(u8) = .empty;
++    defer json.deinit(a);
++    try json.appendSlice(a, "{\"messages\":[");
++    for (0..600) |i| {
++        if (i > 0) try json.append(a, ',');
++        try json.print(a, "{{\"role\":\"user\",\"content\":\"{s}\"}}", .{&filler});
++    }
++    try json.appendSlice(a, "]}");
++    const parsed = try std.json.parseFromSlice(std.json.Value, a, json.items, .{});
++    defer parsed.deinit();
++    const budget = try a.alloc(u8, 24 << 20);
++    defer a.free(budget);
++    var fba = std.heap.FixedBufferAllocator.init(budget);
++    const source = "{% set ns = namespace(out='') %}{% for m in messages %}{% set ns.out = ns.out + m.content %}{% set ns.out = ns.out ~ '|' %}{% endfor %}{{ ns.out }}";
++    const tilde = "{% set ns = namespace(out='') %}{% for m in messages %}{% set ns.out = ns.out ~ m.content ~ '|' %}{% endfor %}{{ ns.out }}";
++    const out = try template.renderChat(fba.allocator(), source, parsed.value.object.get("messages").?, .null, parsed.value, false, null);
++    try std.testing.expectEqual(@as(usize, 600 * 1001), out.len);
++    try std.testing.expectEqualStrings(filler ++ "|" ++ filler ++ "|", out[0 .. 2 * 1001]);
++    const first = try a.dupe(u8, out);
++    defer a.free(first);
++    fba.reset();
++    const out2 = try template.renderChat(fba.allocator(), tilde, parsed.value.object.get("messages").?, .null, parsed.value, false, null);
++    try std.testing.expectEqualStrings(first, out2);
++}

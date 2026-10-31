@@ -1,0 +1,887 @@
+{
+  "summary": {
+    "name": "short-n2-case1",
+    "requests": 2,
+    "successes": 2,
+    "full_output_requests": 2,
+    "wall_s": 3.6587315779179335,
+    "aggregate_output_tok_s": 139.93920819175338,
+    "output_tokens": 512,
+    "ttft_p50_s": 0.18292640894651413,
+    "ttft_p95_s": 0.18637141997460277,
+    "cached_tokens": 0,
+    "input_tokens": [
+      35,
+      35
+    ],
+    "external_requests": 0,
+    "initial_running": 0,
+    "final_running": 0,
+    "preemptions": 0,
+    "prefix_hits_delta": 0,
+    "min_available_gib": 24.340003967285156,
+    "swap_out_pages": 0,
+    "oom_kills": 0,
+    "peak_running": 2,
+    "peak_waiting": 0,
+    "peak_overlapping_output_streams": 2,
+    "peak_kv_usage": 0,
+    "nvme_read_gib": 8.7738037109375e-05,
+    "nvme_write_gib": 3.814697265625e-06,
+    "dispatch_skew_s": 8.070399053394794e-05,
+    "sse_gap_p95_per_user_median_s": 0.0788550371886231,
+    "worst_sse_gap_s": 0.18247645790688694,
+    "completion_p50_s": 3.5669092369498685,
+    "completion_p95_s": 3.6489191998844035,
+    "content_ttft_p50_s": 0.18293173692654818,
+    "content_ttft_p95_s": 0.18637645993148907,
+    "cached_users": 0,
+    "post_first_token_per_token_p50_s": 0.013268125353052336
+  },
+  "before": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 113,
+    "prompt_tokens_total": 482324,
+    "completion_tokens_total": 21115,
+    "prefill_seconds_total": 84.3522,
+    "decode_seconds_total": 1536.5751,
+    "cached_tokens_total": 315731,
+    "rounds_total": 5935,
+    "drafted_total": 20227,
+    "accepted_total": 15067,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "after": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 115,
+    "prompt_tokens_total": 482394,
+    "completion_tokens_total": 21627,
+    "prefill_seconds_total": 84.5151,
+    "decode_seconds_total": 1543.3419,
+    "cached_tokens_total": 315731,
+    "rounds_total": 6050,
+    "drafted_total": 20725,
+    "accepted_total": 15462,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "client_sha256": "1213d73a334c33e41c03c78a46fc84fa819e6ab29deb9955dcb68f2991f1ce4e",
+  "requests": [
+    {
+      "request_sha256": "c0b1568a8e1582e03f3123caa158bed119c501bca1754d18c0ab754ab03b047e",
+      "token_sha256": "ecace92a467ba7b9e4dcba7f4d1dd52babafa9caeae46197dd89e1ac547b05b1",
+      "started_monotonic": 1747268.594302502,
+      "started_epoch": 1792820343.467879,
+      "ttft_s": 0.17909861891530454,
+      "content_ttft_s": 0.1791042669210583,
+      "usage": {
+        "prompt_tokens": 35,
+        "completion_tokens": 256,
+        "total_tokens": 291,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0816,
+        "decode_s": 3.2958,
+        "rounds": 57,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 252,
+        "accepted": 198,
+        "token_sha": "6224d78a7e42"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 3.4757870559114963,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints and tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Optional, TypeVar, Generic\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache evicts the least recently used items when it reaches its capacity.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n            \n        Raises:\n            ValueError: If capacity is less than or equal to 0.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is marked as recently used.\n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.17909861891530454,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.23932642489671707,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.28645998192951083,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.3461928931064904,
+          "content_bytes": 42,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.4064666829071939,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.4674065369181335,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5154478859622031,
+          "content_bytes": 47,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5516013049054891,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5929192339535803,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.6401514001190662,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.6952931128907949,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7530015599913895,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8162728049792349,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8765745148994029,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9246173200663179,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9804632400628179,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.025456734932959,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0762684498913586,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1127404780127108,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.153095399029553,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1889404349494725,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2258498060982674,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2675588231068105,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3177171470597386,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3586060360539705,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4001958519220352,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4639938010368496,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5241903909482062,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5738436109386384,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6361031280830503,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6991598610766232,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.7613971699029207,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8313533859327435,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8967113019898534,
+          "content_bytes": 38,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9674652619287372,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.027621196117252,
+          "content_bytes": 39,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0882683619856834,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1403082530014217,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.2032320259604603,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.2523929260205477,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.315460410900414,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3729839141014963,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4396295570768416,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5186738010961562,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.591170096071437,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.656081276014447,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7188906639348716,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7973810210824013,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.876487887930125,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9506493990775198,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0214614709839225,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0928905031178147,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.172257913975045,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2340838159434497,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2912783920764923,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.3582204340491444,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.422540877945721,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.475079616997391,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.0786011345218867,
+      "sse_gap_max_s": 0.07936741085723042,
+      "mean_time_per_output_token_after_first_s": 0.01292541567875328
+    },
+    {
+      "request_sha256": "9d0eddffad7c05644ba219d3472a08eab484cba72b0a297d147a610c4ce2830c",
+      "token_sha256": "840abf547196168314311f9c1552b8b5fe5e8b574c9af3dd030d7626a827ab0b",
+      "started_monotonic": 1747268.594221798,
+      "started_epoch": 1792820343.4677982,
+      "ttft_s": 0.18675419897772372,
+      "content_ttft_s": 0.18675920693203807,
+      "usage": {
+        "prompt_tokens": 35,
+        "completion_tokens": 256,
+        "total_tokens": 291,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0813,
+        "decode_s": 3.471,
+        "rounds": 58,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 246,
+        "accepted": 197,
+        "token_sha": "6224d78a7e42"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 3.6580314179882407,
+      "content": "```python\n\"\"\"\nLRU Cache implementation with type hints and tests.\n\"\"\"\n\nfrom collections import OrderedDict\nfrom typing import Optional, TypeVar, Generic\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache evicts the least recently used items when it reaches its capacity.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n            \n        Raises:\n            ValueError: If capacity is less than or equal to 0.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is marked as recently used.\n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.18675419897772372,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.23980028089135885,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.28644830198027194,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.346188060939312,
+          "content_bytes": 41,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.4068655630107969,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.4674084249418229,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5154493099544197,
+          "content_bytes": 47,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5517581689637154,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.5929496500175446,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.6401245039887726,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.6953185528982431,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.75332012004219,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8164536689873785,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8767387550324202,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9247953039593995,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9804782799910754,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0258074870798737,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.076287138974294,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1130123659968376,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1535096550360322,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1894738909322768,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2259954379405826,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2676037510391325,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3177521228790283,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3586266920901835,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4002421409823,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.464035992976278,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5242359430994838,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5740115630906075,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6366866799071431,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6993049650918692,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.761512785917148,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8314992738887668,
+          "content_bytes": 43,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8968259580433369,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9680478379596025,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.02764028403908,
+          "content_bytes": 39,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.088315049884841,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1403082211036235,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.2034359939862043,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.2524341579992324,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.315620139008388,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3731657539028674,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4397545650135726,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.518863192992285,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.591301887994632,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.656366315903142,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7190998159348965,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7974223969504237,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.876533104106784,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9508434149902314,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0220456949900836,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0928708710707724,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.1722847940400243,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2342002000659704,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2913231919519603,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.3583365299273282,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.422583614010364,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4750406730454415,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6575171309523284,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.0791089398553595,
+      "sse_gap_max_s": 0.18247645790688694,
+      "mean_time_per_output_token_after_first_s": 0.013610835027351392
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1792820343.467419,
+      "available_gib": 24.34223175048828,
+      "swap_used_gib": 0.3708229064941406,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14382129223168,
+      "nvme_write_bytes": 1012080708608,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 113,
+        "prompt_tokens_total": 482324,
+        "completion_tokens_total": 21115,
+        "prefill_seconds_total": 84.3522,
+        "decode_seconds_total": 1536.5751,
+        "cached_tokens_total": 315731,
+        "rounds_total": 5935,
+        "drafted_total": 20227,
+        "accepted_total": 15067,
+        "streams": {
+          "decoding": 0,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792820344.4702518,
+      "available_gib": 24.340068817138672,
+      "swap_used_gib": 0.3708229064941406,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14382129260032,
+      "nvme_write_bytes": 1012080708608,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 2,
+        "requests_total": 113,
+        "prompt_tokens_total": 482324,
+        "completion_tokens_total": 21241,
+        "prefill_seconds_total": 84.3522,
+        "decode_seconds_total": 1536.5751,
+        "cached_tokens_total": 315731,
+        "rounds_total": 5935,
+        "drafted_total": 20227,
+        "accepted_total": 15067,
+        "streams": {
+          "decoding": 2,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792820345.4736493,
+      "available_gib": 24.340003967285156,
+      "swap_used_gib": 0.3708229064941406,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14382129260032,
+      "nvme_write_bytes": 1012080712704,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 2,
+        "requests_total": 113,
+        "prompt_tokens_total": 482324,
+        "completion_tokens_total": 21409,
+        "prefill_seconds_total": 84.3522,
+        "decode_seconds_total": 1536.5751,
+        "cached_tokens_total": 315731,
+        "rounds_total": 5935,
+        "drafted_total": 20227,
+        "accepted_total": 15067,
+        "streams": {
+          "decoding": 2,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792820346.4783766,
+      "available_gib": 24.340003967285156,
+      "swap_used_gib": 0.3708229064941406,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14382129260032,
+      "nvme_write_bytes": 1012080712704,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 2,
+        "requests_total": 113,
+        "prompt_tokens_total": 482324,
+        "completion_tokens_total": 21573,
+        "prefill_seconds_total": 84.3522,
+        "decode_seconds_total": 1536.5751,
+        "cached_tokens_total": 315731,
+        "rounds_total": 5935,
+        "drafted_total": 20227,
+        "accepted_total": 15067,
+        "streams": {
+          "decoding": 2,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    }
+  ],
+  "harness_sha256": "cd94c93d19398cb87ae663b4179ef90b03b8d217b01599081e5cdd281c0bf437",
+  "case_metadata": {
+    "name": "short-n2-case1",
+    "kind": "short",
+    "n": 2,
+    "fixed_output": true
+  },
+  "matrix_source_sha256": "787dffa01dbcc5456f0fe47789e2f18a64da0025d19a2dadaef925dd3fce5e61"
+}

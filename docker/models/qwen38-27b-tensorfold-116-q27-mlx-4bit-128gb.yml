@@ -1,0 +1,101 @@
+# Private experiment, TensorFold v1.1.6 native CUDA + our live-chunk cap and host/phase tracing, Qwen3.8-27B.
+# Build and receipts: benchmarks/tensorfold-27b-116-20261026/ (build-116.sh, q27.patch).
+# MLX 4-bit target with the z-lab DFlash2 drafter, 16 streams, 75k context, fp8 KV, text only.
+# TF_QWEN_LIVE_CHUNK caps a prompt cut while other streams decode (2048 by default; 4096: off, as upstream).
+# Requires the prepared build, runtime and checkpoint volumes; never silently downloads/rebuilds.
+# Test port is loopback only.
+# Served model: TensorFold/Qwen3.8-27B-MLX-4bit
+name: ieti-qwen38-27b-tensorfold-116
+services:
+  qwen27-tensorfold-116:
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    platform: linux/arm64
+    pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-27b-tensorfold-116-q27-mlx-4bit-128gb.yml"
+    container_name: qwen38_27b_tensorfold_116_cuda
+    restart: "no"
+    init: true
+    stop_grace_period: 60s
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "${TENSORFOLD_BIND_ADDRESS:-127.0.0.1}:${TENSORFOLD_BIND_PORT:-8010}:8000"
+    volumes:
+      - upstream-runtime:/opt/ieti-tf116:ro
+      - patched-runtime:/opt/ieti-native116:ro
+      - checkpoint-cache:/root/.cache/huggingface:ro
+    environment:
+      MODEL_ID: TensorFold/Qwen3.8-27B-MLX-4bit
+      MODEL_REVISION: 22d8d538154e0e5b6f8dcb1fcc74a60a0798104c
+      DRAFTER_REVISION: 50307d4c4cde6860d4eee73e2547cd786fe8e8a4
+      # stock: the release binary; patched: our build
+      NATIVE_BUILD: "${TENSORFOLD_NATIVE_BUILD:-patched}"
+      TF_Q27_PATCH_SHA256: "${TENSORFOLD_NATIVE_PATCH_SHA256:-}"
+      LD_LIBRARY_PATH: /opt/ieti-tf116/tensorfold-1.1.6-linux-aarch64/lib
+      CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
+      PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
+      TENSORFOLD_MEMORY_RESERVE_GIB: "${TENSORFOLD_RESERVE_GIB:-10}"
+      TENSORFOLD_PROMPT_CACHE_GIB: "${TENSORFOLD_PROMPT_CACHE_GIB:-24}"
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      TENSORFOLD_CUDA_KERNELS: native
+      DRAFTS_ENABLED: "${TENSORFOLD_DRAFTS_ENABLED:-1}"
+      TF_QWEN_LIVE_CHUNK: "${TF_QWEN_LIVE_CHUNK:-2048}"
+      # Diagnostics only, off by default: round phases and fill cuts, host admission/fill/round events on stderr.
+      TF_LANES_PHASES: "${TF_LANES_PHASES:-0}"
+      TF_HOST_TRACE: "${TF_HOST_TRACE:-0}"
+      TENSORFOLD_KV_CACHE: "${TENSORFOLD_KV_CACHE:-fp8}"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        if [ "$${NATIVE_BUILD}" = stock ]; then
+          NATIVE_BINARY=/opt/ieti-tf116/tensorfold-1.1.6-linux-aarch64/bin/tensorfold-native
+        else
+          test "$$(cat /opt/ieti-native116/source-ready)" = "$${TF_Q27_PATCH_SHA256}"
+          (cd /opt/ieti-native116/install/native/bin && sha256sum -c SHA256SUMS)
+          NATIVE_BINARY=/opt/ieti-native116/install/native/bin/tensorfold-native
+        fi
+        "$${NATIVE_BINARY}" --version
+        echo "build=$${NATIVE_BUILD} TF_QWEN_LIVE_CHUNK=$${TF_QWEN_LIVE_CHUNK}"
+        MODEL_PATH="/root/.cache/huggingface/hub/models--TensorFold--Qwen3.8-27B-MLX-4bit/snapshots/$${MODEL_REVISION}"
+        DRAFTER_PATH="/root/.cache/huggingface/hub/models--z-lab--Qwen3.8-27B-DFlash2/snapshots/$${DRAFTER_REVISION}"
+        test -f "$$MODEL_PATH/config.json"
+        test -f "$$DRAFTER_PATH/config.json"
+        options=()
+        if [ "$${DRAFTS_ENABLED}" = 0 ]; then options+=(--no-drafts); else options+=(--drafter "$$DRAFTER_PATH"); fi
+        exec "$${NATIVE_BINARY}" serve "$$MODEL_PATH" \
+          --host 0.0.0.0 --port 8000 --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" --parallel "$${PARALLEL_STREAMS}" \
+          --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \
+          --thinking --reasoning-effort low --thinking-budget 1024 \
+          --prompt-cache-gib "$${TENSORFOLD_PROMPT_CACHE_GIB}" \
+          --kv-cache "$${TENSORFOLD_KV_CACHE}" \
+          "$${options[@]}" --no-update-check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+volumes:
+  patched-runtime:
+    external: true
+    name: ${TENSORFOLD_NATIVE_VOLUME:-ieti-native116-q27-build}
+  upstream-runtime:
+    external: true
+    name: ieti-tensorfold-116-runtime
+  checkpoint-cache:
+    external: true
+    name: ieti-qwen38-27b-tensorfold-hf-cache

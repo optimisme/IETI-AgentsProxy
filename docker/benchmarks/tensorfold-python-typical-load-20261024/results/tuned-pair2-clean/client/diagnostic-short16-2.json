@@ -1,0 +1,5798 @@
+{
+  "summary": {
+    "name": "diagnostic-short16-2",
+    "requests": 16,
+    "successes": 16,
+    "full_output_requests": 16,
+    "wall_s": 10.652670921059325,
+    "aggregate_output_tok_s": 384.5045088084524,
+    "output_tokens": 4096,
+    "ttft_p50_s": 0.5416060445131734,
+    "ttft_p95_s": 0.5957532234024256,
+    "cached_tokens": 0,
+    "input_tokens": [
+      36,
+      36,
+      36,
+      36,
+      36,
+      36,
+      36,
+      36,
+      36,
+      36,
+      37,
+      37,
+      37,
+      37,
+      37,
+      37
+    ],
+    "external_requests": 0,
+    "initial_running": 0,
+    "final_running": 0,
+    "preemptions": 0,
+    "prefix_hits_delta": 0,
+    "min_available_gib": 28.673019409179688,
+    "swap_out_pages": 0,
+    "oom_kills": 0,
+    "peak_running": 16,
+    "peak_waiting": 0,
+    "peak_overlapping_output_streams": 16,
+    "peak_kv_usage": 0,
+    "nvme_read_gib": 0.001148223876953125,
+    "nvme_write_gib": 0.00020599365234375,
+    "dispatch_skew_s": 0.0027063670568168163,
+    "sse_gap_p95_per_user_median_s": 0.21931760330335237,
+    "worst_sse_gap_s": 0.22456012107431889,
+    "completion_p50_s": 10.291502912063152,
+    "completion_p95_s": 10.509492014884017,
+    "content_ttft_p50_s": 0.5416098204441369,
+    "content_ttft_p95_s": 0.5957560234237462,
+    "cached_users": 0,
+    "post_first_token_per_token_p50_s": 0.0381484807249816
+  },
+  "before": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 32,
+    "prompt_tokens_total": 1164,
+    "completion_tokens_total": 8192,
+    "prefill_seconds_total": 1.0492,
+    "decode_seconds_total": 317.1312,
+    "cached_tokens_total": 0,
+    "rounds_total": 1822,
+    "drafted_total": 8096,
+    "accepted_total": 6338,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "after": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 48,
+    "prompt_tokens_total": 1746,
+    "completion_tokens_total": 12288,
+    "prefill_seconds_total": 1.5148,
+    "decode_seconds_total": 472.6159,
+    "cached_tokens_total": 0,
+    "rounds_total": 2740,
+    "drafted_total": 12191,
+    "accepted_total": 9500,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "client_sha256": "1213d73a334c33e41c03c78a46fc84fa819e6ab29deb9955dcb68f2991f1ce4e",
+  "requests": [
+    {
+      "request_sha256": "1a9004f2beb1a1463e6ce2bf10eb9fd9f5dbc95f2e2c6e9cf6b803dc8575a11b",
+      "token_sha256": "8b4ee7756b0bb59334ed786e0467fc350b650ffc169954c530b29fdef165ca5d",
+      "started_monotonic": 1748620.748605083,
+      "started_epoch": 1792821695.622182,
+      "ttft_s": 0.5542993370909244,
+      "content_ttft_s": 0.5543052731081843,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.028,
+        "decode_s": 9.9062,
+        "rounds": 59,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 260,
+        "accepted": 196,
+        "token_sha": "f40e0a9c214f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.463477414101362,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"A Least Recently Used (LRU) cache with a fixed capacity.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Retrieve the value for the given key, or None if not found.\n        \n        Marks the key as recently used.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Insert or update the value for the given key.\n        \n        If the cache exceeds capacity, evict the least recently used item.\n        \"\"\"\n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5542993370909244,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.705742483958602,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8016390530392528,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9002787249628454,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9817633610218763,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.055026896065101,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1283346379641443,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.201853611972183,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3107396170962602,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4353012510109693,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5648831881117076,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6897759900894016,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8115111601073295,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9455983429215848,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0792385989334434,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.197327610105276,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3072323040105402,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.438298480119556,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5782591660972685,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7373571910429746,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.904762798920274,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.065088024130091,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.234607422957197,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4182090419344604,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.604747860925272,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7864458970725536,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.96744255698286,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.150224176933989,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327745829941705,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.516581864096224,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.7059917859733105,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.889175469055772,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.0754884160123765,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263500930042937,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457179588032886,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.648722484940663,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.837569623021409,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.033064391929656,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.235247558914125,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.447122547077015,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.663372430950403,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875762684037909,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.095724086044356,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.309792577987537,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.531464893138036,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.754900742089376,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.960578693076968,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.17024286603555,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.389561421005055,
+          "content_bytes": 31,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.60296604107134,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814644837984815,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.030311601003632,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240069838939235,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458293178118765,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.678199315909296,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.864499303046614,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058178039966151,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.219108225079253,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.362287311116233,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.460693895118311,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21991166421212255,
+      "sse_gap_max_s": 0.22343584895133972,
+      "mean_time_per_output_token_after_first_s": 0.03884860610991132
+    },
+    {
+      "request_sha256": "7f55805700aaea4676f86f276640aded439b34a3eae6b2b763b1c13a6b436e9f",
+      "token_sha256": "3922954cd7af9261bd5cb98970cef74e41856b06e774c6fae49b0e394e496f14",
+      "started_monotonic": 1748620.748105339,
+      "started_epoch": 1792821695.6216822,
+      "ttft_s": 0.5388287650421262,
+      "content_ttft_s": 0.5388338209595531,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0282,
+        "decode_s": 9.6804,
+        "rounds": 57,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 251,
+        "accepted": 198,
+        "token_sha": "f40e0a9c214f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.220799857052043,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"A Least Recently Used (LRU) cache with a fixed capacity.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Retrieve the value for the given key, or None if not found.\n        \n        Marks the key as recently used.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Insert or update the value for the given key.\n        \n        If the cache exceeds capacity, evict the least recently used item.\n        \"\"\"\n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5388287650421262,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7065541159827262,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8016000289935619,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9008101490326226,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9821861770469695,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0555646079592407,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1291380620095879,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2026836920995265,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3114228649064898,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4371459390968084,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5655618279706687,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6890843100845814,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8110688559245318,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9465711109805852,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.078534726984799,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1977509220596403,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3072524638846517,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.438912079902366,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5785282379947603,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7369220240507275,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.903487727046013,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.064949288032949,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2353664790280163,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.420555281918496,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.605275877052918,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.78707112907432,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9665040450636297,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.150330560980365,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.329500341089442,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517168951919302,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.7066605219151825,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.889745101099834,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.075305775972083,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.264483473962173,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.460671731038019,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.647663509007543,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.839276358950883,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.033721911953762,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.235873335041106,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.4478555070236325,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.664148734882474,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.8769879310857505,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.095920630032197,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.310446338029578,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.5341489559505135,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.753586455015466,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.962594500044361,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.17096475395374,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.391191307920963,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.603239193093032,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814864902058616,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.030645536957309,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.24061452690512,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.460346888983622,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.677708596922457,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.863632024032995,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058961543953046,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.219156144885346,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21949647166766226,
+      "sse_gap_max_s": 0.22370261792093515,
+      "mean_time_per_output_token_after_first_s": 0.03796206815624792
+    },
+    {
+      "request_sha256": "0acacc59b12071b4660cc33537e0a9fab0690b7a7664dec9fbfd5201d11b7e3c",
+      "token_sha256": "9fce73bbc150ef36337f8fe0b6e9a31c8d51c425dd36fb8100939f5458d5e55d",
+      "started_monotonic": 1748620.749104539,
+      "started_epoch": 1792821695.6226811,
+      "ttft_s": 0.5300678550265729,
+      "content_ttft_s": 0.5300739509984851,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0284,
+        "decode_s": 9.8316,
+        "rounds": 58,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 254,
+        "accepted": 197,
+        "token_sha": "6b40e1290f6c"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.363984414143488,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache evicts the least recently used items when it reaches its capacity.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n    \n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is marked as recently used.\n        \n        Args:\n            key: The key to look up.\n            \n        Returns:\n            The value associated with the key, or None if the key is not",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5300678550265729,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7051837481558323,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8015632929746062,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.899041605181992,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9813864810857922,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0546452801208943,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1278906699735671,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.200875308131799,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3105083049740642,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.435837347060442,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5648617481347173,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6882573820184916,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.809702840168029,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9453587110619992,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0776873510330915,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.196880954084918,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3080140149686486,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4377402081154287,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5794085571542382,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.736793671036139,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9027465749531984,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0645018480718136,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2342493270989507,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4183051220607013,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.605365397175774,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.786751640960574,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9667320291046053,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.1490932169836015,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327059286180884,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517464854987338,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.705877369968221,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.888029725058004,
+          "content_bytes": 38,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073032065061852,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263368466170505,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457803059136495,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.647504645166919,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.837283686967567,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032502680085599,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.234430087031797,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446964306989685,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.6640595509670675,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875955179100856,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094358358066529,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.3079180349595845,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.530799389118329,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752907878952101,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.96072674007155,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170878448989242,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.38964455598034,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.602767049102113,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814689700957388,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.03006899310276,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.23972382210195,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.45820637815632,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.67825120408088,
+          "content_bytes": 42,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.86391514306888,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.059327112045139,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.218711553141475,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.361834079027176,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2189579148311168,
+      "sse_gap_max_s": 0.22288135415874422,
+      "mean_time_per_output_token_after_first_s": 0.03855594597647295
+    },
+    {
+      "request_sha256": "f94f9b97feaeff7ed0c6464466402a42f0ccc48c3ab8831f5bacbde36221ff5e",
+      "token_sha256": "add0c6ee2a19bd8fe099050c3cf28f73cac822d135ddb841326988bb1f583c0e",
+      "started_monotonic": 1748620.748284859,
+      "started_epoch": 1792821695.6218617,
+      "ttft_s": 0.49900367110967636,
+      "content_ttft_s": 0.4990091591607779,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0317,
+        "decode_s": 9.9614,
+        "rounds": 59,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 254,
+        "accepted": 196,
+        "token_sha": "2470135c0851"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.463479718193412,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation with type hints.\n    \n    Uses an OrderedDict to maintain access order, where the most recently\n    used item is at the end and the least recently used is at the beginning.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Retrieve the value associated with the given key.\n        \n        If the key exists, it is moved to the end (most recently used).\n        If the key does not exist, returns None.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end to mark as recently used\n        self._cache.move_to_end(key)\n        return",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.49900367110967636,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7071740040555596,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8026530370116234,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9009630610235035,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9828478412237018,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.055299392202869,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1291938540525734,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2021516440436244,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3107934100553393,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4369224831461906,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5655249960254878,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6893027261830866,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8102690000087023,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9465063910465688,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.078259719070047,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1984097701497376,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3066868961323053,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4384520321618766,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5792009581346065,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7369680560659617,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9033720470033586,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0645190000068396,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.235257903113961,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4204046421218663,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.604006757028401,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.787281913217157,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.968472925014794,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.150782416108996,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.328370885225013,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517367928056046,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.706003914121538,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.88960370910354,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.074043985223398,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.264809426153079,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.4581819551531225,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.647343493066728,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.837049320107326,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.033630872145295,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.2354413671419024,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446998580126092,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.663616047007963,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875630108173937,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.096246710047126,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.308511187089607,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.531664413167164,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.753123015165329,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.961213957052678,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170685362070799,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.389981133164838,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.604208217002451,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814539366168901,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.03169438522309,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240501038031653,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.45940541708842,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.678562436020002,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.86441243905574,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058883128222078,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.219030657084659,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.362791807157919,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.460820679087192,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2194278541719541,
+      "sse_gap_max_s": 0.2231532260775566,
+      "mean_time_per_output_token_after_first_s": 0.03906594905089222
+    },
+    {
+      "request_sha256": "9d0a1a72e5f9d482ff44c2418e6102272b0141bb36fe8d437b15888b2db8dcee",
+      "token_sha256": "bb66f76e15127e8ea39038d1345873d335ec56d7d80ef6205c24a15cc3a6c2b7",
+      "started_monotonic": 1748620.749205595,
+      "started_epoch": 1792821695.6227815,
+      "ttft_s": 0.4905560719780624,
+      "content_ttft_s": 0.4905605358071625,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0316,
+        "decode_s": 10.1568,
+        "rounds": 60,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 269,
+        "accepted": 195,
+        "token_sha": "0cc7ccf3c3dc"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.647528904955834,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"A Least Recently Used (LRU) cache with a fixed capacity.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Retrieve the value for the given key, or None if not found.\n        \n        Accessing a key marks it as most recently used.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Insert or update the value for the given key.\n        \n        If the cache exceeds capacity, the least recently used item is evicted",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.4905560719780624,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7060745959170163,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.800538876792416,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8986663569230586,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9816197128966451,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0542550238315016,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1276522858534008,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2004891799297184,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3107763368170708,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.435130882775411,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5643981478642672,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.687029733788222,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8094614639412612,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9453408389817923,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.079003910999745,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.197924409992993,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3076116628944874,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.437503423774615,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.578028733842075,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.735922503983602,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9018789588008076,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.062748279888183,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.234064766904339,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.417461393866688,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6040561969857663,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7864224407821894,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.966784716816619,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.148576800944284,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327750404831022,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.518435654928908,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.706193417776376,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.889136636862531,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.072774384869263,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263094145804644,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.4569952508900315,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.648160660872236,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836261575808749,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.0319614799227566,
+          "content_bytes": 9,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.234390838770196,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446374467806891,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.663421310950071,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875995594775304,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094312165863812,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.308759121922776,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.531362811801955,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.753003926947713,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.96068174787797,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170256065903232,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.38957645976916,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.603052280843258,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814424709882587,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029814912937582,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240305229788646,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458803224842995,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.67722209985368,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.86218637577258,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058041127864271,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.218163888901472,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.361594894900918,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.45994379883632,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.647424072958529,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21853911499492823,
+      "sse_gap_max_s": 0.222603689879179,
+      "mean_time_per_output_token_after_first_s": 0.03983085490580575
+    },
+    {
+      "request_sha256": "fc38bd265588ddce288dd0f416f4d36c4c3a6312a455fe45cc6d3809a9ae95ba",
+      "token_sha256": "a762f5e9031963f91ab30c8700390747fdc2331383a76a4ba6b9a38633bd89c5",
+      "started_monotonic": 1748620.748988683,
+      "started_epoch": 1792821695.6225648,
+      "ttft_s": 0.5143456028308719,
+      "content_ttft_s": 0.5143508829642087,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0299,
+        "decode_s": 9.848,
+        "rounds": 58,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 264,
+        "accepted": 197,
+        "token_sha": "f40e0a9c214f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.363897021859884,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"A Least Recently Used (LRU) cache with a fixed capacity.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Retrieve the value for the given key, or None if not found.\n        \n        Marks the key as recently used.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Insert or update the value for the given key.\n        \n        If the cache exceeds capacity, evict the least recently used item.\n        \"\"\"\n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5143456028308719,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7071752839256078,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8010791328269988,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9004917168058455,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9812593769747764,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0564684309065342,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.128377549815923,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2014014997985214,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.310462144901976,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4370254748500884,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5650619079824537,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6880441817920655,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8102982158306986,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.945840311003849,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.077596118906513,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1969157059211284,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.307882974855602,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4375025120098144,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.578001933870837,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7362406158354133,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.902766718994826,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0642070318572223,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2340436468366534,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4181699219625443,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6039536527823657,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.788381015881896,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9661948608700186,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.14981408091262,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327701876871288,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.516600695904344,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.705918873893097,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.88866788498126,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073990831850097,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.264386577997357,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457283986965194,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.646389205940068,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836420439882204,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032320375787094,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.234204630833119,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.445345955900848,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.66233310289681,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.874828907893971,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094578390009701,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.308758866973221,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.530767772812396,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752553830854595,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.9599687568843365,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170037073781714,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.389947931980714,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.602395928930491,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814338453812525,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029809408821166,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.239751023007557,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458606184925884,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.677545411977917,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.863616999005899,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058752520009875,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.218615792924538,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.3622081738431,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2197736885282211,
+      "sse_gap_max_s": 0.22200890583917499,
+      "mean_time_per_output_token_after_first_s": 0.03861906890593031
+    },
+    {
+      "request_sha256": "2d60cc69032300933849286ed91964df3ebda32ca2d8cf3bdfceb323e5c2f6b8",
+      "token_sha256": "10f4a97a8f91cb70a59c7f73e3a4e1237e0f9d765d50754683db6b44916f5ec9",
+      "started_monotonic": 1748620.749271531,
+      "started_epoch": 1792821695.622848,
+      "ttft_s": 0.522049185121432,
+      "content_ttft_s": 0.5220532810781151,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0287,
+        "decode_s": 9.5355,
+        "rounds": 56,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 261,
+        "accepted": 199,
+        "token_sha": "0f50877adaf9"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.060642936034128,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation with type hints.\n    \n    Uses an OrderedDict to maintain access order, where the most recently\n    used item is at the end and the least recently used is at the beginning.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: Maximum number of items the cache can hold.\n            \n        Raises:\n            ValueError: If capacity is less than or equal to 0.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n    \n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is moved to the",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.522049185121432,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7065044362097979,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8011219811160117,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8999033970758319,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9819088811054826,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0542354721110314,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1277629260439426,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2008605562150478,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3102928651496768,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4362740670330822,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5653798920102417,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6883604060858488,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.809698552126065,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9454746472183615,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.078447911189869,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1968566339928657,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3064869281370193,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4375531680416316,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5790167981758714,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7356382000725716,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9019756792113185,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0633739281911403,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.234477151185274,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.419712402159348,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.603598709218204,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.786905529210344,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9663043490145355,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.149334305198863,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327330725034699,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.516164760105312,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.705604074057192,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.88881394919008,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073756336001679,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263138626003638,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457287331111729,
+          "content_bytes": 36,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.646047318121418,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.8360206480138,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032753288047388,
+          "content_bytes": 39,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.233966055093333,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446169252041727,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662774607073516,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875160460127518,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094444790156558,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.3085182590875775,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.530845693079755,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752974871080369,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.960417588008568,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170070610009134,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.38903642911464,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.601905641146004,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814764949027449,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029691617004573,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.239352063043043,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.457727722125128,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.676649221219122,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.862330120056868,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.057948440080509,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2190454468363896,
+      "sse_gap_max_s": 0.22232743399217725,
+      "mean_time_per_output_token_after_first_s": 0.03739568335278069
+    },
+    {
+      "request_sha256": "bdc3d23bac555356ec5eccb16de1f30e19aa14ef029743552aed08a5d9828aa1",
+      "token_sha256": "e432aa316a372125c98ca3f51794778c0fdb2b728df9270fedfb4fb0094b7729",
+      "started_monotonic": 1748620.74982657,
+      "started_epoch": 1792821695.6234033,
+      "ttft_s": 0.5443833239842206,
+      "content_ttft_s": 0.5443858199287206,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.028,
+        "decode_s": 9.5117,
+        "rounds": 56,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 253,
+        "accepted": 199,
+        "token_sha": "0f2df0bd6380"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.0595830490347,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation with type hints.\n    \n    Uses an OrderedDict to maintain access order, where the most recently\n    used item is at the end and the least recently used is at the beginning.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: Maximum number of items the cache can hold.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Retrieve the value associated with the given key.\n        \n        If the key exists, it is moved to the end (most recently used).\n        \n        Args:\n            key: The key to look up.\n            \n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5443833239842206,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7049552688840777,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8002641580533236,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8990122298710048,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9810976339504123,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0534350730013102,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.127494398970157,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1999622050207108,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3095561619848013,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4350650280248374,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5637367249000818,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.687145798932761,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8090531448833644,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9448126959614456,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0779346160124987,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1973727149888873,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3057147208601236,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.436717296950519,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5775877269916236,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7349126648623496,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9017970559652895,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.062579864868894,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2336824799422175,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.419109810842201,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6028875899501145,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.785841849865392,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9661189899779856,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.14894619397819,
+          "content_bytes": 31,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.326965701999143,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.515394920948893,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.704839963000268,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.888102205935866,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073120401008055,
+          "content_bytes": 31,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.262726499000564,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.4572115880437195,
+          "content_bytes": 38,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.646147317951545,
+          "content_bytes": 31,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836412359960377,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032311337068677,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.233850168064237,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446200931910425,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662396319909021,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875197419896722,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.0945503590628505,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.308313730871305,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.530699389055371,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752295495942235,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.959266277961433,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.169325795024633,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.389917436987162,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.60206778603606,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.813751799054444,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.030312049901113,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.238621423952281,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.457707931054756,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.67675440502353,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.862360344035551,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058077432913706,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21966261486522853,
+      "sse_gap_max_s": 0.22238565818406641,
+      "mean_time_per_output_token_after_first_s": 0.03730860434874308
+    },
+    {
+      "request_sha256": "fe5777b705f561eb69c930aabe9f54d8edab56a70f573c357fe60955154ce4c8",
+      "token_sha256": "fe725f08fd87d091b779ccf03ca135e734b1c5e377bc6c6aa8c875832565bdf4",
+      "started_monotonic": 1748620.748784331,
+      "started_epoch": 1792821695.6223605,
+      "ttft_s": 0.4826765700709075,
+      "content_ttft_s": 0.48268028208985925,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0304,
+        "decode_s": 9.575,
+        "rounds": 56,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 247,
+        "accepted": 199,
+        "token_sha": "0f2df0bd6380"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.062120999209583,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation with type hints.\n    \n    Uses an OrderedDict to maintain access order, where the most recently\n    used item is at the end and the least recently used is at the beginning.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: Maximum number of items the cache can hold.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Retrieve the value associated with the given key.\n        \n        If the key exists, it is moved to the end (most recently used).\n        \n        Args:\n            key: The key to look up.\n            \n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.4826765700709075,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7058051561471075,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8008828610181808,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8992719571106136,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.981906769098714,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0563795191701502,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1288648780900985,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2010768922045827,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3100678899791092,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4359188191592693,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5635479881893843,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6878209980204701,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.810467560077086,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.945601382991299,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0787980230525136,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1975799622014165,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3062429761048406,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.438306064112112,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5785282861907035,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.737081367056817,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9046659669838846,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0628780080005527,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2358415981289,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4202650100924075,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6043093809857965,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7871376092080027,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.966898237122223,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.14908148907125,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327491638017818,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.516931768041104,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.70593453804031,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.889360813191161,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073159408988431,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.264506946085021,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457734883064404,
+          "content_bytes": 36,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.648615253157914,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836457752157003,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032479528104886,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.234301319113001,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446901764022186,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662483487045392,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.8750711001921445,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.09454813413322,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.3093421461526304,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.532577836187556,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752285271184519,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.960349109023809,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170407298021019,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.390299996128306,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.602849737042561,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814591142116114,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029379714047536,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240954254055396,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458005722146481,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.676933316979557,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.863714982988313,
+          "content_bytes": 9,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.059193560155109,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21975375077454373,
+      "sse_gap_max_s": 0.22323569003492594,
+      "mean_time_per_output_token_after_first_s": 0.037554968588565496
+    },
+    {
+      "request_sha256": "af7d0ddbfd402a43705aa1209cd775ae7818340fddba162c15d61b8e8ff97a15",
+      "token_sha256": "5bc83f7c9eb69586d8c85728b5683ed0b7b98e879ba0ae84d16a753d4269b24d",
+      "started_monotonic": 1748620.748428491,
+      "started_epoch": 1792821695.622005,
+      "ttft_s": 0.5069113969802856,
+      "content_ttft_s": 0.5069177330005914,
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 256,
+        "total_tokens": 292,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0303,
+        "decode_s": 9.5514,
+        "rounds": 56,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 244,
+        "accepted": 199,
+        "token_sha": "6b40e1290f6c"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.06023999210447,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache evicts the least recently used items when it reaches its capacity.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n    \n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is marked as recently used.\n        \n        Args:\n            key: The key to look up.\n            \n        Returns:\n            The value associated with the key, or None if the key is not",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5069113969802856,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7071222281083465,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8011879969853908,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8995041330344975,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9822963690385222,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0576418871060014,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1283783500548452,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2017698839772493,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3107372331432998,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4365584030747414,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5639500201214105,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.688224710058421,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8106155120767653,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9461625509429723,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0784129190724343,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1985800419934094,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3068794240243733,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4381975361611694,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5786324141081423,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.739231255138293,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9030175029765815,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0643127281218767,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2352951511275023,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.418937554117292,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.604211541125551,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.787396728992462,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9682348931673914,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.150081729050726,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.328472613124177,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517095464048907,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.706734650069848,
+          "content_bytes": 38,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.889764669118449,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.075140864122659,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263751170132309,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457964370958507,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.6470441981218755,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.83759635896422,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.03306077606976,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.2350364869926125,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446089796023443,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662954511120915,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.878229995025322,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.0951866139657795,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.309248483041301,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.532977788010612,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.753622486954555,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.961854596156627,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.172152352984995,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.390452108113095,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.60377130494453,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.815253301989287,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.030130321159959,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240681997966021,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458837466081604,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.677322277100757,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.862932888092473,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.05860552797094,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2183460191008635,
+      "sse_gap_max_s": 0.22372930496931076,
+      "mean_time_per_output_token_after_first_s": 0.03745762404310061
+    },
+    {
+      "request_sha256": "57d3be30b5ea9f4c72e3d1ea6a64fd4a6e102aff9873a7407e43ef0f31acb666",
+      "token_sha256": "01949b9f14b3cd7cbc945788ddad90eb4c05eeaf7462df39d549cc47b9f2a285",
+      "started_monotonic": 1748620.749674746,
+      "started_epoch": 1792821695.6232517,
+      "ttft_s": 0.5860415380448103,
+      "content_ttft_s": 0.586045489879325,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 256,
+        "total_tokens": 293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.028,
+        "decode_s": 9.7751,
+        "rounds": 58,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 264,
+        "accepted": 197,
+        "token_sha": "c9ea86244454"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.363558175042272,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"Least Recently Used (LRU) Cache with type hints.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be positive\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Get value for key, moving it to most recently used position.\"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Put key-value pair, evicting least recently used if at capacity.\"\"\"\n        if key in self._cache:\n            # Update existing key and move to end\n            self._cache.move_to_end(key)\n            self._cache",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5860415380448103,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7045375730376691,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8003239978570491,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8994429339654744,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9806636818684638,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0533121288754046,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1276136948727071,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2010786689352244,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.309820082038641,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4362122600432485,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5637890289071947,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.687412790954113,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8096512728370726,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.94465780002065,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.077258039964363,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1965156430378556,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3063726408872753,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.436750976834446,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5786485269200057,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.736367655918002,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9029962718486786,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0625146969687194,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2337521598674357,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4170444989576936,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6034885179251432,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7856317539699376,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9652951499447227,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.148980305995792,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.329214565921575,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517075431998819,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.7053612428717315,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.8880396778695285,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073392577003688,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.264185698935762,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.458162836031988,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.646249909885228,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836634167935699,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032269560964778,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.235192263964564,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446938403882086,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.661762463860214,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.87464638100937,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.09475794294849,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.307285219896585,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.530164062045515,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.751810295972973,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.959932853002101,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.169450098881498,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.388384734047577,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.60320764197968,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.815792549867183,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029431778006256,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.24001911887899,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458201289875433,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.677938021020964,
+          "content_bytes": 9,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.8629811599385,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.057316680904478,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.218707266030833,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.361439327942207,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21979295576456934,
+      "sse_gap_max_s": 0.22287884214892983,
+      "mean_time_per_output_token_after_first_s": 0.03833489329371528
+    },
+    {
+      "request_sha256": "4e044e4b478848b64bd2f37ab2a73f205b0f4c42f84c94054dea5c8a226e0247",
+      "token_sha256": "c991ee4927a5f17b2982f4484ae1dfd53205b2536cbf7a0403131450ee58b544",
+      "started_monotonic": 1748620.749554618,
+      "started_epoch": 1792821695.6231313,
+      "ttft_s": 0.5691807419061661,
+      "content_ttft_s": 0.5691836380865425,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 256,
+        "total_tokens": 293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0282,
+        "decode_s": 9.7926,
+        "rounds": 58,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 255,
+        "accepted": 197,
+        "token_sha": "a75198114087"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.36220596707426,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"Least Recently Used (LRU) Cache with type hints.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be positive\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Get value by key. Returns None if key not found.\"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Put key-value pair into cache. Evicts LRU item if at capacity.\"\"\"\n        if key in self._cache:\n            # Update existing key and move to end\n            self._cache.move_to_end(key)\n            self._cache",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5691807419061661,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7050569648854434,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.800738429883495,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.899515941971913,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.980658161919564,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.055454608052969,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1281475508585572,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2011441888753325,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.310347521910444,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.435568996006623,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5637621970381588,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6872271110769361,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8093662490136921,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9453726159408689,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0771261679474264,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.198020218871534,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.306153265060857,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4371078570839018,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5775306068826467,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.735427320934832,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.902495743939653,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0641805848572403,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.233514863997698,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4191627870313823,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6031240220181644,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7856934498995543,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.965950429905206,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.148614561883733,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327165413880721,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.51778832799755,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.705081786960363,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.888407998019829,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073932097060606,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263863347005099,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457200163975358,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.646323669934645,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.837884903885424,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032241689041257,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.23421800788492,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.446309491991997,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662826559972018,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.874923805007711,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094107766868547,
+          "content_bytes": 31,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.307351731928065,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.531911853002384,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752033591968939,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.960081509081647,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170457154046744,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.389797053067014,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.602387289982289,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.813972998876125,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.03052491392009,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.241988047026098,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.457512106979266,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.676411014050245,
+          "content_bytes": 9,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.861951993079856,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058127528987825,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.217996306018904,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.36166303907521,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21920735243475065,
+      "sse_gap_max_s": 0.22456012107431889,
+      "mean_time_per_output_token_after_first_s": 0.038401891361447234
+    },
+    {
+      "request_sha256": "b3ad52ce000bedab6b959a347abc19efdadd34565dcbd7fc9e77a4ab34211b53",
+      "token_sha256": "692fefca7c245414e544dcb62c0ad83da866328550af0bd6fb9e22d21b00b659",
+      "started_monotonic": 1748620.74935393,
+      "started_epoch": 1792821695.6229298,
+      "ttft_s": 0.577864499995485,
+      "content_ttft_s": 0.5778699240181595,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 256,
+        "total_tokens": 293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0281,
+        "decode_s": 9.784,
+        "rounds": 58,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 250,
+        "accepted": 197,
+        "token_sha": "2470135c0851"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.364432975184172,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation with type hints.\n    \n    Uses an OrderedDict to maintain access order, where the most recently\n    used item is at the end and the least recently used is at the beginning.\n    \"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Retrieve the value associated with the given key.\n        \n        If the key exists, it is moved to the end (most recently used).\n        If the key does not exist, returns None.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end to mark as recently used\n        self._cache.move_to_end(key)\n        return",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.577864499995485,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7053335411474109,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8008475981187075,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8996569660957903,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9828316660132259,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.056004896061495,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.127841295208782,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.2011426051612943,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.312068386003375,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4365926280152053,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5631079410668463,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6875692871399224,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8095054170116782,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.945613896008581,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0784333841875196,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.198176203062758,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.306249665096402,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.437237073201686,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.577551471069455,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.7357331451494247,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9033837120514363,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0627718809992075,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.2350424472242594,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4194236351177096,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6056322772055864,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7874895131681114,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9664487501140684,
+          "content_bytes": 31,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.149210594128817,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.327194950077683,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517537160078064,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.705582555150613,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.888264302164316,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.072447362123057,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263270675204694,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457082564011216,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.646373174153268,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836785432184115,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.0333286330569535,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.233774440130219,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.445025396998972,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662749888142571,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.87488042912446,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094528983114287,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.308543011080474,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.530065678060055,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.753082808107138,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.9603975410573184,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.170913282083347,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.390305517008528,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.603241034084931,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.814732342027128,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029862130060792,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240608399035409,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458693738095462,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.677839653100818,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.86208850517869,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.059019064996392,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.21852337801829,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.3618076632265,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2194306827848777,
+      "sse_gap_max_s": 0.2230171300470829,
+      "mean_time_per_output_token_after_first_s": 0.03836840456169026
+    },
+    {
+      "request_sha256": "f64dcfe6f361703edfde970bdd24a52decca6bbada7574c8a8f7637329e30926",
+      "token_sha256": "82a8da8f1b42f8fae1b3e3990e35d391ffc0027dd207b0c87d501acd49354cea",
+      "started_monotonic": 1748620.749507498,
+      "started_epoch": 1792821695.6230836,
+      "ttft_s": 0.5939835358876735,
+      "content_ttft_s": 0.5939863359089941,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 256,
+        "total_tokens": 293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.028,
+        "decode_s": 9.6238,
+        "rounds": 57,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 249,
+        "accepted": 198,
+        "token_sha": "6b40e1290f6c"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.220180290052667,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation.\n    \n    This cache evicts the least recently used items when it reaches its capacity.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: The maximum number of items the cache can hold.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n    \n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is marked as recently used.\n        \n        Args:\n            key: The key to look up.\n            \n        Returns:\n            The value associated with the key, or None if the key is not",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5939835358876735,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7059827090706676,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8003985420800745,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8997036379296333,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9805833781138062,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0560102879535407,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1280063830781728,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.200715116923675,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3097112339455634,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4355337161105126,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5638550610747188,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6872151750139892,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8096974489744753,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9453745998907834,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0781572558917105,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1965293230023235,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3061436330899596,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.437275232980028,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.577291470952332,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.736157031962648,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9018993601202965,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.0624009049497545,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.234137152088806,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4177518910728395,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6030373820103705,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7865917060989887,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.9662358060013503,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.148744706064463,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.326889269985259,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.518076359992847,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.704925867030397,
+          "content_bytes": 38,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.888767550000921,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.073642544914037,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.263001155108213,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.457280276110396,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.6463358621113,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.836691255914047,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.032053912989795,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.234546391991898,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.4466853640042245,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.662352399900556,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.876423131907359,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.094730871031061,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.308480738895014,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.53064711811021,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752592584118247,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.95952035789378,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.169790579006076,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.390008332906291,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.602858074009418,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.813924103043973,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.0322867219802,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.240089999046177,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.458143450086936,
+          "content_bytes": 42,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.676544534042478,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.862139144912362,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058349465020001,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.218990850029513,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21876441794447601,
+      "sse_gap_max_s": 0.22216637921519578,
+      "mean_time_per_output_token_after_first_s": 0.037745126722124864
+    },
+    {
+      "request_sha256": "1a62cceb10cd528bfae264ed3e64ba503c64fc6ea14d1f8c5e26a0a787c38f0d",
+      "token_sha256": "09bfe7d566f039b57f678fb7ab55246fb7caed2854b370d0c61bdb02a980a467",
+      "started_monotonic": 1748620.750612714,
+      "started_epoch": 1792821695.6241891,
+      "ttft_s": 0.6010622859466821,
+      "content_ttft_s": 0.6010650859680027,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 256,
+        "total_tokens": 293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.028,
+        "decode_s": 9.4551,
+        "rounds": 56,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 265,
+        "accepted": 199,
+        "token_sha": "f40e0a9c214f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.058648152975366,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"A Least Recently Used (LRU) cache with a fixed capacity.\"\"\"\n\n    def __init__(self, capacity: int) -> None:\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be a positive integer\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n\n    def get(self, key: K) -> Optional[V]:\n        \"\"\"Retrieve the value for the given key, or None if not found.\n        \n        Marks the key as recently used.\n        \"\"\"\n        if key not in self._cache:\n            return None\n        # Move to end (most recently used)\n        self._cache.move_to_end(key)\n        return self._cache[key]\n\n    def put(self, key: K, value: V) -> None:\n        \"\"\"Insert or update the value for the given key.\n        \n        If the cache exceeds capacity, evict the least recently used item.\n        \"\"\"\n",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.6010622859466821,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7039207089692354,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7996602219063789,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8991279578767717,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9804363218136132,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0542926399502903,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1273157428950071,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1995510368142277,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.309199889888987,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.4336049319244921,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5629086289554834,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6862426470033824,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.807989704888314,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9436805518344045,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.076124151935801,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1954677389003336,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.3044502888806164,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.437726688804105,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5761045748367906,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.735456391936168,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.9007078879512846,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.062077096896246,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.23252830398269,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4162807709071785,
+          "content_bytes": 34,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6017649818677455,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.784507849952206,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.965031133964658,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.1473455699160695,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.3259582777973264,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.516812695888802,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.704223098931834,
+          "content_bytes": 19,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.886946925893426,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.07271187286824,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.262617842992768,
+          "content_bytes": 1,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.456114227883518,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.645412101875991,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.8354629839304835,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.031375576974824,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.233287623850629,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.445728643797338,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.661814559949562,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.875903803855181,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.093336374964565,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.307734930887818,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.529385005822405,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.752026295987889,
+          "content_bytes": 28,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.958597557852045,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.16832072287798,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.38933404488489,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.600631322013214,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.813116662902758,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.029432993847877,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.23836299101822,
+          "content_bytes": 30,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.456736826803535,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.675236005801708,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.86093968898058,
+          "content_bytes": 29,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.05652594496496,
+          "content_bytes": 14,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.21912771475035697,
+      "sse_gap_max_s": 0.22264129016548395,
+      "mean_time_per_output_token_after_first_s": 0.03708024964320893
+    },
+    {
+      "request_sha256": "bb96b3a56922bc7df3bb0e79bf723c99708fa825ea96698e90f3ede6b0d811af",
+      "token_sha256": "c54ec78649d9ee235e8417399d59a91d1c55d407c104a6345f95b2ef393cfe75",
+      "started_monotonic": 1748620.747906347,
+      "started_epoch": 1792821695.6214826,
+      "ttft_s": 0.5630097188986838,
+      "content_ttft_s": 0.5630143589805812,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 256,
+        "total_tokens": 293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0301,
+        "decode_s": 9.4961,
+        "rounds": 56,
+        "drafts": true,
+        "cached": 0,
+        "min_rows": 2,
+        "drafted": 255,
+        "accepted": 199,
+        "token_sha": "0f50877adaf9"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 10.061180104035884,
+      "content": "```python\nfrom typing import Optional, TypeVar, Generic, Dict, OrderedDict\n\nK = TypeVar('K')\nV = TypeVar('V')\n\n\nclass LRUCache(Generic[K, V]):\n    \"\"\"\n    A Least Recently Used (LRU) cache implementation with type hints.\n    \n    Uses an OrderedDict to maintain access order, where the most recently\n    used item is at the end and the least recently used is at the beginning.\n    \"\"\"\n    \n    def __init__(self, capacity: int) -> None:\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: Maximum number of items the cache can hold.\n            \n        Raises:\n            ValueError: If capacity is less than or equal to 0.\n        \"\"\"\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        self._capacity: int = capacity\n        self._cache: OrderedDict[K, V] = OrderedDict()\n    \n    def get(self, key: K) -> Optional[V]:\n        \"\"\"\n        Get the value associated with the given key.\n        \n        If the key exists, it is moved to the",
+      "reasoning": "",
+      "tool_calls": [],
+      "sse_chunks": [
+        {
+          "at_s": 0.5630097188986838,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.7064128359779716,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.8024067808873951,
+          "content_bytes": 23,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9015320849139243,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 0.9822492650710046,
+          "content_bytes": 12,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.0554775840137154,
+          "content_bytes": 6,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.1289890059269965,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.202027179999277,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.3110495379660279,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.436849650926888,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.5657917158678174,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.6892103739082813,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.8108105040155351,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 1.9461976708844304,
+          "content_bytes": 11,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.0803528709802777,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.1984101538546383,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.307198383845389,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.4390811359044164,
+          "content_bytes": 13,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.5794629100710154,
+          "content_bytes": 8,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.737277864012867,
+          "content_bytes": 3,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 2.903237358899787,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.06456739990972,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.236569422064349,
+          "content_bytes": 7,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.4187095700763166,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.6049245968461037,
+          "content_bytes": 5,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.7888934479560703,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 3.968309548916295,
+          "content_bytes": 27,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.151693504070863,
+          "content_bytes": 17,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.328591061057523,
+          "content_bytes": 10,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.517648536013439,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.705910122022033,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 4.890150700928643,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.0754725120496005,
+          "content_bytes": 37,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.264457426033914,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.458213650854304,
+          "content_bytes": 36,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.647522134007886,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 5.837745398981497,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.033963319845498,
+          "content_bytes": 39,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.235377175034955,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.4478844669647515,
+          "content_bytes": 18,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.664032734930515,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 6.877063035033643,
+          "content_bytes": 15,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.095487494021654,
+          "content_bytes": 32,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.309796562884003,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.532294173026457,
+          "content_bytes": 22,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.754475126974285,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 7.962729203980416,
+          "content_bytes": 33,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.171486977953464,
+          "content_bytes": 2,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.39090650784783,
+          "content_bytes": 21,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.603382024914026,
+          "content_bytes": 26,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 8.815572501858696,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.031810401007533,
+          "content_bytes": 24,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.24195418995805,
+          "content_bytes": 25,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.459902649046853,
+          "content_bytes": 20,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.679001284064725,
+          "content_bytes": 35,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 9.86464792699553,
+          "content_bytes": 4,
+          "reasoning_bytes": 0
+        },
+        {
+          "at_s": 10.058922600001097,
+          "content_bytes": 16,
+          "reasoning_bytes": 0
+        }
+      ],
+      "sse_gap_p95_s": 0.2191788587369956,
+      "sse_gap_max_s": 0.2224976101424545,
+      "mean_time_per_output_token_after_first_s": 0.03723887404353887
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1792821695.6194973,
+      "available_gib": 28.79581069946289,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282743296,
+      "nvme_write_bytes": 1013028281344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 14,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 8192,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 0,
+          "prefilling": 5,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821696.676239,
+      "available_gib": 28.727615356445312,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282853888,
+      "nvme_write_bytes": 1013028281344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 8404,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821697.6821277,
+      "available_gib": 28.674213409423828,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282853888,
+      "nvme_write_bytes": 1013028281344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 8970,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821698.6852746,
+      "available_gib": 28.67406463623047,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282853888,
+      "nvme_write_bytes": 1013028281344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 9400,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821699.6888466,
+      "available_gib": 28.673206329345703,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282853888,
+      "nvme_write_bytes": 1013028350976,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 9782,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821700.6933236,
+      "available_gib": 28.673233032226562,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282853888,
+      "nvme_write_bytes": 1013028350976,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 10298,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821701.6977677,
+      "available_gib": 28.673019409179688,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546282939904,
+      "nvme_write_bytes": 1013028350976,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 10687,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821702.7014852,
+      "available_gib": 28.677188873291016,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546283271680,
+      "nvme_write_bytes": 1013028350976,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 11017,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821703.7058032,
+      "available_gib": 28.67919158935547,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546283406848,
+      "nvme_write_bytes": 1013028436992,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 11442,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821704.7100165,
+      "available_gib": 28.678733825683594,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546283816448,
+      "nvme_write_bytes": 1013028502528,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 32,
+        "prompt_tokens_total": 1164,
+        "completion_tokens_total": 11826,
+        "prefill_seconds_total": 1.0492,
+        "decode_seconds_total": 317.1312,
+        "cached_tokens_total": 0,
+        "rounds_total": 1822,
+        "drafted_total": 8096,
+        "accepted_total": 6338,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1792821705.7144284,
+      "available_gib": 28.67920684814453,
+      "swap_used_gib": 0.3708152770996094,
+      "pswpout": 2338339,
+      "oom_kill": 0,
+      "nvme_read_bytes": 14546283816448,
+      "nvme_write_bytes": 1013028502528,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 10,
+        "requests_total": 38,
+        "prompt_tokens_total": 1382,
+        "completion_tokens_total": 12186,
+        "prefill_seconds_total": 1.2247,
+        "decode_seconds_total": 374.256,
+        "cached_tokens_total": 0,
+        "rounds_total": 2158,
+        "drafted_total": 9621,
+        "accepted_total": 7532,
+        "streams": {
+          "decoding": 10,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    }
+  ],
+  "harness_sha256": "cd94c93d19398cb87ae663b4179ef90b03b8d217b01599081e5cdd281c0bf437",
+  "case_metadata": {
+    "name": "diagnostic-short16-2",
+    "kind": "diagnostic_short16",
+    "n": 16,
+    "fixed_output": true
+  },
+  "matrix_source_sha256": "787dffa01dbcc5456f0fe47789e2f18a64da0025d19a2dadaef925dd3fce5e61"
+}

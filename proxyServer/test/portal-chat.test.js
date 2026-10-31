@@ -190,6 +190,15 @@ test('Chat uses portal sessions without API keys and forwards a fixed Markdown w
   assertNoPersistedConversation();
 });
 
+test('Chat has no web search control and rejects search requests', async () => {
+  const { agent, config, page } = await chatSession();
+  assert.equal(config.webSearch, undefined);
+  assert.doesNotMatch(page.text, /chat-web-search/);
+  const response = await complete(agent, config, { web_search: true }).expect(400);
+  assert.equal(response.body.error.code, 'invalid_chat_request');
+  assert.equal(upstreamCalls.length, 0);
+});
+
 test('Chat versions its assets and revalidates them so reloads receive updated controls', async () => {
   const { agent, page } = await chatSession();
   assert.equal(page.headers['cache-control'], 'no-store');

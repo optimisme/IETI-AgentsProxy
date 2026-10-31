@@ -1,0 +1,87 @@
+name: ieti-qwen38-vllm-032-fp8-agent
+services:
+  qwen-vllm:
+    container_name: qwen38_flash_next_vllm032_fp8_agent
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities:
+                - gpu
+              driver: nvidia
+              count: 1
+    entrypoint:
+      - python3
+      - -u
+      - /opt/ieti/bootstrap.py
+    environment:
+      ENFORCE_EAGER: "0"
+      FLASHINFER_NVCC_THREADS: "1"
+      GPU_MEMORY_UTILIZATION: "0.82"
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      MAX_JOBS: "2"
+      MAX_NUM_BATCHED_TOKENS: "8192"
+      MAX_NUM_SEQS: "16"
+      MTP_DISABLE_BLOCK_DROP: "1"
+      MTP_TOKENS: "0"
+      PREFIX_MATCH_UNIT: "32"
+      PYTHONUNBUFFERED: "1"
+      SHARED_PREFIX_CHECKPOINT: "1"
+      SSM_CACHE_DTYPE: float32
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_CACHE_ROOT: /root/.cache/vllm
+      VLLM_PLE_MMAP_ADVICE: "1"
+      VLLM_PLE_MMAP_DIR: /root/.cache/vllm/ple_mmap_032
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://localhost:8000/health
+      timeout: 5s
+      interval: 30s
+      retries: 5
+      start_period: 1h0m0s
+    image: vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
+    init: true
+    ipc: host
+    mem_limit: "112742891520"
+    memswap_limit: "112742891520"
+    networks:
+      default: null
+    platform: linux/arm64
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 8000
+        published: "8007"
+        protocol: tcp
+    pull_policy: missing
+    restart: "no"
+    stop_grace_period: 1m0s
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    volumes:
+      - type: volume
+        source: vllm-hf-cache
+        target: /root/.cache/huggingface
+        volume: {}
+      - type: volume
+        source: vllm-runtime-cache
+        target: /root/.cache/vllm
+        volume: {}
+      - type: bind
+        source: /home/<user>/docker/benchmarks/vllm-fp8-agent-20261023/bootstrap.py
+        target: /opt/ieti/bootstrap.py
+        read_only: true
+        bind: {}
+networks:
+  default:
+    name: ieti-qwen38-vllm-032-fp8-agent_default
+volumes:
+  vllm-hf-cache:
+    name: ieti-vllm032-flashnext-hf-cache
+  vllm-runtime-cache:
+    name: ieti-vllm032-flashnext-runtime-cache

@@ -1,0 +1,3039 @@
+{
+  "summary": {
+    "name": "capacity-return1-16",
+    "requests": 16,
+    "successes": 16,
+    "full_output_requests": 16,
+    "wall_s": 79.32821575997514,
+    "aggregate_output_tok_s": 180.7175399403499,
+    "output_tokens": 14336,
+    "ttft_p50_s": 1.2992869089939632,
+    "ttft_p95_s": 1.329189500756911,
+    "cached_tokens": 716646,
+    "input_tokens": [
+      44831,
+      44831,
+      44831,
+      44831,
+      44831,
+      44831,
+      44831,
+      44831,
+      44831,
+      44831,
+      44832,
+      44832,
+      44832,
+      44832,
+      44832,
+      44832
+    ],
+    "external_requests": 0,
+    "initial_running": 0,
+    "final_running": 0,
+    "preemptions": 0,
+    "prefix_hits_delta": 0,
+    "min_available_gib": 14.184009552001953,
+    "swap_out_pages": 0,
+    "oom_kills": 0,
+    "peak_running": 16,
+    "peak_waiting": 0,
+    "peak_overlapping_output_streams": 16,
+    "peak_kv_usage": 0,
+    "nvme_read_gib": 1.033721923828125,
+    "nvme_write_gib": 0.0033111572265625
+  },
+  "before": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 16,
+    "prompt_tokens_total": 716662,
+    "completion_tokens_total": 14336,
+    "prefill_seconds_total": 322.7312,
+    "decode_seconds_total": 1031.6144,
+    "cached_tokens_total": 0,
+    "rounds_total": 4055,
+    "drafted_total": 13965,
+    "accepted_total": 10265,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "after": {
+    "ok": true,
+    "backend": "tensorfold",
+    "busy": false,
+    "requests_running": 0,
+    "requests_total": 32,
+    "prompt_tokens_total": 1433964,
+    "completion_tokens_total": 28672,
+    "prefill_seconds_total": 323.8344,
+    "decode_seconds_total": 2165.5729,
+    "cached_tokens_total": 716646,
+    "rounds_total": 9086,
+    "drafted_total": 27100,
+    "accepted_total": 19554,
+    "streams": {
+      "decoding": 0,
+      "prefilling": 0,
+      "max": 16
+    },
+    "context_length": 75000
+  },
+  "client_sha256": "49ce7efc8ee428ba6eafabbebdc9c909cf4826facb13bb3726aeba7de7163580",
+  "requests": [
+    {
+      "request_sha256": "ff36e1d4246ad60f1e668f34b6ebf3c7bdd7812fa12f21fb5b68d07574ff88f5",
+      "ttft_s": 1.311489506973885,
+      "content_ttft_s": 1.3114912189776078,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0334,
+        "decode_s": 72.6377,
+        "rounds": 321,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 814,
+        "accepted": 574,
+        "token_sha": "279e22f8ca20"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 73.95036533297389,
+      "started_monotonic": 171997.938683367,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Pattern:** Each entry lists an `item_ID` and a `version` number.\n*   **Version Range:** The versions range from `0` to `99`.\n*   **Key Observation:** There is no obvious sequential pattern in the `item_ID`s or the `version` numbers. They appear to be randomized or hashed identifiers.\n\n### Proposed Next Regression Test: **Version Stability & Collision Check**\n\n**Test Name:** `test_version_consistency_and_uniqueness`\n\n**Description:**\nThis test will verify two critical aspects of the data integrity for the next batch of items (or the current state if this is a snapshot):\n1.  **Version Stability:** Ensure that if an `item_ID` appears more than once in the log (or in the next batch), it retains the **same version number**. A change in version for the same item ID without a corresponding \"update\" or \"migration\" flag could indicate a regression or data corruption.\n2.  **Version Range Validity:** Assert that all new `version` numbers fall within the expected range (e.g., `0 <= version <= 99`). This catches anomalies where a version number might be negative, excessively large, or non-integer due to a bug in the versioning logic.\n\n**Why It Matters:**\n1.  **Detects Silent Regressions:** In complex systems, an item might be processed multiple times. If the version number changes unexpectedly between two identical `item_ID` entries, it could mean the underlying logic for that item is non-deterministic or has regressed, even if the \"tests pass\" flag is set.\n2.  **Data Integrity:** Version numbers are often used for caching, dependency resolution, or rollback mechanisms. An out-of-range or inconsistent version number can break downstream systems that rely on these numbers for ordering or compatibility checks.\n3.  **Scalability:** As the log grows (already 1,849 entries), manual inspection is impossible. Automated checks for consistency and range are essential to catch subtle bugs that don't cause immediate test failures but corrupt data state.\n\n### Alternative/Complementary Test: **Idempotency Check**\n\n**Test Name:** `test_idempotent_processing`\n\n**Description:**\nIf the system processes the same `item_ID` multiple times, this test ensures that the outcome (version number) is identical each time.\n\n**Why It Matters:**\nNon-idempotent processing can lead to race conditions and unpredictable behavior in distributed systems. If `item_631533` (from `entry 0`) were to appear again with a different version, it would signal a critical failure in the processing logic.\n\n### Recommendation\nSince all current tests pass, the next step is not to fix a broken test, but to **prevent future regressions**. Implementing the **Version Stability & Collision Check** is the most proactive step to ensure that the \"passing\" status remains meaningful as the dataset grows.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the analysis and the proposed next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Pattern:** Each entry lists an `item_ID` and a `version` number.\n*   **Version Range:** The versions range from `0` to `99`.\n*   **Key Observation:** There is no obvious sequential pattern in the `item_ID`s or the `version` numbers. They appear to be randomized or hashed identifiers.\n\n### Proposed Next Regression Test: **Version Stability & Collision Check**\n\n**Test Name:** `test_version_consistency_and_uniqueness`\n\n**Description:**\nThis test will verify two critical aspects of",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "126d613452f0343eb13477232be2ad3ff34d58a1a8395f2c21c553fc7510f909",
+      "ttft_s": 1.333759163011564,
+      "content_ttft_s": 1.3337597550125793,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0331,
+        "decode_s": 63.3522,
+        "rounds": 278,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 786,
+        "accepted": 617,
+        "token_sha": "aa964ce00292"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 64.68874973099446,
+      "started_monotonic": 171997.938202183,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against **Version 91** of the core library/framework. Specifically, verify that all components previously tested on Version 91 (or components that depend on the same underlying dependencies as those components) continue to pass without regression.\n\n**Specific Items to Verify (from log):**\n*   `item_652596` (Version 91)\n*   `item_487956` (Version 91)\n*   `item_988785` (Version 91)\n*   `item_680868` (Version 91)\n*   `item_501520` (Version 91)\n*   `item_617021` (Version 91)\n*   `item_518` (Version 91)\n*   `item_967195` (Version 91)\n*   `item_942913` (Version 91)\n*   `item_1392` (Version 91)\n*   `item_1446` (Version 91)\n*   `item_1680` (Version 91)\n\n*(Note: While the log states \"tests pass,\" regression testing implies re-verifying these under current conditions or after any recent changes to the test environment or dependent services.)*\n\n### Why It Matters\n\n1.  **High Frequency of Use:** Version 91 appears **12 times** in the log (entries 1, 27, 39, 105, 160, 278, 518, 877, 981, 1392, 1446, 1680). This is one of the most frequently used versions in the dataset. A regression in this version would impact a significant portion of the system's components.\n2.  **Potential \"Latest\" or \"Stable\" Candidate:** Given its high frequency and appearance in later entries (e.g., entry 1680), Version 91 may represent a current stable release or a widely adopted dependency version. Ensuring its stability is critical for overall system health.\n3.  **Cross-Component Dependency Risk:** If multiple independent items (e.g., `item_652596` and `item_487956`) rely on Version 91, a subtle change in the test environment, configuration, or a shared dependency could cause failures in one that propagate to others. Regression testing ensures that the *interaction* between these components and Version 91 remains intact.\n4.  **Prevention of Silent Failures:** The log states \"tests pass,\" but this may be historical. Regression testing confirms that the current state of the codebase and environment still supports these components correctly, preventing silent degradation that could lead to production failures.\n\n### Alternative Consideration: **Version 0 (Edge Case) Test**\n\nIf the goal is to test *edge cases* rather than *high-frequency* versions, the next test should be **Version 0 Compatibility**.\n\n*   **Items:** `item_246882` (entry 9), `item_763267` (entry 243), `item_580988` (entry 259), `item_577` (entry 577), `item_760` (entry 760), `item_770` (entry 770), `item_1508` (entry 1508), `item_1516` (entry 1516), `item_1660` (entry 1660), `item_1693` (entry 1693), `",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "1bea9c7e5d9d0106c93b22e2c81bcbb2e7fb3068b4046c8e139bd5e82b35ebe8",
+      "ttft_s": 1.3065147690067533,
+      "content_ttft_s": 1.3065154729993083,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0338,
+        "decode_s": 70.4221,
+        "rounds": 308,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 827,
+        "accepted": 587,
+        "token_sha": "1b88cb379c6d"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 71.73228572902735,
+      "started_monotonic": 171997.938445127,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501520`, `item_617021`, `item_518`, `item_967195`, `item_1392`, `item_1446`, `item_1680`, `item_1825`) to verify that the specific behaviors introduced or modified in **Version 91** do not cause regressions in dependent modules or core functionality.\n\n**Why It Matters:**\n\n1.  **High Frequency of Version 91:**\n    Scanning the log, **Version 91** appears frequently across the dataset (e.g., entries 1, 27, 39, 160, 278, 518, 877, 1392, 1446, 1680, 1825). A version that is reused across many distinct items (`item_652596`, `item_487956`, etc.) suggests it is a **stable, widely adopted baseline** or a **critical dependency version**. If a regression exists in Version 91, it will impact a large number of items, making it a high-priority risk area.\n\n2.  **Regression Prevention in \"Paired\" or Independent Agent Context:**\n    The project name `resident-python-paired-45000` and the label \"independent agent\" suggest that these items may be interacting components or agents that rely on specific versioned libraries or codebases. If Version 91 is a shared dependency, a subtle bug introduced in this version (even if tests passed at the time of logging) could cause **silent failures** or **performance degradation** in production when multiple agents interact.\n\n3.  **Validation of \"Tests Pass\" Claims:**\n    The log states \"tests pass\" for all entries. However, regression testing is not just about unit tests passing at the time of commit; it\u2019s about ensuring that **new changes** (or updates to the test environment) do not break previously working functionality. Since Version 91 is used by many items, it is a prime candidate for **cross-item compatibility testing**. If one item using Version 91 fails, it may indicate a broader issue with that version\u2019s stability.\n\n4.  **Risk of Version Drift:**\n    If new items are being added that also use Version 91, or if Version 91 is being updated to Version 92+ in future entries, it is critical to ensure that the **current stable state (Version 91)** remains intact. A regression test ensures that any future changes to the codebase do not inadvertently break the functionality that currently relies on Version 91.\n\n### Recommended Action:\n- **Identify all items using Version 91** from the log.\n- **Run integration tests** that simulate interactions between these items.\n- **Monitor for performance anomalies** or unexpected outputs in these items, as they represent a significant portion of the system\u2019s current state.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the description of the next regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501520`, `item_617021`, `item_518`, `item_967195`, `",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "ea1e771d4a604809c2f3c5a1b2cfac35027f5377419cd6a07f028b48bf0a73e7",
+      "ttft_s": 1.286847912997473,
+      "content_ttft_s": 1.2868492729903664,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.037,
+        "decode_s": 72.0814,
+        "rounds": 317,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 799,
+        "accepted": 578,
+        "token_sha": "68977351123d"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 73.37113979499554,
+      "started_monotonic": 171997.939395304,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against **Version 91** of the core library/framework. Specifically, verify that all items previously recorded as using Version 91 (e.g., `item_652596`, `item_487956`, `item_988785`, `item_501520`, `item_687109`, `item_617021`, `item_51826`, `item_942913`, `item_1369`, `item_1392`, `item_1446`, `item_1680`) continue to pass their respective unit and integration tests without regression. Additionally, perform a cross-version compatibility check between Version 91 and the most recent high-version entries (e.g., Version 99, 98, 97) to ensure no dependency conflicts or API breakages have been introduced in the latest builds that might affect legacy Version 91 consumers.\n\n**Why It Matters:**\n\n1.  **High Frequency of Use:** Version 91 appears frequently throughout the log (entries 1, 27, 39, 160, 161, 278, 518, 519, 877, 981, 1369, 1392, 1446, 1680, etc.). A high number of items relying on a specific version indicates it is a critical, widely-adopted baseline. Any regression in this version would impact a large portion of the system.\n2.  **Potential \"Stagnation\" or \"Legacy\" Risk:** While newer versions (92\u201399) are being tested, Version 91 is still actively used in later entries (e.g., entry 1680). This suggests it may be a long-term support (LTS) version or a stable baseline that newer features are built upon. Ensuring its stability prevents \"regression drift\" where new features break older, stable components.\n3.  **Cross-Version Compatibility:** As the project moves toward higher versions (95\u201399), there is a risk that changes in the core architecture or shared dependencies might inadvertently break compatibility with the widely-used Version 91. Testing this ensures that the system remains backward-compatible and that upgrades from Version 91 to newer versions are safe.\n4.  **Data Integrity:** Since all entries currently report \"tests pass,\" the goal is to *maintain* this state. A regression test for Version 91 ensures that the current state of the codebase (which may have evolved since the last test run) still supports the assumptions and behaviors relied upon by the hundreds of items using Version 91.\n\n**Alternative/Secondary Test:**\nIf Version 91 is considered \"legacy\" and the focus is on *new* development, the next test should be **Version 99 Compatibility Check**, as it is the highest version used (entries 52, 273, 311, 395, 457, 569, 573, 640, 1299, 1330, 1556, 1607, 1609, 1641, 1825). Testing the highest version ensures that the latest features and fixes are stable before they are rolled out to more items. However, given the widespread use of Version 91, its stability is arguably more critical to overall system health.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the description of the next regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against **Version ",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "7c984bd5033230839c27b1930e5c7dfa4bd201ad6932979701e3d564ef6cc464",
+      "ttft_s": 1.32766628000536,
+      "content_ttft_s": 1.3276664720033295,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0331,
+        "decode_s": 75.0529,
+        "rounds": 342,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 874,
+        "accepted": 553,
+        "token_sha": "fce6ff31648f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 76.38227404601639,
+      "started_monotonic": 171997.939651448,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** Every single entry reports `tests pass`.\n*   **Data:** Each entry maps a unique `item_id` to a `version` number (ranging from 0 to 99).\n*   **Pattern:** There are no obvious failures, crashes, or \"tests fail\" messages. The data appears to be a historical record of successful test runs or a snapshot of a passing test suite.\n\n### Proposed Next Regression Test\n\n**Test Name:** `test_version_consistency_and_uniqueness`\n\n**Description:**\nThis test will verify two critical invariants across the entire dataset (or the next batch of data):\n1.  **Uniqueness:** Ensure that no `item_id` appears more than once with conflicting version data, or if duplicates are allowed, that the version remains consistent for the same item.\n2.  **Version Range Validity:** Assert that all `version` numbers fall within the expected valid range (e.g., `0 <= version <= 99` or whatever the system's max version is).\n3.  **Idempotency/State Integrity:** If this log represents a state snapshot, verify that re-running the test suite against the *same* input data yields the *same* version assignments (i.e., no non-deterministic version generation).\n\n**Why It Matters:**\n\n1.  **Preventing Silent Data Corruption:**\n    *   The log shows *only* passing tests. A common failure mode in complex systems is **data drift** or **state leakage**. If the `version` number is used to determine logic paths (e.g., \"if version > 50, use new algorithm\"), a silent corruption where an item's version is incorrectly incremented or reset could cause subtle bugs that don't immediately crash the system but produce incorrect results.\n    *   *Example:* If `item_631533` (version 68) is processed again and its version silently changes to 69 due to a side effect, the next test run might pass, but the *logic* applied to that item has changed. This test catches that.\n\n2.  **Detecting Non-Determinism:**\n    *   If the `version` number is derived from a hash, a timestamp, or a random seed, it should be deterministic for the same input. If the same `item_id` with the same input data yields different `version` numbers in different runs, it indicates a **race condition** or **non-deterministic behavior**. This is a critical source of flaky tests and production bugs.\n\n3.  **Validating the \"Pass\" Status:**\n    *   The log says \"tests pass,\" but it doesn't say *what* was tested. A regression test that validates the *integrity of the test data itself* (the version numbers) ensures that the \"pass\" status is meaningful. If the version numbers are garbage (e.g., negative, out-of-bounds, or random), then the \"pass\" status is meaningless because the test environment is not in a valid state.\n\n4.  **Scalability and Performance:**\n    *   With 1,849+ entries, manually checking for duplicates or invalid versions is impossible. An automated regression test that scans the entire log (or the next batch) for these anomalies ensures that as the dataset grows, the integrity of the version mapping is maintained.\n\n### Implementation Sketch (Python)\n\n```python\nimport re\nfrom collections import defaultdict\n\ndef parse_log(log_text):\n    \"\"\"Parse the log into a list of (entry_index, item_id, version) tuples.\"\"\"\n    pattern = r\"entry (\\d+): item_(\\d+) uses version (\\d+); tests pass\\.\"\n    matches = re.findall(pattern, log_text)\n    return [(int(e), f\"item_{i}\", int(v)) for e, i, v in matches]\n\ndef test_version_consistency_and_uniqueness(log_text):\n    \"\"\"\n   ",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "98d4a7962910c4dd163e2d054db4d8d8b2baaa1cf710d5cb69f82235ec851edb",
+      "ttft_s": 1.262614687992027,
+      "content_ttft_s": 1.2626157439954113,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.5734,
+        "decode_s": 74.8142,
+        "rounds": 338,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 823,
+        "accepted": 557,
+        "token_sha": "1f8fe298a5ff"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 76.07804522497463,
+      "started_monotonic": 171997.939902264,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Structure:** Each entry maps a unique `item_ID` to a `version` number.\n*   **Observation:** There is no obvious pattern to the version numbers (they range from 0 to 99, seemingly randomly distributed). There are no failures recorded.\n\n### Proposed Next Regression Test: **Version Stability & Idempotency Check**\n\n**Test Name:** `test_version_stability_and_idempotency`\n\n**Description:**\nThis test verifies that for any given `item_ID`, the `version` number remains consistent across multiple test runs or that the system correctly handles re-processing of the same item without incrementing the version unnecessarily (unless a change is detected). Specifically, it checks:\n1.  **Idempotency:** If `item_631533` (version 68) is processed again with the same input, does it remain at version 68?\n2.  **Regression:** If a new change is introduced to `item_631533`, does the version increment predictably (e.g., to 69) and do all dependent tests still pass?\n\n**Why It Matters:**\n\n1.  **Prevents \"Silent\" Regressions:** Since all 1,849 tests currently pass, the system appears stable. However, without checking *version stability*, a bug could exist where an item\u2019s version resets to 0 or jumps to an invalid number (e.g., >99) under specific edge-case inputs, which might not be caught by simple \"pass/fail\" checks if the test harness only checks the final outcome, not the state integrity.\n2.  **Data Integrity:** In many systems, version numbers are used for caching, dependency resolution, or audit trails. If `item_24677` (version 69) incorrectly reverts to version 68 or jumps to 70 without a corresponding code change, it could break downstream consumers that rely on version-based caching or compatibility checks.\n3.  **Scalability of Testing:** With nearly 2,000 items, manual verification is impossible. An automated regression test that snapshots the current version map and compares it against a known-good baseline ensures that no item\u2019s version drifts unexpectedly due to side effects from changes to other items.\n\n### Alternative/Complementary Test: **Cross-Item Dependency Validation**\n\n**Test Name:** `test_cross_item_dependency_consistency`\n\n**Description:**\nIf items have dependencies (e.g., `item_A` depends on `item_B`), this test ensures that if `item_B`\u2019s version changes, `item_A`\u2019s tests are re-run and that `item_A`\u2019s version (if dependent) is updated accordingly.\n\n**Why It Matters:**\nThe log shows independent items, but in a real system, items often interact. A change in `item_505194` (version 43) might break `item_160480` (version 82) if they share a library. This test ensures that the \"all tests pass\" status is not a false positive due to isolated testing.\n\n### Recommendation\nStart with **`test_version_stability_and_idempotency`**. It is the most direct next step because:\n*   It validates the *state* (version numbers) rather than just the *outcome* (pass/fail).\n*   It catches subtle bugs where the system \"works\" but produces inconsistent metadata.\n*   It is easy to implement by snapshotting the current `item_ID -> version` map and asserting that no unexpected changes occur in subsequent runs.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n### Next Regression Test: `test_version_consistency_and_idempotency`\n\n**Description:**\nThis test verifies that for every `item_ID` in the log, the associated",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "b8f2c5bc16c6407c290c0ccad1c1ecbd97ff3b9aa86f54d5db82f9c696cd1a73",
+      "ttft_s": 1.2899716579995584,
+      "content_ttft_s": 1.2899724100134335,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0369,
+        "decode_s": 74.4505,
+        "rounds": 335,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 840,
+        "accepted": 560,
+        "token_sha": "de1e46b4e5dc"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 75.7418459780165,
+      "started_monotonic": 171997.940849944,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Structure:** Each entry maps a unique `item_ID` to a `version` number.\n*   **Observation:** There is no obvious sequential pattern in the `version` numbers (e.g., they jump from 68 to 91 to 63). This suggests the `version` field likely represents a **dependency version**, a **configuration hash**, or a **specific build artifact ID** rather than a simple incrementing counter.\n\n### Proposed Next Regression Test: **Version Stability & Dependency Drift Check**\n\n#### 1. Description of the Test\n**Test Name:** `test_version_consistency_and_drift`\n\n**Objective:**\nTo verify that the `version` associated with each `item_ID` remains stable across test runs, or if changes are expected, to ensure that any change in `version` is accompanied by a corresponding change in the underlying code/config that justifies it.\n\n**Test Logic:**\n1.  **Snapshot Comparison:** Compare the current `item_ID` -> `version` mapping against a known \"golden\" baseline (the current log).\n2.  **Drift Detection:** Flag any `item_ID` where the `version` has changed *without* an associated code change in the source file for that item.\n3.  **New Item Validation:** For any new `item_ID` added after `entry 1848`, ensure it has a valid, non-null `version` and that its tests pass.\n4.  **Duplicate Version Check (Optional):** Check if multiple `item_ID`s share the same `version` number (e.g., `version 45` appears in entries 7, 16, 42, 88, 299, 351, 363, 473, 557, 592, 1103, 1108, 1624, 1626, 1646). If `version` implies a unique build, duplicates might indicate a caching error or a shared dependency that needs isolation testing.\n\n#### 2. Why It Matters\n\n1.  **Prevents Silent Regressions:**\n    Since all tests currently \"pass,\" a regression might not be a *failure* but a *silent change*. If `item_631533` (entry 0) changes from `version 68` to `version 69` without a code change, it could indicate:\n    *   A non-deterministic build process.\n    *   A dependency update that wasn't explicitly approved.\n    *   A caching issue where the wrong artifact is being tested.\n\n2.  **Ensures Reproducibility:**\n    In CI/CD pipelines, if the `version` number is used to fetch dependencies or configurations, a drift in this number means the test environment is not identical to the production environment or previous test runs. This test ensures that the \"environment\" (represented by the version) is controlled.\n\n3.  **Detects \"Flaky\" or \"False Positive\" Tests:**\n    If a test passes with `version 45` in one run and `version 46` in another, but the code hasn't changed, it suggests the test might be passing due to environmental luck rather than code correctness. Tracking version stability helps isolate whether a failure is due to code logic or environment/dependency drift.\n\n4.  **Audit Trail for Dependency Management:**\n    If `version` refers to a library version (e.g., `numpy==1.21` vs `numpy==1.22`), this test acts as a guardrail against unintended dependency upgrades that could break functionality in subtle ways not caught by unit tests alone.\n\n### Implementation Snippet (Python)\n\n```python\nimport json\nimport os\n\ndef load_baseline_log(file_path=\"project_log.json\"):\n",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "8421c89aa3fb424359bba535d56d9137aebb71e9dc7f1e0894991a6eba28ad93",
+      "ttft_s": 1.3224743739992846,
+      "content_ttft_s": 1.3224753819813486,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0331,
+        "decode_s": 68.8144,
+        "rounds": 301,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 808,
+        "accepted": 594,
+        "token_sha": "2012169a016f"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 70.14082479599165,
+      "started_monotonic": 171997.940438696,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Pattern:** Each entry lists an `item_ID` and a `version` number.\n*   **Observation:** The `version` numbers appear to be random integers between 0 and 99. There is no obvious sequential pattern (e.g., incrementing by 1) or grouping that suggests a simple linear dependency. However, in software testing logs, \"version\" often refers to the version of a dependency, a schema, or a specific test case configuration.\n\n### Proposed Next Regression Test\n\n**Test Name:** `test_version_100_and_boundary_handling`\n\n**Description:**\nThis test will verify the system's behavior when processing an item with **version 100** (or the next logical version number if the range is 0-99) and **version -1** (or the lowest possible version if the range is unbounded). Specifically, it will check if the system correctly handles version numbers that fall outside the previously observed range of [0, 99].\n\n**Why it matters:**\n\n1.  **Boundary Value Analysis (BVA):**\n    *   The log shows versions ranging from **0** (e.g., `entry 9`, `entry 243`, `entry 577`, `entry 760`, `entry 770`, `entry 904`, `entry 1088`, `entry 1172`, `entry 1175`, `entry 1238`, `entry 1289`, `entry 1291`, `entry 1294`, `entry 1331`, `entry 1508`, `entry 1516`, `entry 1660`, `entry 1693`, `entry 1760`) to **99** (e.g., `entry 52`, `entry 273`, `entry 311`, `entry 395`, `entry 457`, `entry 569`, `entry 573`, `entry 640`, `entry 1299`, `entry 1330`, `entry 1556`, `entry 1607`, `entry 1609`, `entry 1641`, `entry 1825`).\n    *   If the system has hardcoded assumptions about version ranges (e.g., `if version < 100`), introducing version 100 or 101 could cause unexpected behavior, crashes, or silent failures. Testing the boundary ensures robustness against future version increments.\n\n2.  **Preventing \"Happy Path\" Bias:**\n    *   All 1,849 tests passed. This suggests the current test suite may be too narrow, only testing \"happy path\" scenarios within the known range. A regression test that probes the *edges* of the input domain helps catch bugs that only manifest when new, higher, or lower version numbers are introduced.\n\n3.  **Future-Proofing:**\n    *   If the `version` field represents a dependency version or a schema version, it is likely to increase over time. A test that fails when version 100 is introduced would have been caught earlier if boundary tests were in place. This test acts as a canary for future compatibility issues.\n\n4.  **Data Integrity Check:**\n    *   It also verifies that the system does not treat version numbers as simple counters but as discrete identifiers. If the system expects unique versions or has a maximum supported version, this test will reveal if that limit is being enforced correctly.\n\n### Implementation Snippet (Pseudocode)\n\n```python\ndef test_version_100_and_boundary_handling():\n    # Test upper boundary\n    result_high = process_item(item_id=\"test_high\",",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "d67446ca2ae09387d45ff38582b4b301128e05deb90ba81eec481080dbe1c4d4",
+      "ttft_s": 1.3184926929825451,
+      "content_ttft_s": 1.318494468985591,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0334,
+        "decode_s": 78.0019,
+        "rounds": 361,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 823,
+        "accepted": 534,
+        "token_sha": "f4dac783adc5"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 79.32226076498046,
+      "started_monotonic": 171997.940081912,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Structure:** Each entry maps a unique `item_ID` to a `version` number.\n*   **Observation:** There is no obvious pattern to the version numbers (they range from 0 to 99, seemingly randomly distributed). There are no failures recorded.\n\n### Proposed Next Regression Test: **Version Stability & Idempotency Check**\n\n**Test Name:** `test_version_stability_and_idempotency`\n\n**Description:**\nThis test will verify that for any given `item_ID`, the `version` number remains consistent across multiple test runs or that the system correctly handles re-processing of the same item without incrementing the version unnecessarily (or incrementing it correctly if that is the expected behavior).\n\nHowever, since the log shows *historical* passes, a more critical regression test for a system with this much data is:\n\n**Test Name:** `test_unique_item_id_integrity`\n\n**Description:**\nThis test will scan the entire dataset (or a large sample) to ensure that **no `item_ID` is duplicated with conflicting version data** in a way that suggests a race condition or data corruption. More importantly, it will check for **version monotonicity** if the system expects versions to increase, or **version consistency** if the system expects versions to be static identifiers.\n\n*Wait, looking closer at the data:*\nThe `version` numbers appear to be arbitrary identifiers (e.g., `item_631533` uses `version 68`, `item_652596` uses `version 91`). They do not appear to be sequential increments per item. They look like static configuration versions or build hashes.\n\n**Revised Proposal: `test_version_distribution_and_coverage`**\n\n**Description:**\nThis test will verify that the **version distribution** remains within expected bounds and that **all critical item IDs** are present and mapped to their expected versions.\n\n**Why it matters:**\n1.  **Data Integrity:** With 1,849 entries, manual verification is impossible. A regression test ensures that new code changes haven't accidentally shifted version mappings (e.g., if `item_631533` suddenly maps to `version 69` instead of `68`, it might indicate a dependency update that wasn't properly tested).\n2.  **Coverage Gaps:** If the system relies on specific version ranges (e.g., \"all items must use versions < 100\"), this test ensures no new items are added with invalid version numbers (e.g., `version 101` or `version -1`).\n3.  **Performance Regression:** Processing 1,849 items is non-trivial. A regression test can also check that the *time* to validate all these items hasn't degraded significantly, ensuring that the \"tests pass\" status isn't hiding a performance bottleneck that could cause timeouts in production.\n\n### Alternative: If \"Version\" implies \"Dependency Version\"\n\nIf `version` refers to a dependency version (e.g., `numpy==1.21`), then the next regression test should be:\n\n**Test Name:** `test_dependency_conflict_resolution`\n\n**Description:**\nCheck for **version conflicts** between items. For example, if `item_A` requires `lib_X@v1` and `item_B` requires `lib_X@v2`, and they are used together, does the system fail? The log shows \"tests pass,\" but a regression test should explicitly verify that **mixed-version environments** (if applicable) are handled correctly.\n\n### Recommendation\n\nGiven the lack of failure data, the most valuable regression test is:\n\n**`test_full_dataset_validation`**\n\n**Description:**\n1.  **Load** all 1,849 item/version pairs.\n2.  **Assert** that each `item_ID` is unique.\n3.  **Assert** that each",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "40bef617682e53ec7f3bf6fa13670463f715023ecacc3c96ba9a45317c663a02",
+      "ttft_s": 1.2970009879791178,
+      "content_ttft_s": 1.2970019000058528,
+      "usage": {
+        "prompt_tokens": 44831,
+        "completion_tokens": 896,
+        "total_tokens": 45727,
+        "prompt_tokens_details": {
+          "cached_tokens": 44790
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0369,
+        "decode_s": 65.0484,
+        "rounds": 285,
+        "drafts": true,
+        "cached": 44790,
+        "min_rows": 2,
+        "drafted": 834,
+        "accepted": 610,
+        "token_sha": "1e1dac97a0fb"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 66.34947345798719,
+      "started_monotonic": 171997.93892372,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501585`, `item_654420`, `item_942913`, `item_1369`, `item_1392`, `item_1446`, `item_1680`) to verify that the specific behaviors introduced or modified in **Version 91** do not cause regressions in dependent modules or core functionality.\n\n**Why It Matters:**\n\n1.  **High-Volume Version Usage:** Version 91 appears frequently in the log (at least 9 distinct items). In software dependency management, a version used by many components is a \"high-blast-radius\" dependency. If Version 91 contains a subtle bug or a breaking change, it will affect a significant portion of the system, not just a single isolated module.\n2.  **Regression Prevention:** The log states \"tests pass\" for these entries, but this likely refers to unit tests or basic smoke tests at the time of integration. A dedicated regression test ensures that:\n    *   The API contract for Version 91 remains stable.\n    *   No side effects from upgrading to Version 91 have broken existing functionality in the dependent items.\n    *   Performance characteristics of Version 91 are acceptable under load (if applicable).\n3.  **Dependency Chain Integrity:** Since `item_652596` (Entry 1) is one of the earliest entries using Version 91, and later entries (like Entry 27, 39, etc.) also use it, verifying Version 91 ensures consistency across the timeline. If Version 91 has a known issue, it needs to be identified before it propagates further through the dependency graph.\n\n**Alternative/Secondary Test (if Version 91 is deemed stable):**\n**Test Description:** **Version 0 Validation.**\n**Why It Matters:** Version 0 (used by `item_246882`, `item_763267`, `item_580988`, `item_577`, `item_760`, `item_770`, `item_1238`, `item_1289`, `item_1291`, `item_1294`, `item_1331`, `item_1508`, `item_1516`, `item_1660`, `item_1693`, `item_1760`) is often a placeholder, a development build, or a \"null\" version. Testing this ensures that no production-critical code is accidentally depending on an unstable or non-existent version, which could lead to build failures or runtime errors in production environments.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the description of the next regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501585`, `item_654420`, `item_942913`, `item_1369`, `item_1392`, `item_1446`, `item_1680`) to verify that the specific behaviors introduced or modified in **Version 91** do not cause regressions in dependent modules or core functionality.\n\n**Why It Matters:**\n\n1",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "fe4ec3d5261864df8941d2fb04a41404f827761bc5166f43d3b1e6848ff18062",
+      "ttft_s": 1.3015728300088085,
+      "content_ttft_s": 1.3015735980006866,
+      "usage": {
+        "prompt_tokens": 44832,
+        "completion_tokens": 896,
+        "total_tokens": 45728,
+        "prompt_tokens_details": {
+          "cached_tokens": 44791
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0369,
+        "decode_s": 67.3203,
+        "rounds": 295,
+        "drafts": true,
+        "cached": 44791,
+        "min_rows": 2,
+        "drafted": 810,
+        "accepted": 600,
+        "token_sha": "e4b403ec6e81"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 68.6251024309895,
+      "started_monotonic": 171997.93915972,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against **Version 91** of the core library/framework. Specifically, verify that all components previously tested on Version 91 (and adjacent versions like 90 and 92) continue to pass without regression.\n\n**Key Components to Test (from log):**\n*   `item_652596` (Entry 1)\n*   `item_487956` (Entry 27)\n*   `item_988785` (Entry 39)\n*   `item_680868` (Entry 105)\n*   `item_501520` (Entry 160)\n*   `item_617021` (Entry 278)\n*   `item_51826` (Entry 1437)\n*   `item_663178` (Entry 1446)\n*   `item_942913` (Entry 981)\n*   `item_1369` (Entry 1369)\n*   `item_1392` (Entry 1392)\n\n**Why It Matters:**\n\n1.  **High Frequency of Use:** Version 91 appears **11 times** in the log (more than any other version except possibly lower numbers like 4, 11, 18, etc., but 91 is a high version number, suggesting it's a recent or widely adopted stable release). A high frequency of usage across diverse `item_` IDs indicates that Version 91 is a critical dependency for many components.\n2.  **Risk of Regression:** If a change has been made to the core system or if Version 91 is being deprecated/upgraded, any regression in this version would impact a large number of dependent items. Testing ensures that the stability observed in the log (\"tests pass\") is maintained.\n3.  **Boundary Testing:** Version 91 is near the top of the version range (max seen is 99). Testing high-version numbers often reveals issues related to newer features or breaking changes introduced in recent updates. Ensuring stability here prevents cascading failures in modern components.\n4.  **Data Integrity:** The log shows `item_652596` (Entry 1) and `item_487956` (Entry 27) both using Version 91. If these items represent different modules or services, a regression in Version 91 could cause cross-module failures.\n\n**Alternative/Secondary Test:**\nIf Version 91 is already covered, the next priority would be **Version 4** (used in Entries 34, 43, 49, 72, 141, 561, 722, 856, 948, 1738, 1759, 1762, 1803, 1839) or **Version 11** (used in Entries 21, 22, 55, 104, 187, 227, 414, 482, 515, 519, 568, 910, 917, 1211, 1225, 1295, 1449, 1657, 1728). These low-version numbers may represent legacy components that are still critical but may lack modern test coverage.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the description of the next regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "cf5abe63c0cb80becdfd4ba975b966aff2970c0c2ba3eed277251f50d370c11a",
+      "ttft_s": 1.275645732996054,
+      "content_ttft_s": 1.2756478289957158,
+      "usage": {
+        "prompt_tokens": 44832,
+        "completion_tokens": 896,
+        "total_tokens": 45728,
+        "prompt_tokens_details": {
+          "cached_tokens": 44791
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0371,
+        "decode_s": 70.0145,
+        "rounds": 306,
+        "drafts": true,
+        "cached": 44791,
+        "min_rows": 2,
+        "drafted": 837,
+        "accepted": 589,
+        "token_sha": "59ae2ed8396c"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 71.29326820600545,
+      "started_monotonic": 171997.941004616,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against **Version 91** of the core library/framework. Specifically, verify that all items previously recorded as using Version 91 (e.g., `item_652596`, `item_487956`, `item_988785`, `item_680868`, `item_501520`, `item_617021`, `item_51826`, `item_654420`, `item_942913`, `item_1369`, `item_1392`, `item_1446`, `item_1680`) continue to pass their respective tests without regression. Additionally, perform a cross-version compatibility check between Version 91 and the most recent high-version entries (e.g., Version 99, 98, 97) to ensure no dependency conflicts or API breakages have been introduced in the latest builds that might affect legacy Version 91 consumers.\n\n**Why It Matters:**\n\n1.  **High Frequency of Use:** Version 91 appears frequently throughout the log (entries 1, 27, 39, 105, 160, 278, 433, 518, 981, 1369, 1392, 1446, 1680). This indicates it is a widely adopted, stable baseline. A regression in this version would impact a significant portion of the system's components.\n2.  **Potential \"Stagnation\" Risk:** The log shows a progression of versions up to 99. If Version 91 is an older, stable release, new features or fixes introduced in versions 92\u201399 might inadvertently break backward compatibility or introduce side effects that affect components still pinned to Version 91.\n3.  **Data Integrity & Test Pass Status:** All entries currently report \"tests pass.\" A regression test ensures this status remains true. If a new change in the main branch (or a newer version) causes a previously passing test on a Version 91 item to fail, it signals a critical break in stability for a large subset of the codebase.\n4.  **Efficiency in Testing:** Instead of testing every single version (0\u201399), focusing on high-frequency versions like 91 (and potentially 82, 85, 61, etc.) provides the highest risk-to-coverage ratio. Testing Version 91 acts as a proxy for the stability of the \"mid-to-high\" version range, catching issues that might affect many dependent items.\n\n**Alternative/Complementary Test:**\nIf the goal is to test *new* changes, the next test should be **Version 99 vs. Version 91 Interoperability**. Since Version 99 is the latest (e.g., `item_501330`, `item_103177`, `item_1330`, `item_1556`, `item_1607`, `item_1609`, `item_1641`), testing its interaction with the widely-used Version 91 ensures that the newest code does not break the most common legacy dependencies.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against **Version 91** of the core library/framework. Specifically, verify that all items previously recorded as using Version 91 (e.g., `item_652596`, `item_487956`, `item_988785`,",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "971265e3cbeb0ebe854e8c3373145ba5651949212e2bb03f65d840188e9e1f7d",
+      "ttft_s": 1.2835229839838576,
+      "content_ttft_s": 1.2835253999801353,
+      "usage": {
+        "prompt_tokens": 44832,
+        "completion_tokens": 896,
+        "total_tokens": 45728,
+        "prompt_tokens_details": {
+          "cached_tokens": 44791
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.037,
+        "decode_s": 70.2196,
+        "rounds": 307,
+        "drafts": true,
+        "cached": 44791,
+        "min_rows": 2,
+        "drafted": 842,
+        "accepted": 588,
+        "token_sha": "5aaac6b2e049"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 71.50601250099135,
+      "started_monotonic": 171997.937935479,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,850 entries** (from `entry 0` to `entry 1849`).\n*   **Status:** Every single entry reports `tests pass`.\n*   **Data:** Each entry maps a unique `item_ID` to a `version` number (ranging from 0 to 99).\n*   **Pattern:** There are no obvious failures, crashes, or \"tests fail\" messages. The data appears to be a static snapshot of a successful test run or a dataset of passing configurations.\n\n### Proposed Next Regression Test: **Version-Item Consistency & Range Validation**\n\n**Test Name:** `test_version_item_mapping_integrity`\n\n**Description:**\nThis test will verify that the mapping between `item_ID` and `version` remains stable and that all version numbers fall within the expected valid range (0\u201399) for the current build. Specifically, it will:\n1.  **Check for Version Drift:** Ensure that if an `item_ID` appeared in a previous baseline log, its `version` number has not changed unexpectedly (unless explicitly updated).\n2.  **Validate Version Bounds:** Assert that no `version` number is outside the range `[0, 99]`.\n3.  **Check for Duplicate Item IDs:** Ensure that no `item_ID` is mapped to two different `version` numbers in the same run (which would indicate a race condition or data corruption in the test harness).\n\n**Why It Matters:**\n\n1.  **Prevents Silent Regressions:** Since all tests currently \"pass,\" a regression might not be a crash but a *change in behavior*. If an item\u2019s version changes unexpectedly (e.g., from `version 45` to `version 46`), it could indicate a dependency update or a code change that alters how that item is processed. Without a baseline comparison, this change might go unnoticed until it causes a downstream failure.\n2.  **Data Integrity:** In large-scale test suites (1,850+ items), data corruption or mapping errors can occur. If an `item_ID` is accidentally assigned to two different versions, or if a version number is invalid (e.g., `version 105`), it suggests a flaw in the test harness or the underlying system generating these logs.\n3.  **Baseline for Future Changes:** This test establishes a \"golden master\" or baseline. If future changes to the codebase cause an item to shift from `version 45` to `version 46`, the test will fail, alerting developers to investigate whether this change was intentional or a side effect of a refactor.\n\n### Example Implementation (Python)\n\n```python\nimport unittest\n\n# Simulated baseline data from the log (truncated for brevity)\nBASELINE_DATA = {\n    \"item_631533\": 68,\n    \"item_652596\": 91,\n    \"item_611262\": 63,\n    # ... all other items from the log ...\n    \"item_505683\": 66,\n}\n\ndef get_current_test_results():\n    \"\"\"\n    Simulates fetching the current test results from the system under test.\n    In a real scenario, this would query the test harness or parse the latest log.\n    \"\"\"\n    # Example: Assume a new run has been executed\n    return {\n        \"item_631533\": 68,\n        \"item_652596\": 91,\n        \"item_611262\": 63,\n        # ... other items ...\n        \"item_505683\": 66,\n    }\n\nclass TestVersionIntegrity(unittest.TestCase):\n    def test_version_item_mapping_integrity(self):\n        current_results = get_current_test_results()\n        \n        # 1. Check for Version Drift\n        for item_id, expected_version in BASELINE_DATA.items():\n            if",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "b31cb143fb64b3504c534241293a30371647432eda1009532b6785df786efe3f",
+      "ttft_s": 1.3094336650101468,
+      "content_ttft_s": 1.3094340969983023,
+      "usage": {
+        "prompt_tokens": 44832,
+        "completion_tokens": 896,
+        "total_tokens": 45728,
+        "prompt_tokens_details": {
+          "cached_tokens": 44791
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0333,
+        "decode_s": 65.2538,
+        "rounds": 286,
+        "drafts": true,
+        "cached": 44791,
+        "min_rows": 2,
+        "drafted": 789,
+        "accepted": 609,
+        "token_sha": "c178a04ace9c"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 66.56617482702131,
+      "started_monotonic": 171997.944614538,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501520`, `item_617021`, `item_51826`, `item_654420`, `item_942913`, `item_1369`, `item_1392`, `item_1446`, `item_1680`) to verify that the specific behaviors introduced or modified in **Version 91** do not cause regressions in dependent modules or core functionality.\n\n**Why It Matters:**\n\n1.  **High-Volume Version Usage:** Version 91 appears frequently in the log (at least 11 times). In software dependency management, when a specific version is used across many independent agents or items, it becomes a \"critical path\" dependency. A bug in Version 91 would have a widespread blast radius, affecting a significant portion of the system.\n2.  **Regression Prevention:** Since the log states \"tests pass\" for these entries, it implies that the current state is considered stable. However, without explicit regression tests targeting the *specific* features or fixes introduced in Version 91, future changes to the core system or other dependencies could inadvertently break compatibility with Version 91.\n3.  **Isolation of Failure:** If a new feature is added to the main codebase, it might conflict with the assumptions made by items using Version 91. A dedicated regression test ensures that the contract provided by Version 91 remains intact, preventing \"silent\" failures where tests pass in isolation but fail in integration due to version-specific quirks.\n4.  **Efficiency in Debugging:** If a failure occurs later, having a dedicated regression test for high-usage versions like 91 allows developers to quickly determine if the issue is a general core bug or a specific incompatibility with that version, speeding up root cause analysis.\n\n**Alternative/Secondary Test (if Version 91 is deemed stable):**\n**Version 0 Compatibility Check:** Test `item_246882`, `item_763267`, `item_580988`, `item_577`, `item_1508`, `item_1516`, `item_1660`, `item_1693`, `item_1760`, `item_1291`, `item_1294`, `item_1289`, `item_1238`, `item_1172`, `item_1175`, `item_1088`, `item_904`, `item_770`, `item_760`, `item_577`, `item_243`, `item_9`.\n*   **Why:** Version 0 often represents a baseline, legacy, or uninitialized state. Testing this ensures that the system does not break when encountering legacy or default configurations, which is crucial for backward compatibility and handling edge cases where versioning might be undefined or reset.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501520`, `item_617021`, `item_51826`, `item_65442",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "5dff33604ff0afd3773d2a6b1406d66929ca150a4b7114e75f5ce3fd410fafc1",
+      "ttft_s": 1.2711768669832963,
+      "content_ttft_s": 1.2711777789809275,
+      "usage": {
+        "prompt_tokens": 44832,
+        "completion_tokens": 896,
+        "total_tokens": 45728,
+        "prompt_tokens_details": {
+          "cached_tokens": 44791
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.037,
+        "decode_s": 74.3744,
+        "rounds": 334,
+        "drafts": true,
+        "cached": 44791,
+        "min_rows": 2,
+        "drafted": 802,
+        "accepted": 561,
+        "token_sha": "1489eaca948d"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 75.64776732199243,
+      "started_monotonic": 171997.940593208,
+      "content": "Based on the provided project log, here is the description of the next logical regression test and the reasoning behind it.\n\n### Next Regression Test: **Version 91 Compatibility & Stability Check**\n\n**Test Description:**\nExecute a full integration test suite against `item_652596` (and any other items pinned to version 91, such as `item_487956`, `item_988785`, `item_501520`, `item_617021`, `item_51826`, `item_942913`, `item_1369`, `item_1392`, `item_1446`, `item_1680`) to verify that the specific behaviors introduced or modified in **Version 91** do not cause regressions in dependent modules or core functionality.\n\n**Why It Matters:**\n\n1.  **High Frequency of Version 91:**\n    Scanning the log, **Version 91** appears frequently across the dataset (e.g., entries 1, 27, 39, 160, 278, 518, 877, 981, 1369, 1392, 1446, 1680). A version that is reused across many distinct items (`item_652596`, `item_487956`, etc.) suggests it is a **stable, widely adopted baseline** or a **critical dependency version**. If a regression exists in Version 91, it will impact a large number of items, making it a high-priority target for regression testing.\n\n2.  **Risk of \"Silent\" Regressions in Stable Versions:**\n    The log states \"tests pass\" for all entries, but this likely refers to *unit* or *initial* tests. Regression testing is needed to ensure that changes in *other* parts of the system (or updates to the test environment) do not break the functionality that relies on Version 91. Since many items depend on it, a failure here has a **high blast radius**.\n\n3.  **Version 91 as a Potential \"Latest\" or \"Reference\" Version:**\n    In many software projects, higher version numbers (like 91, 95, 99) represent newer features or fixes. Testing the most frequently used high-version number ensures that the **current stable state** of the project remains intact. If Version 91 is a common dependency, verifying its integrity prevents cascading failures across the 1849+ items listed.\n\n4.  **Contrast with Low-Usage Versions:**\n    While versions like 0, 1, or 2 appear (e.g., `item_246882` uses v0, `item_243827` uses v1), they are less frequent. Testing the most *common* version (91) provides better coverage of the *current* operational state of the project than testing rare, legacy, or experimental versions.\n\n### Alternative/Secondary Test: **Version 0/1/2 Legacy Compatibility**\n*If the project is undergoing a major upgrade:* A test verifying that **Version 0, 1, and 2** (e.g., `item_246882`, `item_243827`, `item_825353`) still function correctly is also critical. These low versions may represent legacy components that are being deprecated or refactored. A regression here could break backward compatibility for older clients or modules that haven't been updated yet.\n\n### Recommendation:\nPrioritize the **Version 91 Compatibility Test** because:\n*   It covers the **most frequently used version** in the log.\n*   It protects the **largest number of items** from potential breakage.\n*   It ensures the **current stable baseline** remains intact before further development or deployment.<|im_end|>\n<|endoftext|><|im_start|><|im_start|><|im_end|>\n<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nBased on the provided project log, here is the",
+      "reasoning": "",
+      "tool_calls": []
+    },
+    {
+      "request_sha256": "2688e9107cbf8b5d335ea04aa9c129f92d52c38b9028d8edd86251e3965111e1",
+      "ttft_s": 1.2693310430040583,
+      "content_ttft_s": 1.2693320030230097,
+      "usage": {
+        "prompt_tokens": 44832,
+        "completion_tokens": 896,
+        "total_tokens": 45728,
+        "prompt_tokens_details": {
+          "cached_tokens": 44791
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "engine": {
+        "prefill_s": 0.0378,
+        "decode_s": 72.1002,
+        "rounds": 317,
+        "drafts": true,
+        "cached": 44791,
+        "min_rows": 2,
+        "drafted": 827,
+        "accepted": 578,
+        "token_sha": "cc008c0600ed"
+      },
+      "error": null,
+      "http_status": 200,
+      "finish_reason": "length",
+      "done": true,
+      "elapsed_s": 73.37307426001644,
+      "started_monotonic": 171997.937765511,
+      "content": "Based on the provided project log, here is an analysis of the current state and a proposal for the next regression test.\n\n### Analysis of the Log\nThe log contains **1,849 entries** (from `entry 0` to `entry 1848`).\n*   **Status:** All entries report `tests pass`.\n*   **Data Pattern:** Each entry lists an `item_ID` and a `version` number.\n*   **Observation:** There is no obvious sequential pattern in the `version` numbers (e.g., they jump from 68 to 91 to 63). This suggests the `version` field likely represents a **dependency version**, a **configuration hash**, or a **randomized seed** rather than a monotonically increasing build number.\n\n### Proposed Next Regression Test: **Version Stability & Dependency Drift Check**\n\n#### 1. Description of the Test\n**Test Name:** `test_version_consistency_and_drift`\n\n**Objective:**\nTo verify that the `version` values associated with specific `item_ID`s remain stable across test runs, or to detect if a specific `item_ID` has unexpectedly changed its `version` (which could indicate a dependency update, a configuration change, or a data corruption issue).\n\n**Test Logic:**\n1.  **Baseline Capture:** Store the `item_ID` -> `version` mapping from the current log (or a previous known-good state) as a baseline.\n2.  **Current State Check:** For each `item_ID` in the current test run, compare its `version` against the baseline.\n3.  **Assertion:**\n    *   If an `item_ID` is new, flag it as `NEW_ITEM`.\n    *   If an `item_ID` exists in the baseline but the `version` differs, flag it as `VERSION_DRIFT`.\n    *   If an `item_ID` is missing from the current run but present in the baseline, flag it as `MISSING_ITEM`.\n\n#### 2. Why It Matters\n\n1.  **Detects Silent Dependency Updates:**\n    In many systems, a change in `version` (e.g., from `version 45` to `version 46`) might seem trivial but could introduce breaking changes in dependencies. If `item_170509` (version 45) and `item_953233` (version 45) are expected to use the same underlying library, a drift in one but not the other could indicate an inconsistent environment setup.\n\n2.  **Identifies Data Corruption or Flakiness:**\n    If the `version` field is derived from a hash or a deterministic process, any change in the `version` for the same `item_ID` across runs (without code changes) suggests **non-deterministic behavior** or **data corruption**. This test ensures reproducibility.\n\n3.  **Prevents \"Green\" Tests with Broken Logic:**\n    The log shows `tests pass` for all entries. However, if the `version` number is critical for logic (e.g., `if version > 50: use_new_algorithm`), a silent change in `version` could cause the test to pass while the *behavior* of the system changes. This test acts as a guardrail against **semantic drift** where the test passes, but the system is no longer behaving as intended.\n\n4.  **Scalability & Maintenance:**\n    With nearly 2,000 items, manual inspection is impossible. This automated check ensures that as the project scales, any unexpected change in the configuration/version landscape is caught immediately, preventing subtle bugs from entering production.\n\n### Implementation Example (Python)\n\n```python\nimport json\nimport os\n\ndef load_baseline(baseline_file=\"baseline_versions.json\"):\n    if not os.path.exists(baseline_file):\n        return {}\n    with open(baseline_file, 'r') as f:\n        return json.load(f)\n\ndef check_version_drift(current_log_entries, baseline):\n    \"\"\"\n    current_log_entries: List of dicts like {\"item_id\": \"item_123\", \"version\": 45}\n    baseline: Dict mapping item_id to version\n   ",
+      "reasoning": "",
+      "tool_calls": []
+    }
+  ],
+  "monitor": [
+    {
+      "time": 1793255060.7262037,
+      "available_gib": 16.16070556640625,
+      "swap_used_gib": 0.30498504638671875,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673069311488,
+      "nvme_write_bytes": 81311202304,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 15,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 14336,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 0,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255062.4193115,
+      "available_gib": 14.344890594482422,
+      "swap_used_gib": 0.30498504638671875,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673074861568,
+      "nvme_write_bytes": 81311202304,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 14488,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255063.421391,
+      "available_gib": 14.27878189086914,
+      "swap_used_gib": 0.30498504638671875,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673082349056,
+      "nvme_write_bytes": 81311202304,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 14803,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255064.425518,
+      "available_gib": 14.27994155883789,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673088132608,
+      "nvme_write_bytes": 81311202304,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 15045,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255065.4300106,
+      "available_gib": 14.280967712402344,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673092650496,
+      "nvme_write_bytes": 81311214592,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 15340,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255066.433939,
+      "available_gib": 14.246574401855469,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673100088832,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 15559,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255067.4383776,
+      "available_gib": 14.24609375,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673108301312,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 15855,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255068.4429462,
+      "available_gib": 14.245742797851562,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673114076672,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 16048,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255069.4478478,
+      "available_gib": 14.245929718017578,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673124873728,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 16281,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255070.4513283,
+      "available_gib": 14.242618560791016,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673136010752,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 16511,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255071.4536586,
+      "available_gib": 14.23931884765625,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673148986880,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 16678,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255072.4584606,
+      "available_gib": 14.236442565917969,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673162417664,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 16903,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255073.4630108,
+      "available_gib": 14.23574447631836,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673173124608,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 17133,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255074.4680357,
+      "available_gib": 14.226776123046875,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673182344704,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 17340,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255075.4720333,
+      "available_gib": 14.234004974365234,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673197606400,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 17556,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255076.476142,
+      "available_gib": 14.233566284179688,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673208784384,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 17742,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255077.4807124,
+      "available_gib": 14.23221206665039,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673220384256,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 17902,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255078.4848187,
+      "available_gib": 14.211467742919922,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673237505536,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 18144,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255079.4891677,
+      "available_gib": 14.201614379882812,
+      "swap_used_gib": 0.3049812316894531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673252529664,
+      "nvme_write_bytes": 81311271936,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 18343,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255080.4937067,
+      "available_gib": 14.1854248046875,
+      "swap_used_gib": 0.30492401123046875,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673268602368,
+      "nvme_write_bytes": 81311321088,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 18548,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255081.496235,
+      "available_gib": 14.195934295654297,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673287878144,
+      "nvme_write_bytes": 81311321088,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 18727,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255082.4991887,
+      "available_gib": 14.20455551147461,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673305867776,
+      "nvme_write_bytes": 81311321088,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 18916,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255083.5035079,
+      "available_gib": 14.20565414428711,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673322767872,
+      "nvme_write_bytes": 81311321088,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 19087,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255084.5073035,
+      "available_gib": 14.215873718261719,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673336743424,
+      "nvme_write_bytes": 81311321088,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 19270,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255085.5108824,
+      "available_gib": 14.213886260986328,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673357714944,
+      "nvme_write_bytes": 81311362048,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 19470,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255086.5139291,
+      "available_gib": 14.223426818847656,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673375913472,
+      "nvme_write_bytes": 81311403008,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 19647,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255087.5181835,
+      "available_gib": 14.224063873291016,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673396176384,
+      "nvme_write_bytes": 81311403008,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 19825,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255088.523685,
+      "available_gib": 14.21944808959961,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673414325760,
+      "nvme_write_bytes": 81311403008,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 19991,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255089.5269303,
+      "available_gib": 14.215354919433594,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673433589248,
+      "nvme_write_bytes": 81311403008,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 20196,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255090.5296764,
+      "available_gib": 14.221488952636719,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673452692992,
+      "nvme_write_bytes": 81311403008,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 20381,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255091.5321515,
+      "available_gib": 14.208507537841797,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673468896768,
+      "nvme_write_bytes": 81311792128,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 20576,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255092.5393476,
+      "available_gib": 14.20206069946289,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673491949056,
+      "nvme_write_bytes": 81311792128,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 20756,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255093.5453188,
+      "available_gib": 14.213359832763672,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673509742080,
+      "nvme_write_bytes": 81311792128,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 20911,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255094.5498865,
+      "available_gib": 14.212162017822266,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673527289344,
+      "nvme_write_bytes": 81311792128,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 21068,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255095.5539732,
+      "available_gib": 14.213462829589844,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673546888704,
+      "nvme_write_bytes": 81311792128,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 21297,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255096.5588424,
+      "available_gib": 14.212635040283203,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673562826240,
+      "nvme_write_bytes": 81311792128,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 21466,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255097.5623257,
+      "available_gib": 14.215869903564453,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673583646208,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 21632,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255098.565224,
+      "available_gib": 14.21786117553711,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673607349760,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 21838,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255099.567543,
+      "available_gib": 14.199504852294922,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673626232320,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 21995,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255100.571873,
+      "available_gib": 14.196102142333984,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673644226048,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 22177,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255101.576232,
+      "available_gib": 14.196601867675781,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673666729472,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 22380,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255102.5801873,
+      "available_gib": 14.21185302734375,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673686570496,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 22536,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255103.5839906,
+      "available_gib": 14.21817398071289,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673705403904,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 22663,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255104.5876362,
+      "available_gib": 14.218730926513672,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673723901440,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 22833,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255105.592316,
+      "available_gib": 14.224754333496094,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673738515968,
+      "nvme_write_bytes": 81311841280,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 23000,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255106.5965428,
+      "available_gib": 14.225788116455078,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673754269184,
+      "nvme_write_bytes": 81311878144,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 23223,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255107.5988183,
+      "available_gib": 14.209564208984375,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673775261184,
+      "nvme_write_bytes": 81311878144,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 23406,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255108.6029687,
+      "available_gib": 14.20560073852539,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673788093952,
+      "nvme_write_bytes": 81311878144,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 23570,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255109.607318,
+      "available_gib": 14.205162048339844,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673802737152,
+      "nvme_write_bytes": 81311878144,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 23760,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255110.6107512,
+      "available_gib": 14.208087921142578,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673823024640,
+      "nvme_write_bytes": 81311878144,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 23964,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255111.6134768,
+      "available_gib": 14.215106964111328,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673837188608,
+      "nvme_write_bytes": 81314597888,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 24141,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255112.6174371,
+      "available_gib": 14.201900482177734,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673853646336,
+      "nvme_write_bytes": 81314597888,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 24296,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255113.6216989,
+      "available_gib": 14.213897705078125,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673870243328,
+      "nvme_write_bytes": 81314597888,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 24467,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255114.6251955,
+      "available_gib": 14.204307556152344,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673887655424,
+      "nvme_write_bytes": 81314597888,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 24686,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255115.6275392,
+      "available_gib": 14.188117980957031,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673905759744,
+      "nvme_write_bytes": 81314597888,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 24847,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255116.6310518,
+      "available_gib": 14.184009552001953,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673920767488,
+      "nvme_write_bytes": 81314655232,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 25019,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255117.635586,
+      "available_gib": 14.190311431884766,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673935812096,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 25218,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255118.6394446,
+      "available_gib": 14.199748992919922,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673952888320,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 25412,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255119.643475,
+      "available_gib": 14.210289001464844,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673969288704,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 25611,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255120.6465557,
+      "available_gib": 14.218276977539062,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673981363712,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 25823,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255121.6501987,
+      "available_gib": 14.220890045166016,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11673995904512,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 26028,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255122.6547756,
+      "available_gib": 14.218292236328125,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674005431808,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 26250,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255123.6591527,
+      "available_gib": 14.22842025756836,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674020062720,
+      "nvme_write_bytes": 81314700288,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 26450,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255124.6635826,
+      "available_gib": 14.219413757324219,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674031908352,
+      "nvme_write_bytes": 81314733056,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 16,
+        "requests_total": 16,
+        "prompt_tokens_total": 716662,
+        "completion_tokens_total": 26665,
+        "prefill_seconds_total": 322.7312,
+        "decode_seconds_total": 1031.6144,
+        "cached_tokens_total": 0,
+        "rounds_total": 4055,
+        "drafted_total": 13965,
+        "accepted_total": 10265,
+        "streams": {
+          "decoding": 16,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255125.66542,
+      "available_gib": 14.22507095336914,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674046805504,
+      "nvme_write_bytes": 81314733056,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 15,
+        "requests_total": 17,
+        "prompt_tokens_total": 761493,
+        "completion_tokens_total": 26840,
+        "prefill_seconds_total": 322.7643,
+        "decode_seconds_total": 1094.9666,
+        "cached_tokens_total": 44790,
+        "rounds_total": 4333,
+        "drafted_total": 14751,
+        "accepted_total": 10882,
+        "streams": {
+          "decoding": 15,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255126.668627,
+      "available_gib": 14.232532501220703,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674058524160,
+      "nvme_write_bytes": 81314733056,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 15,
+        "requests_total": 17,
+        "prompt_tokens_total": 761493,
+        "completion_tokens_total": 27017,
+        "prefill_seconds_total": 322.7643,
+        "decode_seconds_total": 1094.9666,
+        "cached_tokens_total": 44790,
+        "rounds_total": 4333,
+        "drafted_total": 14751,
+        "accepted_total": 10882,
+        "streams": {
+          "decoding": 15,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255127.6732974,
+      "available_gib": 14.233020782470703,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674067338752,
+      "nvme_write_bytes": 81314733056,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 13,
+        "requests_total": 19,
+        "prompt_tokens_total": 851156,
+        "completion_tokens_total": 27180,
+        "prefill_seconds_total": 322.8345,
+        "decode_seconds_total": 1225.2688,
+        "cached_tokens_total": 134371,
+        "rounds_total": 4904,
+        "drafted_total": 16374,
+        "accepted_total": 12101,
+        "streams": {
+          "decoding": 13,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255128.6767673,
+      "available_gib": 14.234203338623047,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674078201344,
+      "nvme_write_bytes": 81314733056,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 13,
+        "requests_total": 19,
+        "prompt_tokens_total": 851156,
+        "completion_tokens_total": 27383,
+        "prefill_seconds_total": 322.8345,
+        "decode_seconds_total": 1225.2688,
+        "cached_tokens_total": 134371,
+        "rounds_total": 4904,
+        "drafted_total": 16374,
+        "accepted_total": 12101,
+        "streams": {
+          "decoding": 13,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255129.6804001,
+      "available_gib": 14.234882354736328,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674094970368,
+      "nvme_write_bytes": 81314733056,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 12,
+        "requests_total": 20,
+        "prompt_tokens_total": 895988,
+        "completion_tokens_total": 27534,
+        "prefill_seconds_total": 322.8714,
+        "decode_seconds_total": 1292.5891,
+        "cached_tokens_total": 179162,
+        "rounds_total": 5199,
+        "drafted_total": 17184,
+        "accepted_total": 12701,
+        "streams": {
+          "decoding": 12,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255130.6841142,
+      "available_gib": 14.235958099365234,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674109953536,
+      "nvme_write_bytes": 81314745344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 12,
+        "requests_total": 20,
+        "prompt_tokens_total": 895988,
+        "completion_tokens_total": 27714,
+        "prefill_seconds_total": 322.8714,
+        "decode_seconds_total": 1292.5891,
+        "cached_tokens_total": 179162,
+        "rounds_total": 5199,
+        "drafted_total": 17184,
+        "accepted_total": 12701,
+        "streams": {
+          "decoding": 12,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255131.688033,
+      "available_gib": 14.232715606689453,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674120054272,
+      "nvme_write_bytes": 81314745344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 11,
+        "requests_total": 21,
+        "prompt_tokens_total": 940819,
+        "completion_tokens_total": 27888,
+        "prefill_seconds_total": 322.9045,
+        "decode_seconds_total": 1361.4035,
+        "cached_tokens_total": 223952,
+        "rounds_total": 5500,
+        "drafted_total": 17992,
+        "accepted_total": 13295,
+        "streams": {
+          "decoding": 11,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255132.691907,
+      "available_gib": 14.220802307128906,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674130523648,
+      "nvme_write_bytes": 81314745344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 8,
+        "requests_total": 24,
+        "prompt_tokens_total": 1075314,
+        "completion_tokens_total": 28070,
+        "prefill_seconds_total": 323.0124,
+        "decode_seconds_total": 1572.0597,
+        "cached_tokens_total": 358324,
+        "rounds_total": 6421,
+        "drafted_total": 20498,
+        "accepted_total": 15059,
+        "streams": {
+          "decoding": 8,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255133.6963575,
+      "available_gib": 14.225654602050781,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674140485120,
+      "nvme_write_bytes": 81314745344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 8,
+        "requests_total": 24,
+        "prompt_tokens_total": 1075314,
+        "completion_tokens_total": 28218,
+        "prefill_seconds_total": 323.0124,
+        "decode_seconds_total": 1572.0597,
+        "cached_tokens_total": 358324,
+        "rounds_total": 6421,
+        "drafted_total": 20498,
+        "accepted_total": 15059,
+        "streams": {
+          "decoding": 8,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255134.7005286,
+      "available_gib": 14.228805541992188,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674152773120,
+      "nvme_write_bytes": 81314745344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 5,
+        "requests_total": 27,
+        "prompt_tokens_total": 1209808,
+        "completion_tokens_total": 28355,
+        "prefill_seconds_total": 323.1206,
+        "decode_seconds_total": 1788.879,
+        "cached_tokens_total": 492695,
+        "rounds_total": 7376,
+        "drafted_total": 22938,
+        "accepted_total": 16789,
+        "streams": {
+          "decoding": 5,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255135.7030573,
+      "available_gib": 14.225933074951172,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674160391680,
+      "nvme_write_bytes": 81314745344,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 5,
+        "requests_total": 27,
+        "prompt_tokens_total": 1209808,
+        "completion_tokens_total": 28456,
+        "prefill_seconds_total": 323.1206,
+        "decode_seconds_total": 1788.879,
+        "cached_tokens_total": 492695,
+        "rounds_total": 7376,
+        "drafted_total": 22938,
+        "accepted_total": 16789,
+        "streams": {
+          "decoding": 5,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255136.7068284,
+      "available_gib": 14.225833892822266,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674171287040,
+      "nvme_write_bytes": 81314757632,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 3,
+        "requests_total": 29,
+        "prompt_tokens_total": 1299471,
+        "completion_tokens_total": 28578,
+        "prefill_seconds_total": 323.1945,
+        "decode_seconds_total": 1937.7039,
+        "cached_tokens_total": 582276,
+        "rounds_total": 8045,
+        "drafted_total": 24580,
+        "accepted_total": 17910,
+        "streams": {
+          "decoding": 3,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255137.7094898,
+      "available_gib": 14.387947082519531,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674175026688,
+      "nvme_write_bytes": 81314757632,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 31,
+        "prompt_tokens_total": 1389133,
+        "completion_tokens_total": 28622,
+        "prefill_seconds_total": 323.801,
+        "decode_seconds_total": 2087.571,
+        "cached_tokens_total": 671856,
+        "rounds_total": 8725,
+        "drafted_total": 26277,
+        "accepted_total": 19020,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255138.7136106,
+      "available_gib": 14.388893127441406,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674175858176,
+      "nvme_write_bytes": 81314757632,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 31,
+        "prompt_tokens_total": 1389133,
+        "completion_tokens_total": 28631,
+        "prefill_seconds_total": 323.801,
+        "decode_seconds_total": 2087.571,
+        "cached_tokens_total": 671856,
+        "rounds_total": 8725,
+        "drafted_total": 26277,
+        "accepted_total": 19020,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    },
+    {
+      "time": 1793255139.7845082,
+      "available_gib": 14.39089584350586,
+      "swap_used_gib": 0.3046150207519531,
+      "pswpout": 12029940,
+      "oom_kill": 0,
+      "nvme_read_bytes": 11674178602496,
+      "nvme_write_bytes": 81314757632,
+      "health": {
+        "ok": true,
+        "backend": "tensorfold",
+        "busy": true,
+        "requests_running": 1,
+        "requests_total": 31,
+        "prompt_tokens_total": 1389133,
+        "completion_tokens_total": 28647,
+        "prefill_seconds_total": 323.801,
+        "decode_seconds_total": 2087.571,
+        "cached_tokens_total": 671856,
+        "rounds_total": 8725,
+        "drafted_total": 26277,
+        "accepted_total": 19020,
+        "streams": {
+          "decoding": 1,
+          "prefilling": 0,
+          "max": 16
+        },
+        "context_length": 75000
+      }
+    }
+  ]
+}

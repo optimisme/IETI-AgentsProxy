@@ -1,0 +1,113 @@
+{
+  "runs": [
+    {
+      "id": "baseline-capacity-1",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-baseline-128gb.yml",
+      "script": "run_suite.py",
+      "suite": "capacity",
+      "variant": "baseline",
+      "phase": "primary",
+      "pair_id": "capacity-1",
+      "expected_timed_cases": 3,
+      "primary_case_prefix": "capacity-"
+    },
+    {
+      "id": "candidate-capacity-1",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_capacity_quality.py",
+      "suite": "capacity",
+      "variant": "reserve8-tail-order64",
+      "phase": "primary",
+      "pair_id": "capacity-1",
+      "expected_timed_cases": 3,
+      "primary_case_prefix": "capacity-"
+    },
+    {
+      "id": "candidate-capacity-2",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_capacity_quality.py",
+      "suite": "capacity",
+      "variant": "reserve8-tail-order64",
+      "phase": "primary",
+      "pair_id": "capacity-2",
+      "expected_timed_cases": 3,
+      "primary_case_prefix": "capacity-"
+    },
+    {
+      "id": "baseline-capacity-2",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-baseline-128gb.yml",
+      "script": "run_capacity_quality.py",
+      "suite": "capacity",
+      "variant": "baseline",
+      "phase": "primary",
+      "pair_id": "capacity-2",
+      "expected_timed_cases": 3,
+      "primary_case_prefix": "capacity-"
+    },
+    {
+      "id": "candidate-growth65k-qualification1",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_growth65k.py",
+      "suite": "growth65k",
+      "variant": "reserve8-tail-order64",
+      "phase": "growth_qualification"
+    },
+    {
+      "id": "baseline-capacity-3",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-baseline-128gb.yml",
+      "script": "run_capacity_quality.py",
+      "suite": "capacity",
+      "variant": "baseline",
+      "phase": "primary",
+      "pair_id": "capacity-3",
+      "expected_timed_cases": 3,
+      "primary_case_prefix": "capacity-"
+    },
+    {
+      "id": "candidate-capacity-3",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_capacity_quality.py",
+      "suite": "capacity",
+      "variant": "reserve8-tail-order64",
+      "phase": "primary",
+      "pair_id": "capacity-3",
+      "expected_timed_cases": 3,
+      "primary_case_prefix": "capacity-"
+    },
+    {
+      "id": "candidate-sustained-qualification2",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_sustained_quality.py",
+      "suite": "sustained",
+      "variant": "reserve8-tail-order64",
+      "phase": "sustained_qualification"
+    },
+    {
+      "id": "candidate-sustained-qualification3",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_sustained_quality.py",
+      "suite": "sustained",
+      "variant": "reserve8-tail-order64",
+      "phase": "sustained_qualification"
+    },
+    {
+      "id": "baseline-representative-1",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-baseline-128gb.yml",
+      "script": "run_representative_with_diagnostic.py",
+      "suite": "representative",
+      "variant": "baseline",
+      "phase": "representative",
+      "pair_id": "representative-1"
+    },
+    {
+      "id": "candidate-representative-1",
+      "profile": "models/qwen38-flash-next-python-opt16-paired-reserve8-tail-order64-128gb.yml",
+      "script": "run_representative_with_diagnostic.py",
+      "suite": "representative",
+      "variant": "reserve8-tail-order64",
+      "phase": "representative",
+      "pair_id": "representative-1"
+    }
+  ],
+  "selection_note": "Preserve failed baseline-sustained-1: two engine memory-growth cancellations in round3, no host OOM. Do not repeat an unsafe configuration on that envelope. Three alternating A/B pairs use the earlier successful legacy near75k workload for comparable complete timings. Sustained four-round candidate stability remains separate (screen1 plus two fresh qualifications). No whole-four-round speed percentage assigned to the failed baseline."
+}

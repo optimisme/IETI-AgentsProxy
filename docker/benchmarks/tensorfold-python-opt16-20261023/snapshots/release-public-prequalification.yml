@@ -1,0 +1,311 @@
+# Prepared reusable Python opt16 profile; pending final repeated GPU qualification.
+# Canonical source: local docker/; synchronize this YAML and patches/ bundle.
+# Pinned TensorFold v0.6.5, same checkpoint/INT8 KV/MTP/vision/SSD as baseline.
+# Adds reserve8, compatible nearby-snapshot coalescing, pressure-aware retention
+# and eager final KV tail allocation, with prefill guard64. No tracing hooks.
+# No persistent Recall/learning/conversation store is added; cache is process-local.
+# Available RAM must be monitored; 16x75k is an operating envelope to validate,
+# not a universal guarantee for arbitrary prompts, outputs or image bursts.
+# Stop another service using port8000 before starting. Normal cache volumes persist.
+name: ieti-qwen38-python-opt16-tuned
+
+services:
+  qwen-tensorfold:
+    # Pin the ARM64 NVIDIA PyTorch/CUDA runtime as well as the TensorFold commit.
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    platform: linux/arm64
+    # Reuse the pinned image locally; fetch it only if absent.
+    pull_policy: missing
+    # Inventory labels and stable names identify this deployment and its volumes.
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-python-opt16-tuned-128gb.yml"
+    container_name: qwen38_flash_next_python_opt16_tuned
+    # Recover after crashes/reboots; Docker init reaps children and forwards signals.
+    restart: unless-stopped
+    init: true
+    # Allow the API process up to one minute to exit on stop/recreate.
+    stop_grace_period: 60s
+    # Shared IPC, unlimited locked memory and a 64 MiB stack support CUDA/Torch.
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      # Publish the OpenAI-compatible API on server port 8000; local SSH forwarding
+      # can expose it on local port 8006 without changing the container port.
+      - "8000:8000"
+    volumes:
+      - ../patches/tensorfold-python-opt16-v065:/ieti-opt16:ro
+      # Read-only credentials, resolved relative to docker/models/. The file must
+      # already exist; Compose must not create a directory in its place.
+      - type: bind
+        source: ../tokens.env
+        target: /run/secrets/tokens.env
+        read_only: true
+        bind:
+          create_host_path: false
+      # Persist model downloads, package downloads and compiled kernels separately.
+      # Container recreation preserves these volumes and the original n-gram data.
+      - tensorfold-hf-cache:/root/.cache/huggingface
+      - tensorfold-runtime-cache:/root/.cache/tensorfold
+      - tensorfold-kernel-cache:/root/.cache/tensorfold-kernels
+    environment:
+      # Supported upstream setting; runtime growth reserve and external guard remain.
+      TENSORFOLD_MEMORY_RESERVE_GIB: "8"
+      # Hugging Face paths point to the persistent model/checkpoint download cache.
+      HF_HOME: /root/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface/hub
+      # Pip wheels/downloads survive recreation; the venv itself is recreated.
+      PIP_CACHE_DIR: /root/.cache/tensorfold/pip
+      # Keep Torch extensions, Triton and CUDA JIT caches on the kernel volume.
+      TORCH_EXTENSIONS_DIR: /root/.cache/tensorfold-kernels/torch-extensions
+      TRITON_CACHE_DIR: /root/.cache/tensorfold-kernels/triton
+      CUDA_CACHE_PATH: /root/.cache/tensorfold-kernels/cuda
+      # Limit extension compilation to two jobs to control startup RAM use.
+      MAX_JOBS: "2"
+      # Flush Python logs immediately and suppress the interactive live display.
+      PYTHONUNBUFFERED: "1"
+      TENSORFOLD_NO_LIVE: "1"
+      # Suppress update polling; upgrades are deliberate changes to the pinned commit.
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      # This checkpoint contains affine 4-bit weights (group size 32), native vision
+      # and the MTP head. The public API model name is MODEL_ID; revision is immutable.
+      MODEL_ID: TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP
+      MODEL_REVISION: 2b170fa6309d5d1ee380b35636075fac7945f286
+      # Request context limit, including prompt and generated tokens; override via
+      # TENSORFOLD_CONTEXT. Default 75000 retains the previously tested configuration.
+      CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
+      # Upstream --parallel value, not a source patch. Override via TENSORFOLD_STREAMS.
+      PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
+      # Custom snapshot patch setting; independent of concurrent stream count.
+      TENSORFOLD_PROMPT_SNAPSHOTS: "${TENSORFOLD_PROMPT_SNAPSHOTS:-64}"
+      # Custom SSD patch switch: exactly 1=batched, 0=stock v0.6.5 staging.
+      TENSORFOLD_SSD_BATCH_GATHER: "${TENSORFOLD_SSD_BATCH_GATHER:-1}"
+    # Preserve NVIDIA's entrypoint and its CUDA compatibility initialization.
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        set -a
+        . /run/secrets/tokens.env
+        set +a
+        if [ -n "$${HUGGINGFACE_ACCESS_TOKENS:-}" ]; then
+          export HF_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+          export HUGGING_FACE_HUB_TOKEN="$${HUGGINGFACE_ACCESS_TOKENS}"
+        fi
+
+        # Keep NVIDIA's PyTorch, Triton, CUDA libraries and extension compiler.
+        # The venv is recreated with the container; only downloads and caches persist.
+        python3 -m venv --system-site-packages /opt/tensorfold-venv
+        . /opt/tensorfold-venv/bin/activate
+        # Recreate the container-only checkout at the official v0.6.5 commit.
+        rm -rf /opt/tensorfold-source
+        git clone --filter=blob:none --no-checkout https://github.com/ashhart/TensorFold.git /opt/tensorfold-source
+        git -C /opt/tensorfold-source checkout --detach 609ca419abecebdc5a059498a613680bd3aa847f
+        # Custom setting, not an upstream CLI option. Fail if the pinned source drifts.
+        python - /opt/tensorfold-source/src/tensorfold/families/qwen4_exp/cuda/engine.py <<'PY_PATCH_SNAPSHOTS'
+        import os
+        from pathlib import Path
+        import re
+        import sys
+
+        value = os.environ['TENSORFOLD_PROMPT_SNAPSHOTS']
+        if not re.fullmatch(r'[0-9]{1,2}', value) or not 1 <= int(value) <= 64:
+            raise SystemExit('TENSORFOLD_PROMPT_SNAPSHOTS must be an integer from 1 to 64')
+        path = Path(sys.argv[1])
+        source = path.read_text()
+        expected = 'KEEP = 8                 # prompt states (one token before each end) a concurrent decoder keeps to resume from'
+        uses = (
+            'indexed_stream_geometry(text, streams + int(graphs and mtp), each, KEEP, mtp=mtp,\n                                                          kv_bits=bits, world=tp, prefill_rows=rows0)',
+            'confidence=self.confidence, keep=KEEP, points=self.points,',
+        )
+        if re.findall(r'^KEEP\s*=.*', source, re.MULTILINE) != [expected] or any(source.count(use) != 1 for use in uses):
+            raise SystemExit('TensorFold snapshot patch failed: pinned engine.py KEEP=8 or its planning/runtime uses no longer match')
+        path.write_text(source.replace(expected, expected.replace('KEEP = 8 ', f'KEEP = {int(value)} '), 1))
+        print(f'[ieti] Patched Flash Next retained prompt snapshots: {int(value)}', flush=True)
+        PY_PATCH_SNAPSHOTS
+        # Apply only the measured SSD batching diff, guarded by full-file hashes.
+        # This inline patch makes every normal restart reproduce the tested source.
+        python - /opt/tensorfold-source/src/tensorfold/families/qwen4_exp/cuda/forward.py <<'PY_PATCH_SSD_BATCH'
+        import hashlib
+        import os
+        from pathlib import Path
+        import sys
+
+        enabled = os.environ['TENSORFOLD_SSD_BATCH_GATHER']
+        if enabled not in ('0', '1'):
+            raise SystemExit('TENSORFOLD_SSD_BATCH_GATHER must be exactly 0 or 1')
+        path = Path(sys.argv[1])
+        data = path.read_bytes()
+        baseline = 'a0d19115834bd6144a638cd5ceaac60767dcb5afe097316bfe3e0dc4c66b20fe'
+        patched = 'fa06db912a4d02437875a7e146f1ccf4daf36fcf1093df9b50caf9ea316b03bf'
+        if hashlib.sha256(data).hexdigest() != baseline:
+            raise SystemExit('TensorFold SSD batch patch failed: pinned forward.py SHA-256 no longer matches')
+        old = '''    for layer in w.layers:
+                if layer.ple is not None:
+                    p = layer.ple
+                    for (st, tokens), (_, a0, _) in zip(windows, segs):
+                        toks = np.asarray(tokens, dtype=np.int64)
+                        ids = p.ngram.ids(st.ple_history, toks)
+                        st.ple_last = (st.ple_history, toks)
+                        lookups.append((p, ids, a0 * (ids.size // len(toks))))
+        '''
+        new = '''    for layer in w.layers:
+                if layer.ple is not None:
+                    p = layer.ple
+                    per_window = []
+                    for (st, tokens), (_, a0, _) in zip(windows, segs):
+                        toks = np.asarray(tokens, dtype=np.int64)
+                        ids = p.ngram.ids(st.ple_history, toks)
+                        st.ple_last = (st.ple_history, toks)
+                        if w.x3 is None:
+                            per_window.append(ids)
+                        else:
+                            lookups.append((p, ids, a0 * (ids.size // len(toks))))
+                    if w.x3 is None:
+                        ids = per_window[0] if len(per_window) == 1 else np.concatenate(per_window, axis=0)
+                        lookups.append((p, ids, 0))
+        '''
+        if enabled == '1':
+            source = data.decode('utf-8')
+            if source.count(old) != 1:
+                raise SystemExit('TensorFold SSD batch patch failed: expected staging block no longer matches once')
+            data = source.replace(old, new, 1).encode('utf-8')
+            if hashlib.sha256(data).hexdigest() != patched:
+                raise SystemExit('TensorFold SSD batch patch failed: result differs from the benchmarked patch')
+            path.write_bytes(data)
+        print(f'[ieti] Flash Next SSD batch gather={enabled}, SHA-256={hashlib.sha256(data).hexdigest()}', flush=True)
+        PY_PATCH_SSD_BATCH
+        # The test extra supplies pytest, also required by NGC's triton-kernels.
+        # v0.6.5's vision extra adds PyAV; pin its Python 3.12 ARM64 wheel.
+        python -m pip install \
+          --constraint /ieti-opt16/constraints.txt \
+          '/opt/tensorfold-source[test,vision]' \
+          'transformers==5.18.0' 'huggingface-hub==1.33.0' \
+          'hf-xet==1.6.0' 'pytest==9.1.1' 'av==19.0.1'
+
+        # Ordinary pip copies the checkout: inspect/import the installed package too.
+        python - /opt/tensorfold-source <<'PY_VERIFY_SNAPSHOTS'
+        import importlib
+        import inspect
+        import os
+        from pathlib import Path
+        import sys
+
+        engine = importlib.import_module('tensorfold.families.qwen4_exp.cuda.engine')
+        installed = Path(engine.__file__).resolve()
+        keep = getattr(engine, 'KEEP', None)
+        expected = int(os.environ['TENSORFOLD_PROMPT_SNAPSHOTS'])
+        source = inspect.getsource(engine)
+        uses = (
+            'indexed_stream_geometry(text, streams + int(graphs and mtp), each, KEEP, mtp=mtp,\n                                                          kv_bits=bits, world=tp, prefill_rows=rows0)',
+            'confidence=self.confidence, keep=KEEP, points=self.points,',
+        )
+        if installed.is_relative_to(Path(sys.argv[1]).resolve()) or keep != expected or any(source.count(use) != 1 for use in uses):
+            raise SystemExit(f'TensorFold installed snapshot verification failed: {installed}, KEEP={keep!r}, expected={expected}')
+        print(f'[ieti] Verified installed Flash Next KEEP={keep}: {installed}', flush=True)
+        PY_VERIFY_SNAPSHOTS
+
+        # Pip must install the exact tested forward.py, not a stale wheel or checkout.
+        python - /opt/tensorfold-source <<'PY_VERIFY_SSD_BATCH'
+        import hashlib
+        import importlib.util
+        import os
+        from pathlib import Path
+        import sys
+
+        enabled = os.environ['TENSORFOLD_SSD_BATCH_GATHER']
+        hashes = {
+            '0': 'a0d19115834bd6144a638cd5ceaac60767dcb5afe097316bfe3e0dc4c66b20fe',
+            '1': 'fa06db912a4d02437875a7e146f1ccf4daf36fcf1093df9b50caf9ea316b03bf',
+        }
+        root = Path(importlib.util.find_spec('tensorfold').origin).resolve().parent
+        installed = root / 'families/qwen4_exp/cuda/forward.py'
+        actual = hashlib.sha256(installed.read_bytes()).hexdigest()
+        if installed.is_relative_to(Path(sys.argv[1]).resolve()) or actual != hashes.get(enabled):
+            raise SystemExit(f'TensorFold installed SSD batch verification failed: {installed}, SHA-256={actual}, enabled={enabled!r}')
+        print(f'[ieti] Verified installed Flash Next SSD batch gather={enabled}: {installed}', flush=True)
+        PY_VERIFY_SSD_BATCH
+
+        # Flash Next includes its own MTP head; its n-gram tables stay on SSD.
+        # Download only the pinned checkpoint; pull follows the upstream default revision.
+        MODEL_PATH=$$(python - <<'PY_MODEL_SNAPSHOT'
+        import json
+        import os
+        from pathlib import Path
+        import sys
+
+        from huggingface_hub import snapshot_download
+
+        revision = os.environ['MODEL_REVISION']
+        snapshot = Path(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=revision, max_workers=4))
+        if snapshot.name != revision or not (snapshot / 'config.json').is_file():
+            raise SystemExit(f'Unexpected model snapshot: {snapshot}')
+        index = json.loads((snapshot / 'model.safetensors.index.json').read_text())
+        shards = set(index['weight_map'].values())
+        if not shards or any(Path(name).is_absolute() or '..' in Path(name).parts or not (snapshot / name).is_file() for name in shards):
+            raise SystemExit('Pinned model snapshot is missing weights or has an invalid shard index')
+        print(f'[ieti] Verified pinned model {os.environ["MODEL_ID"]}@{revision}', file=sys.stderr, flush=True)
+        print(snapshot)
+        PY_MODEL_SNAPSHOT
+        )
+        # CLI settings below are unchanged from the measured baseline:
+        # --backend cuda: use GB10; --host/--port: listen inside the container.
+        # --name: canonical model ID returned by /v1/models; weights use local path.
+        # --context/--parallel: request token limit and maximum concurrent streams.
+        # --thinking/low/1024: enable reasoning with low effort and a 1024-token
+        # reasoning budget. --temperature 0.1: default sampling randomness.
+        # Requests may override supported reasoning/sampling defaults.
+        # --kv-dtype int8: quantize attention KV cache; weights remain affine 4-bit.
+        # --ple-on-ssd: read PLE n-gram tables from SSD rather than preload them.
+        # --vision: load the upstream image tower and reserve its workspace.
+        # --mtp-drafts 6: at most six internal draft tokens per round.
+        # --mtp-confidence 0.60: stop later drafts below this probability (the
+        # upstream CUDA default is 0.70; 0.60 is the previously tested setting).
+        # --no-update-check: keep serving without background version checks.
+        exec python /ieti-opt16/serve.py serve "$${MODEL_PATH}" \
+          --backend cuda \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" \
+          --parallel "$${PARALLEL_STREAMS}" \
+          --thinking \
+          --reasoning-effort low \
+          --thinking-budget 1024 \
+          --temperature 0.1 \
+          --kv-dtype int8 \
+          --ple-on-ssd \
+          --vision \
+          --mtp-drafts 6 \
+          --mtp-confidence 0.60 \
+          --no-update-check
+    deploy:
+      # Expose one NVIDIA GPU to the container through the NVIDIA container runtime.
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # /health becomes available after model load. Probe every 30s with a 10s
+      # HTTP timeout and 15s Docker timeout; five failures mark a warmed server
+      # unhealthy. The 180m startup allowance covers first download/compilation;
+      # a successful probe can mark it healthy much earlier.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=10).read()"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 180m
+
+volumes:
+  # Explicit stable names keep checkpoint, downloads and kernels across recreations.
+  tensorfold-hf-cache:
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache
+  tensorfold-runtime-cache:
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-runtime-cache
+  tensorfold-kernel-cache:
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-kernel-cache

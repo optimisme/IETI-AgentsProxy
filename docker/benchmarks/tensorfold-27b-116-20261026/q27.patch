@@ -1,0 +1,251 @@
+diff --git a/zig/src/core/lane_host.zig b/zig/src/core/lane_host.zig
+index 3f48dfc..9fe0d2d 100644
+--- a/zig/src/core/lane_host.zig
++++ b/zig/src/core/lane_host.zig
+@@ -11,6 +11,7 @@ const admit = @import("lane_host_admit.zig");
+ const recalls = @import("lane_host_recall.zig");
+ const ends = @import("lane_host_end.zig");
+ const rows_host = @import("lane_host_rows.zig");
++const trace = @import("lane_host_trace.zig");
+ const Allocator = std.mem.Allocator;
+ const Id = api.Id;
+ const Request = api.Request;
+@@ -175,6 +176,7 @@ pub const LaneHost = struct {
+             h.gpa.destroy(job);
+             return error.Busy;
+         };
++        trace.note("queued prompt={d} queue={d}", .{ request.prompt.len, h.queued.items.len });
+         h.wake.signal(h.io);
+     }
+ 
+@@ -290,6 +292,7 @@ pub const LaneHost = struct {
+             .job => |j| j,
+         };
+         const began = h.setup(job) orelse return true;
++        trace.note("admit one", .{});
+         return h.launch(job, began);
+     }
+ 
+@@ -366,6 +369,7 @@ pub const LaneHost = struct {
+     /// Filling job `at`'s next prompt chunk: the other streams' rounds run between chunks, not after the prompt.
+     pub fn fillAt(h: *LaneHost, at: usize) void {
+         const job = h.filling.items[at];
++        trace.note("fill step filling={d}", .{h.filling.items.len});
+         const first = !job.fill_began;
+         job.fill_began = true;
+         const done = h.core.fillStreamCommitted(&job.stream, first, .{ .ptr = job, .call = firstCommitted }) catch |e| {
+@@ -569,6 +573,7 @@ pub const LaneHost = struct {
+             h.unlock();
+             const owed = h.share.debt_ns > 0; // a round is timed only while it pays a prompt step's debt down
+             const r0 = if (owed) std.Io.Clock.awake.now(h.io) else std.Io.Timestamp.zero;
++            trace.note("round live={d}", .{h.core.activeCount()});
+             h.core.step() catch |e| {
+                 ends.failAll(h, @errorName(e));
+                 continue;
+diff --git a/zig/src/core/lane_host_trace.zig b/zig/src/core/lane_host_trace.zig
+new file mode 100644
+index 0000000..f3af81a
+--- /dev/null
++++ b/zig/src/core/lane_host_trace.zig
+@@ -0,0 +1,20 @@
++//! TF_HOST_TRACE=1: the lane host's admission, fill and round events on stderr with monotonic ms (diagnostics only).
++const std = @import("std");
++const c = @import("sys").c;
++
++var on: ?bool = null;
++
++pub fn enabled() bool {
++    if (on) |v| return v;
++    const v = if (std.c.getenv("TF_HOST_TRACE")) |x| std.mem.eql(u8, std.mem.span(x), "1") else false;
++    on = v;
++    return v;
++}
++
++pub fn note(comptime fmt: []const u8, args: anytype) void {
++    if (!enabled()) return;
++    var t: c.timespec = undefined;
++    _ = c.clock_gettime(c.CLOCK.MONOTONIC, &t);
++    const ms = @as(u64, @intCast(t.sec)) * 1000 + @as(u64, @intCast(t.nsec)) / 1_000_000;
++    std.debug.print("host {d}: " ++ fmt ++ "\n", .{ms} ++ args);
++}
+diff --git a/zig/src/core/lanes/engine.zig b/zig/src/core/lanes/engine.zig
+index a92b27a..1712f99 100644
+--- a/zig/src/core/lanes/engine.zig
++++ b/zig/src/core/lanes/engine.zig
+@@ -26,6 +26,20 @@ const int = trail.int;
+ const Outcome = struct { got: []const u32, path: []const u32, cut: ?usize, follow: []const u32 };
+ const Result = struct { rows: u32, keep: u32, got: []const u32 };
+ const Unread = struct { event: usize, handle: u64 };
++
++/// TF_LANES_PHASES=1: each shared round's host wall time by phase on stderr (diagnostics only).
++fn phases() bool {
++    const v = std.c.getenv("TF_LANES_PHASES") orelse return false;
++    return std.mem.eql(u8, std.mem.span(v), "1");
++}
++
++var last_round_end: u64 = 0;
++
++fn nowNs() u64 {
++    var t: @import("sys").c.timespec = undefined;
++    _ = @import("sys").c.clock_gettime(@import("sys").c.CLOCK.MONOTONIC, &t);
++    return @as(u64, @intCast(t.sec)) * 1_000_000_000 + @as(u64, @intCast(t.nsec));
++}
+ pub const Engine = struct {
+     const pieces_ = @import("pieces.zig");
+     pub const beginStream = pieces_.beginStream;
+@@ -252,6 +266,7 @@ pub const Engine = struct {
+ 
+     /// The stream windows of a shared round in one forward, then each verified, committed and drafted on its own.
+     fn roundStreams(e: *Engine, entries: []*Stream) !void {
++        const t_start = nowNs();
+         e.clock.start();
+         const a = e.arena.allocator();
+         const plans = try a.alloc(Plan, entries.len);
+@@ -266,7 +281,9 @@ pub const Engine = struct {
+             o.* = .{ .sampled = try a.alloc(u32, w.rows()), .drafts = try a.alloc(u32, w.rows() - 1), .rows = if (p.stream.logprobs != null) try a.alloc(LogRow, w.rows()) else &.{} };
+             total += w.rows();
+         }
++        const t_plan = nowNs();
+         try e.backend.verify(windows, out);
++        const t_verify = nowNs();
+         const outcomes = try a.alloc(Outcome, plans.len);
+         const paths = try a.alloc([]const u32, plans.len);
+         for (plans, windows, out, outcomes, paths) |p, w, o, *oc, *path| {
+@@ -288,6 +305,7 @@ pub const Engine = struct {
+         const ids = try a.alloc(ev.Value, heads.items.len);
+         for (ids, heads.items) |*id, i| id.* = str(plans[i].stream.id);
+         try trail.event(e, &.{ f("ev", str("budgets")), f("streams", .{ .list = ids }), f("depths", .{ .i64s = budgets }) });
++        const t_conclude = nowNs();
+         if (heads.items.len > 0 and e.cfg.draft_streams) {
+             // every stream's head in one batch (the backend drafts a depth for all of them at once)
+             const requests = try a.alloc(be.DraftRequest, heads.items.len);
+@@ -304,7 +322,13 @@ pub const Engine = struct {
+                 d.* = 0;
+             };
+         };
++        const t_draft = nowNs();
+         try e.backend.keep(windows, paths);
++        if (phases()) {
++            const t_keep = nowNs();
++            std.debug.print("phases: gap={d:.1} plan={d:.1} streams={d} rows={d} verify={d:.1} conclude={d:.1} draft={d:.1} keep={d:.1} ms\n", .{ @as(f64, @floatFromInt(t_start -| last_round_end)) / 1e6, @as(f64, @floatFromInt(t_plan - t_start)) / 1e6, plans.len, total, @as(f64, @floatFromInt(t_verify - t_plan)) / 1e6, @as(f64, @floatFromInt(t_conclude - t_verify)) / 1e6, @as(f64, @floatFromInt(t_draft - t_conclude)) / 1e6, @as(f64, @floatFromInt(t_keep - t_draft)) / 1e6 });
++            last_round_end = t_keep;
++        }
+         if (e.cfg.timed) {
+             // the drafts budgets priced past each stream's first are no part of the round's overhead
+             var steps: i64 = 0;
+diff --git a/zig/src/core/lanes/open.zig b/zig/src/core/lanes/open.zig
+index 4c4cb58..a02415d 100644
+--- a/zig/src/core/lanes/open.zig
++++ b/zig/src/core/lanes/open.zig
+@@ -46,9 +46,21 @@ pub fn addStreams(e: *Engine, ss: []const *Stream, errs: []?anyerror) void {
+         break :blk false;
+     };
+     if (!together) return addEach(e, ss, errs);
++    const t0 = traceMs();
+     for (ss, errs) |s, *x| opened(e, s) catch |err| { // a stream cancelled in the pass gets no first token
+         x.* = err;
+     };
++    if (t0 != 0) std.debug.print("many: first tokens {d} ms\n", .{traceMs() - t0});
++}
++
++/// TF_HOST_TRACE=1: monotonic ms (0 when tracing is off; diagnostics only).
++fn traceMs() u64 {
++    const v = std.c.getenv("TF_HOST_TRACE") orelse return 0;
++    if (!std.mem.eql(u8, std.mem.span(v), "1")) return 0;
++    const c = @import("sys").c;
++    var t: c.timespec = undefined;
++    _ = c.clock_gettime(c.CLOCK.MONOTONIC, &t);
++    return @as(u64, @intCast(t.sec)) * 1000 + @as(u64, @intCast(t.nsec)) / 1_000_000;
+ }
+ 
+ /// Whether `s` may join a batched prompt pass beside chunked fills: short, text only, nothing kept to resume from.
+diff --git a/zig/src/families/qwen3_5/cuda_prefill.zig b/zig/src/families/qwen3_5/cuda_prefill.zig
+index e82b8d1..2e84a1d 100644
+--- a/zig/src/families/qwen3_5/cuda_prefill.zig
++++ b/zig/src/families/qwen3_5/cuda_prefill.zig
+@@ -15,6 +15,33 @@ fn nextCut(len: usize, chunks: []const u32, at: usize) usize {
+     return end;
+ }
+ 
++/// TF_QWEN_LIVE_CHUNK (default 2048, at least 64; max_rows or more: off): a stepped cut's most rows while other
++/// streams decode, so they wait one shorter pass for their next round. Cuts stay inside the cold pass's, where marks
++/// and resumes stand.
++fn liveChunk() usize {
++    const Once = struct {
++        var rows: ?usize = null;
++    };
++    if (Once.rows) |r| return r;
++    const text = std.c.getenv("TF_QWEN_LIVE_CHUNK");
++    const asked = if (text) |t| std.fmt.parseInt(usize, std.mem.span(t), 10) catch 2048 else 2048;
++    const r = @min(@max(asked, 64), E.max_rows);
++    Once.rows = r;
++    return r;
++}
++
++/// TF_LANES_PHASES=1: each stepped cut's rows and wall time on stderr (diagnostics only).
++fn phases() bool {
++    const v = std.c.getenv("TF_LANES_PHASES") orelse return false;
++    return std.mem.eql(u8, std.mem.span(v), "1");
++}
++
++fn nowNs() u64 {
++    var t: std.c.timespec = undefined;
++    _ = std.c.clock_gettime(.MONOTONIC, &t);
++    return @as(u64, @intCast(t.sec)) * 1_000_000_000 + @as(u64, @intCast(t.nsec));
++}
++
+ /// Whether a cold pass over `len` rows (from 0) cuts a chunk at `pos`.
+ fn coldCut(len: usize, chunks: []const u32, pos: usize) bool {
+     var at: usize = 0;
+@@ -37,7 +64,7 @@ test "a pass resumes only where a cold pass cuts: every max_rows rows from 0 or
+ pub fn run(self: anytype, stream: *lanes.Stream) !void {
+     var f = try opening(self, stream);
+     defer f.deinit();
+-    while (!try chunk(self, stream, &f)) {}
++    while (!try chunk(self, stream, &f, false)) {}
+ }
+ 
+ /// One cut of the prompt pass a call (prefillFn's forwards, in order): the lane host runs rounds between them.
+@@ -50,10 +77,13 @@ pub fn step(self: anytype, stream: *lanes.Stream) !bool {
+         };
+     }
+     const f = self.fills.getPtr(stream).?;
+-    const done = chunk(self, stream, f) catch |err| {
++    const t0 = if (phases()) nowNs() else 0;
++    const from = f.at;
++    const done = chunk(self, stream, f, true) catch |err| {
+         endFill(self, stream);
+         return err;
+     };
++    if (t0 != 0) std.debug.print("phases: fill rows={d} live={d} ms={d:.1}\n", .{ f.at - from, self.caches.count() - self.fills.count(), @as(f64, @floatFromInt(nowNs() - t0)) / 1e6 });
+     if (done) endFill(self, stream);
+     return done;
+ }
+@@ -74,6 +104,7 @@ pub fn endFill(self: anytype, stream: *lanes.Stream) void {
+ pub const Fill = struct {
+     at: usize,
+     media: ?vision_prompt.Media,
++    cold: usize = 0, // where the cold pass's current cut ends: live cuts stop there too
+ 
+     pub fn deinit(f: *Fill) void {
+         if (f.media) |*m| m.deinit();
+@@ -122,7 +153,7 @@ fn opening(self: anytype, stream: *lanes.Stream) !Fill {
+ }
+ 
+ /// The pass's next cut; true once the prompt is in.
+-fn chunk(self: anytype, stream: *lanes.Stream, f: *Fill) !bool {
++fn chunk(self: anytype, stream: *lanes.Stream, f: *Fill, stepped: bool) !bool {
+     const ids = stream.prompt();
+     // cancel between cuts and retain the last complete prefix before releasing the cache (#1228)
+     if (stream.isCancelled()) {
+@@ -131,7 +162,9 @@ fn chunk(self: anytype, stream: *lanes.Stream, f: *Fill) !bool {
+     }
+     const cache = try self.cacheOf(stream);
+     var images: ?E.Images = if (f.media) |m| .{ .features = m.features.ptr, .src = m.src, .pos = m.pos } else null;
+-    const end = nextCut(ids.len, stream.chunks, f.at);
++    if (f.at >= f.cold) f.cold = nextCut(ids.len, stream.chunks, f.at);
++    // a stepped cut beside decoding streams (caches that are not filling) takes at most the live chunk
++    const end = if (stepped and self.caches.count() > self.fills.count()) @min(f.cold, f.at + liveChunk()) else f.cold;
+     try self.e.forward(&.{.{ .cache = cache, .rows = end - f.at, .images = if (images) |*im| im else null }}, ids[f.at..end], .last);
+     f.at = end;
+     stream.fill_at.store(@intCast(end), .monotonic);

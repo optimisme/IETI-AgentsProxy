@@ -653,6 +653,7 @@ router.get('/portal', requireStudentSession, (req, res) => {
           <li>Get an API key from the <a href="/portal/settings">Settings</a> section.</li>
           <li>Run the next command for your operating system to install or update your global OpenCode configuration.</li>
           <li>Run or restart OpenCode (desktop or terminal).</li>
+          <li>Optionally enable OpenCode web search by setting <code>OPENCODE_ENABLE_EXA=1</code> in your environment before starting OpenCode.</li>
           <li>Optionally configure other harnesses manually using your Active Models parameters.</li>
         </ol>
         <label>macOS/Linux</label>

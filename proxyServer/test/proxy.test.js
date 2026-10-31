@@ -2506,7 +2506,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   assert.doesNotMatch(portal.text, /deepseek\.com|DeepSeek configuration|setup-tab|setup-panel|data-setup-tab|Agent setup|agents-ieti/i);
   const instructions = portal.text.match(/<h2>OpenCode configuration<\/h2>\s*(<ol class="opencode-instructions">[\s\S]*?<\/ol>)/)?.[1];
   assert.ok(instructions, 'OpenCode setup instructions must be a numbered list');
-  assert.equal((instructions.match(/<li>/g) || []).length, 5);
+  assert.equal((instructions.match(/<li>/g) || []).length, 6);
   assert.match(instructions, /href="https:\/\/opencode\.ai\/download"/);
   assert.match(instructions, /href="\/portal\/settings"/);
   assert.doesNotMatch(instructions, /href="#active-models-heading"/);

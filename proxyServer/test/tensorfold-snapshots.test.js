@@ -49,7 +49,7 @@ test('Flash Next patch runs before pip and verifies the installed module before 
   const ssdVerify = source.indexOf("<<'PY_VERIFY_SSD_BATCH'");
   const serve = source.indexOf('exec tensorfold serve');
   assert.ok(checkout < patch && patch < ssdPatch && ssdPatch < install && install < verify && verify < ssdVerify && ssdVerify < serve);
-  assert.match(source, /TENSORFOLD_PROMPT_SNAPSHOTS: "\$\{TENSORFOLD_PROMPT_SNAPSHOTS:-32\}"/);
+  assert.match(source, /TENSORFOLD_PROMPT_SNAPSHOTS: "\$\{TENSORFOLD_PROMPT_SNAPSHOTS:-64\}"/);
   assert.match(source, /TENSORFOLD_SSD_BATCH_GATHER: "\$\{TENSORFOLD_SSD_BATCH_GATHER:-1\}"/);
 });
 
@@ -91,7 +91,7 @@ test('Flash Next snapshot patch accepts bounded values and rejects source drift 
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const filename = path.join(temp, 'engine.py');
   const script = embeddedPython('PY_PATCH_SNAPSHOTS');
-  for (const value of ['1', '8', '16', '32']) {
+  for (const value of ['1', '8', '16', '32', '64']) {
     fs.writeFileSync(filename, fixture);
     const result = runPython(script, [filename], value);
     assert.equal(result.status, 0, result.stderr);
@@ -101,11 +101,11 @@ test('Flash Next snapshot patch accepts bounded values and rejects source drift 
     assert.match(updated, /indexed_stream_geometry\(text, streams \+ int\(graphs and mtp\), each, KEEP,/);
     assert.match(updated, /keep=KEEP/);
   }
-  for (const value of ['', '0', '-1', '33', '16.0', ' 16', 'abc', '9'.repeat(5000)]) {
+  for (const value of ['', '0', '-1', '65', '16.0', ' 16', 'abc', '9'.repeat(5000)]) {
     fs.writeFileSync(filename, fixture);
     const result = runPython(script, [filename], value);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /must be an integer from 1 to 32/);
+    assert.match(result.stderr, /must be an integer from 1 to 64/);
     assert.equal(fs.readFileSync(filename, 'utf8'), fixture);
   }
   for (const drift of [fixture.replace('KEEP = 8 ', 'KEEP = 9 '), `${fixture}\n${expected}\n`,
@@ -186,14 +186,14 @@ test('Compose resolves snapshot overrides and retains escaped runtime variables 
   skip: !profileAvailable ? 'Docker profiles are omitted from proxy-only deployments'
     : composeAvailable ? false : 'Docker Compose CLI is required',
 }, () => {
-  for (const override of [undefined, '8', '16', '32']) {
+  for (const override of [undefined, '8', '16', '32', '64']) {
     const env = { ...process.env };
     delete env.TENSORFOLD_PROMPT_SNAPSHOTS;
     if (override) env.TENSORFOLD_PROMPT_SNAPSHOTS = override;
     const result = spawnSync('docker', ['compose', '-f', profile, 'config', '--format', 'json'], { encoding: 'utf8', env });
     assert.equal(result.status, 0, result.stderr);
     const service = JSON.parse(result.stdout).services['qwen-tensorfold'];
-    assert.equal(service.environment.TENSORFOLD_PROMPT_SNAPSHOTS, override || '32');
+    assert.equal(service.environment.TENSORFOLD_PROMPT_SNAPSHOTS, override || '64');
     assert.equal(service.environment.TENSORFOLD_SSD_BATCH_GATHER, process.env.TENSORFOLD_SSD_BATCH_GATHER || '1');
     assert.equal(service.environment.MODEL_REVISION, '2b170fa6309d5d1ee380b35636075fac7945f286');
     assert.equal(service.environment.MODEL_ID, 'TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP');

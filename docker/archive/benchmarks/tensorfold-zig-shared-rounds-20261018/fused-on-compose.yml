@@ -1,0 +1,109 @@
+name: ieti-qwen38-flash-next-tensorfold-110
+services:
+  qwen-tensorfold-110:
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        cd /opt/ieti-tf110
+        if [ "$$(cat ready 2>/dev/null || true)" != "$${TF_ARCHIVE_SHA256}" ]; then
+          curl -fsSL -o release.tar.gz "https://github.com/ashhart/TensorFold/releases/download/v$${TF_RELEASE}/tensorfold-$${TF_RELEASE}-linux-aarch64.tar.gz"
+          echo "$${TF_ARCHIVE_SHA256}  release.tar.gz" | sha256sum -c -
+          tar -xzf release.tar.gz
+          cd "tensorfold-$${TF_RELEASE}-linux-aarch64"
+          sha256sum -c SHA256SUMS
+          cd ..
+          echo "$${TF_ARCHIVE_SHA256}" > ready
+        fi
+        test "$$(cat /opt/ieti-native110/ready)" = "e5759648dcca018b0f53a1e09ce36dae182a743094784fb6e4cecfc4eeee0a0c"
+        MODEL_PATH="/root/.cache/huggingface/hub/models--TensorFold--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/$${MODEL_REVISION}"
+        test -f "$$MODEL_PATH/config.json"
+        options=()
+        if [ "$${DRAFTS_ENABLED}" = 0 ]; then options+=(--no-drafts); fi
+        if [ "$${VISION_ENABLED}" = 1 ]; then options+=(--vision --vision-max-images 50 --vision-image-tokens 4096); fi
+        exec "$${NATIVE_BINARY}" serve "$$MODEL_PATH" \
+          --host 0.0.0.0 --port 8000 --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" --parallel "$${PARALLEL_STREAMS}" \
+          --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \
+          --thinking --reasoning-effort low --thinking-budget 1024 \
+          --prompt-cache-gib "$${TENSORFOLD_PROMPT_CACHE_GIB}" \
+          "$${options[@]}" --no-update-check
+    container_name: qwen38_flash_next_tensorfold_110_cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities:
+                - gpu
+              driver: nvidia
+              count: 1
+    environment:
+      CONTEXT_LENGTH: "75000"
+      DRAFTS_ENABLED: "1"
+      MODEL_ID: TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP
+      MODEL_REVISION: 2b170fa6309d5d1ee380b35636075fac7945f286
+      NATIVE_BINARY: /opt/ieti-native110/install/native/bin/tensorfold-native
+      PARALLEL_STREAMS: "16"
+      TENSORFOLD_CUDA_KERNELS: native
+      TENSORFOLD_MEMORY_RESERVE_GIB: "10"
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      TENSORFOLD_PROMPT_CACHE_GIB: "0"
+      TF_ARCHIVE_SHA256: 8f18033fca9df0c56c19afb2f11b55175151ff886c2603b01c0390bf48773e59
+      TF_FLASHNEXT_BATCH_DRAFT: "1"
+      TF_FLASHNEXT_BATCH_GDN: "2"
+      TF_FLASHNEXT_BATCH_VERIFY: "1"
+      TF_FLASHNEXT_CHUNK: "1536"
+      TF_FLASHNEXT_CONFIDENCE: "0.60"
+      TF_FLASHNEXT_DECODE_GRAPH: "0"
+      TF_FLASHNEXT_DRAFTS: "6"
+      TF_FLASHNEXT_KV_FP8: "1"
+      TF_RELEASE: 1.1.0
+      TF_REVISION: 76aafcf274e60a5e31a59ce145b2f71f7b366e9d
+      VISION_ENABLED: "0"
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    init: true
+    ipc: host
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: qwen38-flash-next-tensorfold-110-shared-fused-recurrent-mlx-4bit-128gb.yml
+    networks:
+      default: null
+    platform: linux/arm64
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8007"
+        protocol: tcp
+    restart: "no"
+    stop_grace_period: 1m0s
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    volumes:
+      - type: volume
+        source: graph-runtime
+        target: /opt/ieti-native110
+        read_only: true
+        volume: {}
+      - type: volume
+        source: upstream-runtime
+        target: /opt/ieti-tf110
+        volume: {}
+      - type: volume
+        source: checkpoint-cache
+        target: /root/.cache/huggingface
+        read_only: true
+        volume: {}
+networks:
+  default:
+    name: ieti-qwen38-flash-next-tensorfold-110_default
+volumes:
+  checkpoint-cache:
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache
+    external: true
+  graph-runtime:
+    name: ieti-native110-shared-fused-recurrent-v5-build
+    external: true
+  upstream-runtime:
+    name: ieti-tensorfold-110-runtime

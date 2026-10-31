@@ -1,0 +1,107 @@
+diff --git a/zig/src/families/flashnext/cuda_lanes.zig b/zig/src/families/flashnext/cuda_lanes.zig
+index 67356ec..fc841c7 100644
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -358,6 +358,8 @@ pub fn Namespace(comptime Tri: type) type {
+         }
+ 
+         fn dropLane(self: *Cuda, l: *Lane) void {
++            // A graph must never retain pointers into released sequence caches.
++            self.engine.round_graph.clear();
+             if (l.draft) |*d| d.deinit();
+             if (self.ranks) |r| r.drop(&l.seq) else l.seq.deinit(self.gpa);
+         }
+diff --git a/zig/src/families/flashnext/cuda_prompt.zig b/zig/src/families/flashnext/cuda_prompt.zig
+index 5009a98..9d31295 100644
+--- a/zig/src/families/flashnext/cuda_prompt.zig
++++ b/zig/src/families/flashnext/cuda_prompt.zig
+@@ -136,6 +136,7 @@ pub const Engine = struct {
+     /// Rows a batched chunk takes at most (TF_FLASHNEXT_CHUNK; batch.default_chunk by default).
+     chunk: usize,
+     round_graph: round_graph.Cache = .{},
++    next_graph_owner: u64 = 1,
+     image_factory: ?*@import("cuda_images.zig").Vision = null,
+     collective: ?*@import("cuda_collective.zig").Collective = null,
+ 
+@@ -156,6 +157,7 @@ pub const Engine = struct {
+         e.collective = null;
+         e.image_factory = null;
+         e.round_graph = .{};
++        e.next_graph_owner = 1;
+         errdefer for (e.layers[0..e.n_layers]) |*l| l.free(gpa);
+         e.model_dir = try gpa.dupe(u8, model_dir);
+         errdefer gpa.free(e.model_dir);
+@@ -229,6 +231,8 @@ pub const Engine = struct {
+     pub fn newSeq(e: *Engine, cap: usize) !Seq {
+         e.round_graph.clear();
+         if (cap == 0) return error.UnexpectedTensor;
++        const graph_owner = e.next_graph_owner;
++        e.next_graph_owner = std.math.add(u64, graph_owner, 1) catch return error.GraphOwnerExhausted;
+         const logits = try e.gpa.alloc(u8, vocab * 2);
+         errdefer e.gpa.free(logits);
+         const conv = try zeros(e.gpa, e.driver, e.stream.*, linear_n, (gdn.taps - 1) * gdn.conv_dim * 2);
+@@ -247,6 +251,7 @@ pub const Engine = struct {
+         errdefer tail.free();
+         try tail.fill8(0, e.stream.handle);
+         return .{
++            .graph_owner = graph_owner,
+             .conv = conv,
+             .state = state,
+             .kc = kc,
+@@ -357,7 +362,7 @@ pub const Engine = struct {
+         const has_media = for (seqs) |q| {
+             if (q.media != null) break true;
+         } else false;
+-        if (e.collective != null and round_graph.enabled() and !has_media) {
++        if (round_graph.enabled() and !has_media) {
+             const key = try round_graph.Key.init(seqs, s.ids, scores, out);
+             try e.round_graph.run(key, &p, ids);
+         } else try p.chunk(ids, 0, null);
+@@ -374,6 +379,8 @@ pub const Engine = struct {
+ pub const Seq = struct {
+     media: ?@import("cuda_media.zig").State = null,
+     rank_id: u64 = 0,
++    /// Unique within this engine; prevents decode-graph reuse after a cache owner changes.
++    graph_owner: u64 = 0,
+     conv: []cuda.DeviceBuffer,
+     state: []cuda.DeviceBuffer,
+     kc: []cuda.DeviceBuffer,
+diff --git a/zig/src/families/flashnext/cuda_round_graph.zig b/zig/src/families/flashnext/cuda_round_graph.zig
+index e367e31..7ea659b 100644
+--- a/zig/src/families/flashnext/cuda_round_graph.zig
++++ b/zig/src/families/flashnext/cuda_round_graph.zig
+@@ -21,8 +21,9 @@ pub const Key = struct {
+         if (seqs.len == 0 or seqs.len > 32) return error.UnexpectedTensor;
+         var key: Key = .{ .count = seqs.len, .scratch = scratch, .scores = scores, .output = output };
+         for (seqs, 0..) |q, i| {
+-            if (q.rank_id == 0) return error.UnsupportedRankOperation;
+-            key.owners[i] = q.rank_id;
++            const owner = if (q.rank_id != 0) q.rank_id else q.graph_owner;
++            if (owner == 0) return error.UnsupportedRankOperation;
++            key.owners[i] = owner;
+             const end = q.fed + 1;
+             key.chunks[i] = @intCast((@min(end, 2051) + 511) / 512);
+             key.score_tiles[i] = if (end / 4 > 512) @intCast(((end + 3) / 4 + 63) / 64) else 0;
+@@ -78,7 +79,7 @@ pub const Cache = struct {
+ };
+ 
+ test "decode graph keys invalidate on owner order, attention seams and score tile seams" {
+-    const Seq = struct { rank_id: u64, fed: usize };
++    const Seq = struct { rank_id: u64, graph_owner: u64 = 0, fed: usize };
+     var first: Seq = .{ .rank_id = 1, .fed = 10 };
+     var second: Seq = .{ .rank_id = 2, .fed = 10 };
+     const base = try Key.init(@as([]const *Seq, &.{ &first, &second }), 1, 2, 3);
+@@ -96,3 +97,13 @@ test "decode graph keys invalidate on owner order, attention seams and score til
+     first.fed = 2304;
+     try std.testing.expect(!std.meta.eql(score, try Key.init(@as([]const *Seq, &.{&first}), 1, 2, 3)));
+ }
++
++ test "single GPU graph owners reject unknown caches and invalidate replacement" {
++    const Seq = struct { rank_id: u64 = 0, graph_owner: u64 = 0, fed: usize = 10 };
++    var q: Seq = .{};
++    try std.testing.expectError(error.UnsupportedRankOperation, Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3));
++    q.graph_owner = 1;
++    const first = try Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3);
++    q.graph_owner = 2;
++    try std.testing.expect(!std.meta.eql(first, try Key.init(@as([]const *Seq, &.{&q}), 1, 2, 3)));
++}

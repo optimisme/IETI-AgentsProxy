@@ -294,6 +294,8 @@ Python s'executa directament, sense crear cap entorn virtual ni cache de bytecod
 
 L'script descarregat des del portal incorpora la URL publica del servidor. En instal·lar o actualitzar, mostra aquesta URL per confirmar-la: Enter l'accepta i un altre valor la substitueix. `PROXY_AGENTS_BASE_URL` permet proporcionar una URL alternativa; s'accepta tant l'arrel del servidor com una URL acabada en `/v1`.
 
+OpenCode ja inclou l'eina `websearch` (Exa, gratuita i sense clau) quan s'exporta `OPENCODE_ENABLE_EXA=1` abans d'iniciar-lo. La cerca s'executa a l'ordinador de l'alumne; el proxy nomes reenvia les crides d'eines del model, de manera que funciona amb els models que admeten eines.
+
 Si ja existeix una configuracio IETI o la seva clau global, l'script ofereix **Update** (per defecte) o **Uninstall**. L'actualitzacio valida la clau desada amb `GET /v1/model-capabilities`. Si falta o es invalida, en demana una amb entrada oculta. Si funciona, ofereix **Keep** (per defecte) o **Replace**. Una clau substituta es valida abans de desar-la.
 
 La peticio de validacio te un limit de 30 segons; Bash i PowerShell modern limiten tambe la connexio a 10 segons. PowerShell 5.1 aplica el limit total de 30 segons. Un error de xarxa, timeout, limit de peticions, compte deshabilitat, autenticacio, cataleg o JSON conserva la configuracio i la clau anteriors. Un error temporal del servidor no es tracta com una clau invalida. Les dades nomes s'escriuen despres de validar la resposta i preparar tots els canvis.

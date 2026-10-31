@@ -1,0 +1,252 @@
+81:         from .prompt_plan import choose as prompt_plan
+82:         from .kvcache import BITS_OF, check as check_kv
+83:         from .weights import draft_token_ids, load
+84:         from tensorfold.cuda.capacity import admit, config, gather_ints
+85:         from tensorfold.cuda.geometry import (PREFILL_ROWS, gdn_geometry, indexed_prefill_rows,
+86:                                               indexed_stream_geometry, indexed_weights)
+87: 
+88:         # TENSORFOLD_PREFILL_ROWS: prompt pieces of that many rows, admitted with the window (not the idle plan)
+89:         chunk = None if is_exl3(model_dir) else indexed_prefill_rows()
+90: 
+91:         if tp not in (1, 2) or rank not in range(tp):
+92:             raise ValueError(f"rank {rank} of {tp}: Flash Next runs on one GPU or two")
+122:         from tensorfold.vision.qwen_cuda import capacity_geometry, weight_transform as vision_weights
+123: 
+124:         workspace = vision_workspace() if vision else 0
+125:         self.capacity_plan = admit(model_dir, max_len, context_explicit, torch,
+126:                                    capacity_geometry(geometry, model_dir, vision, rank, workspace),
+127:                                    vision_weights(indexed_weights(tp, mtp, mapped_tables=not ple_on_ssd), vision, rank),
+128:                                    rank=rank, world=tp,
+129:                                    gather=gather, extra_files=extra_files(model_dir) if exl3 else ())
+133:         if prompt_workspace:
+134:             peak = self.capacity_plan["total_bytes_estimate"] / 2**30
+135:             print(f"[tensorfold] {self.prefill_rows}-row idle prompt workspace {prompt_workspace / 2**30:.2f} GiB; "
+136:                   f"planned peak {peak:.2f} GiB at the admitted window", flush=True)
+137:         self.max_len = self.capacity_plan["cache_slots"]
+138:         if tp == 2:
+139:             self._same_settings(torch, ids)
+140:         build_kernels(exl3=exl3, nvfp4=not exl3 and quant_method(read_config(model_dir)) == "modelopt",
+173:             torch.cuda.empty_cache()
+174:             print(f"[tensorfold] vision: image{' and video' if self.vision.videos else ''} input, a "
+175:                   f"{self.vision.weight_bytes / 2**30:.2f} GiB tower with {vision_workspace() / 2**30:.2f} GiB of "
+176:                   f"workspace reserved{'; https URLs allowed' if vision_urls else ''}", flush=True)
+177:         # ``streams`` > 1: up to that many requests decoded together, every stream's chain in one forward
+178:         self.concurrent = streams > 1
+179:         self.refuses_structured_output = (
+180:             "structured output is not served by Flash Next on two ranks with --parallel yet: "
+families/qwen4_exp/cuda/multi.py
+66:         self.mbuf = Buffers(w, rows, capacity) if w.mtp is not None else None
+67:         self.pbuf = Buffers(w, prefill_rows + (rows if self.converged else 0), capacity, prefill=True)
+68:         self.gdn = gdn_multi.Scratch(w, rows)            # every stream's DeltaNet rows, one launch a step
+69:         self.held: dict[int, list[int]] = {}             # stream id -> last round's kept rows, folded in next round
+70:         # slots start small and grow with their stream's context, up to the window, while the gate has room
+71:         self.free = [State(w, min(capacity, FIRST), depth + 1, kv_dtype, limit=capacity) for _ in range(slots)]
+72:         self.slots = list(self.free)
+73:         self.solo = (solo(w, self.free[0], capacity, depth, self.pbuf)
+74:                      if graphs and depth > 0 and self.mbuf is not None else None)
+75:         self.solo_on = self.solo is not None
+76:         self.slot_bytes = sum(t.numel() * t.element_size() for t in _tensors(self.free[0]))
+77:         self.window_bytes = self.free[0].cache_bytes(capacity)          # one stream's caches at the full window
+97:     def _drop_kept(self, st: State) -> None:
+98:         self.kept = [k for k in self.kept if k[1] is not st]
+99: 
+100:     def _grow(self, st: State, rows: int, *, alone: bool = False, protect: State | None = None) -> bool:
+101:         """Grow caches while the gate has room; one stream may use its startup allowance within an explicit cap."""
+102: 
+103:         if rows <= st.capacity or st.capacity >= st.limit:       # admission's count keeps a stream within its window
+104:             return True
+105:         size = min(st.limit, -(-rows // STEP) * STEP)
+106:         if self._is_solo(st):                    # each resize recaptures its graphs: double, so they rarely do
+107:             size = min(st.limit, max(size, 1 << (st.capacity - 1).bit_length() + 1))
+108:         before = st.cache_bytes()
+112:                 if alone:
+113:                     limit = cuda_limit_bytes() if torch.cuda.is_available() else None
+114:                     if limit is not None:
+115:                         # A lone stream may use its startup reserve without exceeding the copy peak cap.
+116:                         peak = int(torch.cuda.memory_allocated()) + grow + st.layer_bytes(st.capacity)
+117:                         if peak > limit:
+118:                             if self.filling:
+119:                                 return False             # a filling request can finish and release its slot
+120:                             raise NoRoom(
+121:                                 f"Growing this request's attention caches to {size} tokens would exceed "
+122:                                 f"{LIMIT_ENV}={limit / GIB:g}: the estimated copy peak is {peak / GIB:.2f} GiB. "
+123:                                 "Shorten the prompt or max_tokens, reduce --context or --parallel, or raise "
+168:             self._shrink(solo, release=True)
+169:             return True
+170:         return False
+171: 
+172:     def _make_room(self) -> list[Stream]:
+173:         """Before a round: grow each live window oldest-first; a stream that can't grow makes the newest end."""
+174: 
+175:         live = sorted((s for s in self.streams.values() if not s.done), key=lambda s: s.sid)
+176:         blocked, ended = False, []
+177:         for s in live:
+178:             rows = max(s.st.pos, s.st.mtp_len) + len(s.drafts) + self.depth + 2
+179:             try:
+198:             self.held.pop(newest.sid, None)
+199:             self._drop_kept(newest.st)
+200:             self._shrink(newest.st, release=True)
+201:             self.free.append(newest.st)
+202:             return [*ended, newest, *self._make_room()]
+203:         for s in live:
+204:             if s.waiting:
+205:                 self._flush(s)                 # shared scratch will be reused while this stream waits
+206:         self.memory_gate.waits += any(s.waiting for s in live)
+207:         return ended
+208: 
+209:     def _slot_for(self, prompt: list[int], reuse: bool):
+243:     @torch.no_grad()
+244:     def admit(self, s: Stream, told=None) -> None:
+245:         """Queue a request in a free slot (a kept prompt end it extends, if any); rounds prefill its prompt."""
+246: 
+247:         room = self.capacity - len(s.prompt) - self.depth - 1
+248:         if room < 1:
+249:             raise ValueError(f"a prompt of {len(s.prompt)} tokens leaves no room in the {self.capacity}-token context")
+250:         s.count = max(1, min(s.count, room))
+251:         if any(x.waiting for x in self.streams.values()):
+252:             raise NoRoom("streams already wait for memory; a new request waits until one finishes")
+253:         if self.w.comm is not None and any(x is not None for x in (s.constraint, s.vision, s.probabilities)):
+254:             raise ValueError("concurrent Flash Next on two ranks serves text without grammars or logprobs")
+255:         t0 = time.perf_counter()
+256:         if self.w.comm is not None:
+257:             st, resume, s.cached = self._prepare_admission(s, told)
+300: 
+301:         if self.w.comm is not None:
+302:             ended, solo_sid = self._prepare_round(told)
+303:         else:
+304:             ended, solo_sid = self._make_room(), None
+305:             self.pass_plan = self.mixed_plan = None
+306:         live = [s for s in self.streams.values() if not s.done and not s.waiting]
+307:         if self.filling and (not live or not self.converged):
+308:             ended += self._fill()                      # passes alone; a prompt that ends here joins this round
+309:             live = [s for s in self.streams.values() if not s.done and not s.waiting]
+310:         if not live:
+311:             return ended
+418:         """Every drafting stream absorbs its kept rows and chains drafts, all streams in one step a depth."""
+419: 
+420:         for s, _, _ in streams:
+421:             s.drafts = []
+422:         room = {s.sid: min(self.depth, s.count - len(s.out) - len(keep)) for s, _, keep in streams}
+423:         todo = [(s, a0, keep) for s, a0, keep in streams if room[s.sid] > 0 and self.mbuf is not None]
+424:         if not todo:
+425:             return
+426:         for s, _, _ in todo:
+427:             st = s.st
+428:             if st.mtp_drafted:
+429:                 st.set_mtp_len(st.mtp_len - st.mtp_drafted)
+430:                 st.mtp_drafted = 0
+441:                 low = self.confidence > 0 and p < self.confidence
+442:                 if low and j > 0:
+443:                     continue
+444:                 s.drafts.append(d)
+445:                 if not low and j + 1 < room[s.sid]:
+446:                     nxt.append((s, row, d))
+447:             if not nxt:
+448:                 return
+449:             windows = [(s.st, [d], self.mbuf.streams[row:row + 1]) for s, row, d in nxt]
+450:             segs = mtp_stage(self.w, self.mbuf, windows)
+451:             logits = self._mtp(segs)
+452:             for s, _, _ in nxt:
+families/qwen4_exp/cuda/kvcache.py
+1: """Flash Next's shared rounds on one GPU or two ranks, with exact prompt pieces and growing caches."""
+2: 
+3: from __future__ import annotations
+4: 
+5: import time
+6: 
+7: import numpy as np
+8: import torch
+9: 
+10: from tensorfold.cuda.logprobs import capture
+11: 
+12: from tensorfold.cuda.capacity import LIMIT_ENV, available_bytes, cuda_limit_bytes
+13: from tensorfold.cuda.memory_gate import MemoryGate, NoRoom, torch_live
+14: from tensorfold.cuda.markers import MIN_GAP
+15: from tensorfold.cuda.sampling import sample_streams
+16: from tensorfold.cuda.streams import Stream, accept
+17: from tensorfold.engine.exact_sampling import MARGIN, choose_rows
+18: from tensorfold.engine.grammar import GrammarError
+19: 
+20: from .decode import (PREFILL_ROWS, WARM_TAIL, Engine, _gathered_fits, choose_gathered_streams,
+21:                      entry_end, prefill_begin, tp_sample_rows)
+22: from . import attn_multi, gdn_multi, image_rows, prefixes
+23: from .forward import commit, compute, compute_mixed, converges, stage
+24: from .mtp import mtp_compute, mtp_stage
+25: from .state import Buffers, State
+26: from .multi_solo import Alone, solo
+27: from .multi_fill import FILL_GUARD, PASS_MIN, PromptPasses
+28: from .multi_tp import Link as Link
+29: from .multi_tp import OutOfStep, TwoRanks
+30: from ..cuda import CONFIDENCE, DEPTH
+31: 
+32: FIRST, STEP = 256, 8192          # rows an idle slot keeps; rows a stream's caches grow by at a time
+33: GIB = 1024**3
+34: SHARE = 0.0                      # --decode-share: a round alone takes this share of its pass's time (0: whole passes)
+35: 
+92:         self.keep = keep
+93: 
+94:     def _busy(self) -> set[int]:
+95:         return {id(s.st) for s in [*self.streams.values(), *self.filling]}
+96: 
+97:     def _drop_kept(self, st: State) -> None:
+98:         self.kept = [k for k in self.kept if k[1] is not st]
+99: 
+100:     def _grow(self, st: State, rows: int, *, alone: bool = False, protect: State | None = None) -> bool:
+101:         """Grow caches while the gate has room; one stream may use its startup allowance within an explicit cap."""
+102: 
+103:         if rows <= st.capacity or st.capacity >= st.limit:       # admission's count keeps a stream within its window
+104:             return True
+105:         size = min(st.limit, -(-rows // STEP) * STEP)
+106:         if self._is_solo(st):                    # each resize recaptures its graphs: double, so they rarely do
+107:             size = min(st.limit, max(size, 1 << (st.capacity - 1).bit_length() + 1))
+108:         before = st.cache_bytes()
+109:         grow = st.cache_bytes(size) - before
+110:         while not self.memory_gate.fits(grow + st.layer_bytes(size)):     # a layer's old buffers stay until its copy
+111:             if not self._evict_kept(st, protect=protect):
+112:                 if alone:
+113:                     limit = cuda_limit_bytes() if torch.cuda.is_available() else None
+114:                     if limit is not None:
+115:                         # A lone stream may use its startup reserve without exceeding the copy peak cap.
+116:                         peak = int(torch.cuda.memory_allocated()) + grow + st.layer_bytes(st.capacity)
+117:                         if peak > limit:
+118:                             if self.filling:
+119:                                 return False             # a filling request can finish and release its slot
+120:                             raise NoRoom(
+121:                                 f"Growing this request's attention caches to {size} tokens would exceed "
+122:                                 f"{LIMIT_ENV}={limit / GIB:g}: the estimated copy peak is {peak / GIB:.2f} GiB. "
+123:                                 "Shorten the prompt or max_tokens, reduce --context or --parallel, or raise "
+124:                                 f"{LIMIT_ENV} if more GPU memory is available.")
+125:                     break
+126:                 return False
+127:         self._state_changed(st)
+128:         try:
+129:             added = st.resize(size)
+130:         except Exception:
+131:             self.memory_gate.take(st.cache_bytes() - before)
+132:             raise
+133:         self.memory_gate.take(added)
+134:         if self.planning and alone:
+135:             self.actions[-1].append("alone")
+136:         if not self.planning and torch.cuda.is_available():
+137:             torch.cuda.empty_cache()             # the old buffers back to the system: MemAvailable stays true
+138:         return True
+139: 
+140:     def _is_solo(self, st: State) -> bool:
+141:         if self.solo is None:
+142:             return False
+143:         solo = self.solo.st                      # while planning both are Shadows of the real slots: compare those
+144:         return getattr(st, "source", st) is getattr(solo, "source", solo)
+145: 
+146:     def _shrink(self, st: State, *, release: bool = False, force: bool = False) -> None:
+147:         """Return idle caches to the gate, retaining the graph slot unless memory or cleanup requires its release."""
+148: 
+149:         st.reset(self.w)
+150:         if force or st.capacity > FIRST and (release or not self._is_solo(st)):
+151:             self._state_changed(st)
+152:             self.memory_gate.give(-st.resize(min(FIRST, st.limit)))
+153: 
+154:     def _evict_kept(self, keep: State, *, protect: State | None = None) -> bool:
+155:         """Free the oldest idle kept prompt end (never ``keep``); False when none is left."""
+156: 
+157:         busy = self._busy()
+158:         for ids, st, _, _ in self.kept:

@@ -1,0 +1,111 @@
+# Private experiment, TensorFold v1.1.4 + host PLE gather batching only.
+# Build instructions and qualification receipts: benchmarks/tensorfold-zig-114-ssd-batch-20261024/.
+# Same 8 streams, 75k configured context, BF16 KV, MTP6/0.60, vision and RAM cache as release profile.
+# TF_FLASHNEXT_PLE_BATCH=0 runs unchanged per-stream rows; 1 groups shared-pass reads.
+# Requires the prepared build volume and codec volume; never silently downloads/rebuilds.
+# Persistent memory/learning remains disabled. Test port is loopback only.
+name: ieti-qwen38-flash-next-tensorfold-114-ple
+services:
+  qwen-tensorfold-114-ple:
+    image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+    platform: linux/arm64
+    pull_policy: missing
+    labels:
+      com.ieti.inference: "true"
+      com.ieti.profile: "qwen38-flash-next-tensorfold-114-ple-batch-mlx-4bit-vision-128gb.yml"
+    container_name: qwen38_flash_next_tensorfold_114_ple_cuda
+    restart: "no"
+    init: true
+    stop_grace_period: 60s
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "${TENSORFOLD_BIND_ADDRESS:-127.0.0.1}:${TENSORFOLD_BIND_PORT:-8007}:8000"
+    volumes:
+      - upstream-runtime:/opt/ieti-tf114:ro
+      - patched-runtime:/opt/ieti-native114:ro
+      - checkpoint-cache:/root/.cache/huggingface:ro
+    environment:
+      MODEL_ID: TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP
+      MODEL_REVISION: 2b170fa6309d5d1ee380b35636075fac7945f286
+      NATIVE_BINARY: /opt/ieti-native114/install/native/bin/tensorfold-native
+      TF_PLE_PATCH_SHA256: "${TENSORFOLD_NATIVE_PATCH_SHA256:-d79b3a52bcc63d2b6b4c90498959dd1be86c6bd1b1226137ea097e7310aca2fe}"
+      TF_FLASHNEXT_PLE_BATCH: "${TF_FLASHNEXT_PLE_BATCH:-1}"
+      LD_LIBRARY_PATH: /opt/ieti-tf114/tensorfold-1.1.4-linux-aarch64/lib
+      TF_REVISION: eab8582819688325e371907e4706e1c602b8a273
+      CONTEXT_LENGTH: "${TENSORFOLD_CONTEXT:-75000}"
+      PARALLEL_STREAMS: "${TENSORFOLD_STREAMS:-16}"
+      TENSORFOLD_MEMORY_RESERVE_GIB: "${TENSORFOLD_RESERVE_GIB:-10}"
+      TENSORFOLD_PROMPT_CACHE_GIB: "${TENSORFOLD_PROMPT_CACHE_GIB:-12}"
+      TENSORFOLD_NO_UPDATE_CHECK: "1"
+      TENSORFOLD_CUDA_KERNELS: native
+      TF_FLASHNEXT_DRAFTS: "${TENSORFOLD_DRAFT_DEPTH:-6}"
+      # Prompt chunk rows while nothing decodes; TF_FLASHNEXT_LIVE_CHUNK caps them while replies decode.
+      TF_FLASHNEXT_CHUNK: "${TENSORFOLD_PREFILL_CHUNK:-4096}"
+      TF_FLASHNEXT_LIVE_CHUNK: "${TF_FLASHNEXT_LIVE_CHUNK:-2048}"
+      DRAFTS_ENABLED: "${TENSORFOLD_DRAFTS_ENABLED:-1}"
+      VISION_ENABLED: "${TENSORFOLD_VISION_ENABLED:-1}"
+      TF_FLASHNEXT_CONFIDENCE: "0.60"
+      # Diagnostics only, off by default: per-pass wall times and draft depth histograms on stderr.
+      TF_FLASHNEXT_PROFILE: "${TF_FLASHNEXT_PROFILE:-0}"
+      TF_FLASHNEXT_DEPTH_LOG: "${TF_FLASHNEXT_DEPTH_LOG:-0}"
+      TF_LANES_PHASES: "${TF_LANES_PHASES:-0}"
+      TF_HOST_TRACE: "${TF_HOST_TRACE:-0}"
+      TF_FLASHNEXT_PLE_ITEMS: "${TF_FLASHNEXT_PLE_ITEMS:-4}"
+      TF_FLASHNEXT_PLE_PREAD: "${TF_FLASHNEXT_PLE_PREAD:-hybrid}"
+      TF_FLASHNEXT_MANY_PROMPTS: "${TF_FLASHNEXT_MANY_PROMPTS:-1}"
+      TF_HOST_SETTLE_MS: "${TF_HOST_SETTLE_MS:-3}"
+      TF_FLASHNEXT_RECYCLE_MIB: "${TF_FLASHNEXT_RECYCLE_MIB:-2048}"
+      # 1: the prompt cache takes the memory streams leave as they run (up to the asked size), not what full windows leave.
+      TF_PROMPT_CACHE_ELASTIC: "${TF_PROMPT_CACHE_ELASTIC:-1}"
+      TF_PROMPT_CACHE_MARGIN_GIB: "${TF_PROMPT_CACHE_MARGIN_GIB:-2}"
+      # fp8: Flash Next's attention caches as the Python engine's --kv-dtype int8 rows (H32 groups, fp16 scales), half the bytes.
+      TENSORFOLD_KV_CACHE: "${TENSORFOLD_KV_CACHE:-fp8}"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        test "$$(cat /opt/ieti-native114/source-ready)" = "$${TF_PLE_PATCH_SHA256}"
+        cd /opt/ieti-native114/install/native/bin
+        sha256sum -c SHA256SUMS
+        "$${NATIVE_BINARY}" --version
+        echo "TF_FLASHNEXT_PLE_BATCH=$${TF_FLASHNEXT_PLE_BATCH}"
+        MODEL_PATH="/root/.cache/huggingface/hub/models--TensorFold--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/$${MODEL_REVISION}"
+        test -f "$$MODEL_PATH/config.json"
+        options=()
+        if [ "$${DRAFTS_ENABLED}" = 0 ]; then options+=(--no-drafts); fi
+        if [ "$${VISION_ENABLED}" = 1 ]; then options+=(--vision --vision-max-images 1 --vision-image-tokens 4096); fi
+        exec "$${NATIVE_BINARY}" serve "$$MODEL_PATH" \
+          --host 0.0.0.0 --port 8000 --name "$${MODEL_ID}" \
+          --context "$${CONTEXT_LENGTH}" --parallel "$${PARALLEL_STREAMS}" \
+          --max-tokens 32768 --temperature 0.1 --top-p 0.95 --top-k 20 \
+          --thinking --reasoning-effort low --thinking-budget 1024 \
+          --prompt-cache-gib "$${TENSORFOLD_PROMPT_CACHE_GIB}" \
+          --kv-cache "$${TENSORFOLD_KV_CACHE}" \
+          "$${options[@]}" --no-update-check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+volumes:
+  patched-runtime:
+    external: true
+    name: ${TENSORFOLD_NATIVE_VOLUME:-ieti-native114-tf20261026b}
+  upstream-runtime:
+    external: true
+    name: ieti-tensorfold-114-runtime
+  checkpoint-cache:
+    external: true
+    name: ieti-qwen38-flash-next-tensorfold-mlx-4bit-mtp-int8-ssd-vision-128gb-hf-cache
