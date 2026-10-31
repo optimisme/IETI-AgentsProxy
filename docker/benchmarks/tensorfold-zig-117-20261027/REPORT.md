@@ -416,6 +416,20 @@ Abans de canviar la 2225 cal construir-hi el volum de tf119d (ara no hi és) i t
 compte que el controlador és 580.142 i no 580.159.03. A 74k queda menys marge que amb
 Python: 7,5 GiB lliures davant de 10,4.
 
+## Desplegament a la 2225 (31 d'octubre)
+
+tf119d substitueix el Python a la 2225 des de les 06:36 del 31 d'octubre, amb
+[`up-2225.sh`](up-2225.sh): port públic 8000 i reinici automàtic. El Python només s'ha
+aturat i conserva els volums. Els volums de la build es van copiar de la 2226 i les
+sumes coincideixen, i el checkpoint és la mateixa revisió. El servei va estar parat
+3 min 50 s. A la 2225: menú i eines 46 de 46, 8 de 8 documents llargs correctes i
+peticions reals del proxy amb resposta 200. Dades a
+[`results/deploy-2225/`](results/deploy-2225/).
+
+Per tornar al Python, a la 2225:
+`docker stop qwen38_flash_next_tensorfold_best_cuda`, i després
+`docker start qwen38_flash_next_cuda_vram128_tensorfold_mlx_4bit_mtp_int8_ssd_vision`.
+
 ## Proves de preparació per substituir la 2225
 
 Aquesta secció és de la build anterior (`variants/sampled`). Les de la build actual són a
