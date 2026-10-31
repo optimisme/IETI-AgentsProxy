@@ -370,12 +370,57 @@ Cada candidat ha de donar exactament el mateix text que la build de referència:
   amb draft = sense draft, junts = sols, i iguals amb els camins nous activats
   o no; 8 de 8 a totes les builds.
 
+## Preparació de tf119d per substituir la 2225 (31 d'octubre)
+
+Fetes a la 2226 amb tf119d. Dades a [`results/prod-tf119d/`](results/prod-tf119d/).
+**Totes passen.** Queda pendent una sola prova: una sessió pel proxy real.
+
+| Càrrega d'agent, 16 usuaris, 8 torns, temperatura 0,1 | tf119d | Python |
+|---|---|---|
+| Tokens/s (2 passades) | 117,3 i 116,8 | 106,5 i 108,4 |
+| Primer torn, TTFT p50 | 2,9 s | 51–56 s |
+| Torns següents, TTFT p50 / p95 | 1,8 / 5,8 s | 2,9–3,2 / 6,7–6,8 s |
+| Descodificació per usuari | 7,7 tokens/s | 8,7 tokens/s |
+| Memòria lliure mínima | 19,9 GiB | 18,2 GiB |
+| Errors | 0 | 0 |
+
+- **Una hora seguida:** 12 passades, 1.536 peticions i cap error; 113–122 tokens/s
+  (mitjana 117,4) sense degradar-se. La memòria activa es manté (97,2 → 97,7 GB)
+  i el pic també.
+- **Menú i eines** ([`menu_check.py`](menu_check.py)), 46 de 46. Per a cada opció
+  del menú (per defecte, none, minimal, low, medium, high, xhigh, max): resposta
+  correcta amb flux i sense, cap marca filtrada, `none` sense raonament, crida
+  d'eina amb arguments vàlids i resultat de l'eina usat a la resposta. A més:
+  `tool_choice` (required, named, none), crides paral·leles, arguments niuats amb
+  accents, resultat d'eina de 3.000 línies, JSON (`json_object`, `json_schema`),
+  stop, `max_tokens`, imatge i temperatura 0.
+- **El Python** en passa 43 de 45 a la primera versió de la prova: només falla el
+  JSON estructurat, perquè a aquest perfil li falta `xgrammar`. La prova de stop
+  d'aquella versió no arribava a generar la paraula d'aturada; la nova només s'ha
+  fet al Zig.
+- **L'esforç de raonament** fa el mateix als dos motors: `minimal` es comporta com
+  `low`, i `high` i `max` com `xhigh`. El servidor anuncia xhigh, medium, low i none.
+- **OpenCode real** (v2.0.27), amb les variants del portal: `none`, `low`, `medium`
+  i `xhigh` executen els tests, arreglen el bug i els tests passen, en 9–34 s i
+  5–8 crides d'eina. També descriu bé una imatge. Va directe al servidor, no pel
+  proxy. `opencode run` es penja sense enviar res si hereta un stdin obert; cal
+  `< /dev/null` en proves automàtiques. No té res a veure amb el servidor.
+- **Prova de proveïdor del proxy** (`probeProviderModel`): text, història, eines,
+  resultat d'eines, imatge, flux i raonament, tot suportat. No dedueix els esforços
+  seleccionables: surten de la configuració de `provider_models`.
+- **Respostes després de càrrega** ([`after-load.sh`](after-load.sh)): la prova d'una
+  hora només desa temps, no text. Després d'una passada de 128 peticions sense errors,
+  al mateix procés, 16 documents de ~7,5k: 16 de 16 correctes i nets.
+
+Abans de canviar la 2225 cal construir-hi el volum de tf119d (ara no hi és) i tenir en
+compte que el controlador és 580.142 i no 580.159.03. A 74k queda menys marge que amb
+Python: 7,5 GiB lliures davant de 10,4.
+
 ## Proves de preparació per substituir la 2225
 
-Aquesta secció és de la build anterior (`variants/sampled`). Les rondes de
-contextos plens de la build actual són a
-[Contextos plens](#contextos-plens-zig-davant-de-python-29-doctubre); la prova
-d'una hora, la imatge i OpenCode encara no s'han repetit amb la build actual.
+Aquesta secció és de la build anterior (`variants/sampled`). Les de la build actual són a
+[Preparació de tf119d](#preparació-de-tf119d-per-substituir-la-2225-31-doctubre) i a
+[Contextos plens](#contextos-plens-zig-davant-de-python-29-doctubre).
 
 Fetes el 28 d'octubre de 2026 a la 2226 amb [`prod-check.sh`](prod-check.sh) i
 [`zig_probe.py`](zig_probe.py) (la sonda de la campanya de capacitat del Python

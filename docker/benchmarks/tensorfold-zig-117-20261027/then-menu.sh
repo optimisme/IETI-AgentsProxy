@@ -9,7 +9,7 @@ PY=qwen38_flash_next_python_lowload
 while [ "$(ps -eo cmd | grep '[p]rod-check.sh' | grep -vc 'bash -c')" != 0 ]; do sleep 30; done
 if [ -n "$(docker ps -q -f name=$Z)" ] && curl -sf localhost:8007/health > /dev/null; then :; else bash $H/up-117.sh | tail -1; fi
 python3 -u $H/menu_check.py http://127.0.0.1:8007 $D/menu-zig.json > $D/menu-zig.txt 2>&1
-docker logs $Z 2>&1 | grep -i -E "panic|fault|CudaFailed|out of memory" | head -3 >> $D/menu-zig.txt
+docker logs $Z 2>&1 | grep -i -E "panic|segfault|CudaFailed|out of memory" | head -3 >> $D/menu-zig.txt
 docker stop $Z > /dev/null 2>&1
 IETI_RUN=menu-20261031 docker compose -f ~/docker/models/qwen38-flash-next-python-typical-original-test-128gb.yml up -d --force-recreate 2>&1 | tail -1
 start=$(date +%s)

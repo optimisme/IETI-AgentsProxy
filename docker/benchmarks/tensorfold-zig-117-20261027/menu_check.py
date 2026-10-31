@@ -134,8 +134,9 @@ try:
 except Exception:
     j = None
 rec('json_schema', isinstance(j, dict) and j.get('n') == 7, r)
-r = post({**base, 'messages': user('Count: one, two, three, four, five.'), 'stop': ['three']})
-rec('stop sequence', 'three' not in r['content'] and r['finish'] == 'stop', r)
+for stream in (False, True):
+    r = post({**base, 'messages': user('Repeat exactly, nothing else: alpha beta gamma delta epsilon'), 'stop': ['gamma']}, stream)
+    rec(f'stop sequence {"stream" if stream else "plain"}', 'alpha' in r['content'] and 'gamma' not in r['content'] and 'delta' not in r['content'] and r['finish'] == 'stop', r)
 r = post({**base, 'messages': user('Write a long story about a river.'), 'max_tokens': 12})
 rec('max_tokens', r['finish'] == 'length' and (r['usage'] or {}).get('completion_tokens') == 12, r)
 r = post({**base, 'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': 'Which colour is on the left of this image, and which on the right?'}, {'type': 'image_url', 'image_url': {'url': png()}}]}]})

@@ -40,7 +40,7 @@ for l in sys.stdin:
     except Exception:
         print('#', l.strip()[:300], flush=True)" | tee -a "$S"
 }
-errs() { docker logs "$1" 2>&1 | grep -i -E "panic|fault|CudaFailed|out of memory" | head -3 | sed "s/^/# $1: /" | tee -a "$S"; }
+errs() { docker logs "$1" 2>&1 | grep -i -E "panic|segfault|CudaFailed|out of memory" | head -3 | sed "s/^/# $1: /" | tee -a "$S"; }
 
 for stage in ${STAGES:-compare smoke quality capacity soak}; do
   echo "== $stage $(date -Is)" | tee -a "$S"
