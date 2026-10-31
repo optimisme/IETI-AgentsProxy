@@ -75,12 +75,12 @@ Metodologia, dades, percentatges de TTFT i límits de la conclusió:
 
 ## vLLM 0.32.0: FP8 KV i setze contextos de 75k
 
-El perfil experimental
-`models/qwen38-flash-next-vllm-032-nvfp4-fp8-agent-128gb.yml` fixa vLLM 0.32.0,
+Prova acabada; el perfil `qwen38-flash-next-vllm-032-nvfp4-fp8-agent-128gb.yml`
+s'ha retirat i només és a l'historial de git. Fixava vLLM 0.32.0,
 pesos Inferact NVFP4, KV principal i indexador FP8, estats recurrents FP32,
-16 slots i 75.000 tokens totals per petició. Desactiva MTP, usa chunks de 8.192
-i reutilització de prefixos amb granularitat de 32 tokens. Admet una imatge;
-el vídeo està desactivat. No activa aprenentatge ni memòria de converses.
+16 slots i 75.000 tokens totals per petició. Desactivava MTP, usava chunks de 8.192
+i reutilització de prefixos amb granularitat de 32 tokens. Admetia una imatge;
+el vídeo estava desactivat. No activava aprenentatge ni memòria de converses.
 FP8 és un format de coma flotant; aquest backend QSA no implementa KV INT8/INT4.
 
 La prova GPU ha completat setze entrades de ~74k +896 tokens de sortida amb
