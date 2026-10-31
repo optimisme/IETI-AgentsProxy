@@ -27,9 +27,6 @@ test('Compose profiles isolate caches, resolve token mounts and contain valid la
     assert.match(file, /\.yml$/);
     const filename = path.join(root, 'models', file);
     const source = fs.readFileSync(filename, 'utf8');
-    // A private env_file is absent from a clean checkout, and Compose cannot resolve the profile without it.
-    const envFile = source.match(/env_file:\n\s+- (\S+)/)?.[1];
-    if (envFile && !fs.existsSync(path.join(root, 'models', envFile))) continue;
     const result = spawnSync('docker', ['compose', '-f', filename, 'config', '--format', 'json'], { encoding: 'utf8', env: composeEnv });
     assert.equal(result.status, 0, `${file}: ${result.stderr}`);
     const config = JSON.parse(result.stdout);
