@@ -83,6 +83,11 @@ services:
       TF_FILL_ROUND_STEPS: "${TF_FILL_ROUND_STEPS:-8}"
       # Reply rounds (up to 16 x 7 rows) keep the row read-out; its prompt tile is slower there. Bits are the same.
       TF_TILE_READOUT_ROWS: "${TF_TILE_READOUT_ROWS:-128}"
+      # TensorFold 1.2.2's name for the same threshold (variants/tf122); older builds ignore it.
+      TF_FLASHNEXT_READOUT_ROWS: "${TF_FLASHNEXT_READOUT_ROWS:-128}"
+      # 1.2.2 pools a 4096-row draft block a stream outside the memory budget (~5 GiB at 16 streams), which full 74k
+      # windows cannot spare; 0: drafts take the shared scratch. Older builds ignore it.
+      TF_FLASHNEXT_LANE_PARTS: "${TF_FLASHNEXT_LANE_PARTS:-0}"
       # Builds before resident12 read all three thresholds from the first one asked (the read-out's 128): these keep
       # the measured behaviour now that each knob is its own.
       TF_TILE_EXPERTS_ROWS: "${TF_TILE_EXPERTS_ROWS:-128}"
