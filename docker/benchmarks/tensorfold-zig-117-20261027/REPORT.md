@@ -1,12 +1,19 @@
-# TensorFold Zig 1.1.7 i 1.1.9: millor build de Flash-Next per a setze alumnes
+# TensorFold Zig 1.1.7, 1.1.9 i 1.2.2: millor build de Flash-Next per a setze alumnes
 
 > **Avís (30 d'octubre).** resident12 i tf119 tenen un error greu amb els prompts
 > d'uns 74–136 tokens, i s'espera el mateix des de resident7: vegeu
 > [Respostes corrompudes](#respostes-corrompudes-amb-trossos-de-64127-files-30-doctubre).
 > No s'han de desplegar. `variants/tf119c` el corregeix, i `variants/tf119d`, que el
-> conté, és la millor build.
+> conté, va ser la millor build fins al 4 de novembre.
 
-**La millor build (30 d'octubre, `variants/tf119d`) és TensorFold 1.1.9 amb
+**La millor build (4 de novembre) és `variants/tf122`: tf119d traslladada a
+TensorFold 1.2.2.** Passa totes les comprovacions d'exactitud i millora tf119d a
+74k (ronda freda en 599 s davant de 627 s, sense swap), a 45k (372 s davant de
+389 s) i en la càrrega d'agent (120,4 davant de 118,8 tokens/s). Es prova a la
+2226 abans de substituir tf119d a la 2225, que és la tornada enrere. Vegeu
+[TensorFold 1.2.2](#tensorfold-122-4-de-novembre).
+
+**tf119d (30 d'octubre), la millor build fins aleshores, és TensorFold 1.1.9 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
@@ -628,8 +635,8 @@ temperatura):
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| variants/tf122 | tf119d traslladada a TensorFold 1.2.2, amb les correccions de scratch | [`variants/tf122/fn.patch`](variants/tf122/fn.patch) | `ieti-native117-tf122-build` |
-| **best** (variants/tf119d) | tf119c + multiplicació de prompt del Python | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119d-build` |
+| **best** (variants/tf122) | tf119d traslladada a TensorFold 1.2.2, amb les correccions de scratch | [`best/best.patch`](best/best.patch) | `ieti-native117-tf122-build` |
+| variants/tf119d | tf119c + multiplicació de prompt del Python (a la 2225; tornada enrere de tf122) | [`variants/tf119d/fn.patch`](variants/tf119d/fn.patch) | `ieti-native117-tf119d-build` |
 | variants/tf119c | tf119 + correcció definitiva de les respostes corrompudes | [`variants/tf119c/fn.patch`](variants/tf119c/fn.patch) | `ieti-native117-tf119c-build` |
 | variants/tf119b | tf119 + primera correcció, substituïda per tf119c | [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) | `ieti-native117-tf119b-build` |
 | variants/tf119 | resident12 traslladada a TensorFold 1.1.9 (amb l'error) | [`variants/tf119/fn.patch`](variants/tf119/fn.patch) | `ieti-native117-tf119-build` |
