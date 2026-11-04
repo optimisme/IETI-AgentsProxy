@@ -9,8 +9,8 @@
 **La millor build (4 de novembre) és `variants/tf122`: tf119d traslladada a
 TensorFold 1.2.2.** Passa totes les comprovacions d'exactitud i millora tf119d a
 74k (ronda freda en 599 s davant de 627 s, sense swap), a 45k (372 s davant de
-389 s) i en la càrrega d'agent (120,4 davant de 118,8 tokens/s). Es prova a la
-2226 abans de substituir tf119d a la 2225, que és la tornada enrere. Vegeu
+389 s) i en la càrrega d'agent (120,4 davant de 118,8 tokens/s). Serveix a la 2225
+des del 4 de novembre; tf119d és la tornada enrere. Vegeu
 [TensorFold 1.2.2](#tensorfold-122-4-de-novembre).
 
 **tf119d (30 d'octubre), la millor build fins aleshores, és TensorFold 1.1.9 amb
@@ -437,6 +437,20 @@ Per tornar al Python, a la 2225:
 `docker stop qwen38_flash_next_tensorfold_best_cuda`, i després
 `docker start qwen38_flash_next_cuda_vram128_tensorfold_mlx_4bit_mtp_int8_ssd_vision`.
 
+## Desplegament de tf122 a la 2225 (4 de novembre)
+
+tf122 substitueix tf119d a la 2225 des de les 19:50 del 4 de novembre, amb
+[`switch122.sh`](switch122.sh): port públic 8000 i reinici automàtic; si tf122 no
+arrenca, torna tf119d. El volum de la build es va copiar de la 2226 (1,7 GB, sumes
+iguals) i el servei va estar parat 4 min 14 s. A la 2225: menú i eines 46 de 46,
+8 de 8 documents llargs de 74k correctes, peticions reals del proxy amb resposta
+200 i cap error als registres. Dades a
+[`results/deploy-2225-tf122/`](results/deploy-2225-tf122/).
+
+Per tornar a tf119d, a la 2225 (l'script i el perfil anteriors són a
+`~/docker/backup-tf119d-20261104/`):
+`cd ~/docker/benchmarks/tensorfold-zig-117-20261027 && TENSORFOLD_BIND_ADDRESS=0.0.0.0 TENSORFOLD_BIND_PORT=8000 TENSORFOLD_RESTART=unless-stopped VARIANT=tf119d TENSORFOLD_NATIVE_VOLUME=ieti-native117-tf119d-build bash up-117.sh`.
+
 ## Proves de preparació per substituir la 2225
 
 Aquesta secció és de la build anterior (`variants/sampled`). Les de la build actual són a
@@ -658,7 +672,7 @@ Les mateixes proves que tf119d abans de la 2225, a la 2226 amb tf122
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
 | **best** (variants/tf122) | tf119d traslladada a TensorFold 1.2.2, amb les correccions de scratch | [`best/best.patch`](best/best.patch) | `ieti-native117-tf122-build` |
-| variants/tf119d | tf119c + multiplicació de prompt del Python (a la 2225; tornada enrere de tf122) | [`variants/tf119d/fn.patch`](variants/tf119d/fn.patch) | `ieti-native117-tf119d-build` |
+| variants/tf119d | tf119c + multiplicació de prompt del Python (tornada enrere de tf122) | [`variants/tf119d/fn.patch`](variants/tf119d/fn.patch) | `ieti-native117-tf119d-build` |
 | variants/tf119c | tf119 + correcció definitiva de les respostes corrompudes | [`variants/tf119c/fn.patch`](variants/tf119c/fn.patch) | `ieti-native117-tf119c-build` |
 | variants/tf119b | tf119 + primera correcció, substituïda per tf119c | [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) | `ieti-native117-tf119b-build` |
 | variants/tf119 | resident12 traslladada a TensorFold 1.1.9 (amb l'error) | [`variants/tf119/fn.patch`](variants/tf119/fn.patch) | `ieti-native117-tf119-build` |
