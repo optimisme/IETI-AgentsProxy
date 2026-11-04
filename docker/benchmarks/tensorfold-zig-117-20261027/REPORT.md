@@ -1,12 +1,19 @@
-# TensorFold Zig 1.1.7 i 1.1.9: millor build de Flash-Next per a setze alumnes
+# TensorFold Zig 1.1.7, 1.1.9 i 1.2.2: millor build de Flash-Next per a setze alumnes
 
 > **Avís (30 d'octubre).** resident12 i tf119 tenen un error greu amb els prompts
 > d'uns 74–136 tokens, i s'espera el mateix des de resident7: vegeu
 > [Respostes corrompudes](#respostes-corrompudes-amb-trossos-de-64127-files-30-doctubre).
 > No s'han de desplegar. `variants/tf119c` el corregeix, i `variants/tf119d`, que el
-> conté, és la millor build.
+> conté, va ser la millor build fins al 4 de novembre.
 
-**La millor build (30 d'octubre, `variants/tf119d`) és TensorFold 1.1.9 amb
+**La millor build (4 de novembre) és `variants/tf122`: tf119d traslladada a
+TensorFold 1.2.2.** Passa totes les comprovacions d'exactitud i millora tf119d a
+74k (ronda freda en 599 s davant de 627 s, sense swap), a 45k (372 s davant de
+389 s) i en la càrrega d'agent (120,4 davant de 118,8 tokens/s). Serveix a la 2225
+des del 4 de novembre; tf119d és la tornada enrere. Vegeu
+[TensorFold 1.2.2](#tensorfold-122-4-de-novembre).
+
+**tf119d (30 d'octubre), la millor build fins aleshores, és TensorFold 1.1.9 amb
 el nostre patch de Flash-Next, el pas mixt, els drafts mostrejats de MiaAI-Lab
 (0007, 0008, 0011), els estats de prompt residents, el nou planificador de
 prompts, la lectura HC per files a les rondes de resposta i l'atenció de tots
@@ -430,6 +437,20 @@ Per tornar al Python, a la 2225:
 `docker stop qwen38_flash_next_tensorfold_best_cuda`, i després
 `docker start qwen38_flash_next_cuda_vram128_tensorfold_mlx_4bit_mtp_int8_ssd_vision`.
 
+## Desplegament de tf122 a la 2225 (4 de novembre)
+
+tf122 substitueix tf119d a la 2225 des de les 19:50 del 4 de novembre, amb
+[`switch122.sh`](switch122.sh): port públic 8000 i reinici automàtic; si tf122 no
+arrenca, torna tf119d. El volum de la build es va copiar de la 2226 (1,7 GB, sumes
+iguals) i el servei va estar parat 4 min 14 s. A la 2225: menú i eines 46 de 46,
+8 de 8 documents llargs de 74k correctes, peticions reals del proxy amb resposta
+200 i cap error als registres. Dades a
+[`results/deploy-2225-tf122/`](results/deploy-2225-tf122/).
+
+Per tornar a tf119d, a la 2225 (l'script i el perfil anteriors són a
+`~/docker/backup-tf119d-20261104/`):
+`cd ~/docker/benchmarks/tensorfold-zig-117-20261027 && TENSORFOLD_BIND_ADDRESS=0.0.0.0 TENSORFOLD_BIND_PORT=8000 TENSORFOLD_RESTART=unless-stopped VARIANT=tf119d TENSORFOLD_NATIVE_VOLUME=ieti-native117-tf119d-build bash up-117.sh`.
+
 ## Proves de preparació per substituir la 2225
 
 Aquesta secció és de la build anterior (`variants/sampled`). Les de la build actual són a
@@ -510,6 +531,110 @@ mateixa prova que el Python i el vLLM van fer a
 | Estable una hora, cap error | Descodificació per usuari un poc més ràpida (8,7 davant de 8,0) |
 |  | Més marge de memòria (18,6 GiB lliures davant de 10,5) |
 
+## TensorFold 1.2.2 (4 de novembre)
+
+tf119d traslladada a la 1.2.2 (`variants/tf122`, `BASE=v1.2.2 sync-build.sh`).
+Script: [`tf122-check.sh`](tf122-check.sh), i per als interruptors
+[`ab122.sh`](ab122.sh); dades a
+[`results/resident/tf122.txt`](results/resident/tf122.txt).
+
+- **Ja ho porta la 1.2.2, i surt del patch:** l'atenció dels fluxos en un
+  llançament (#1739), la lectura HC per files (#1741, ara
+  `TF_FLASHNEXT_READOUT_ROWS` en lloc de `TF_TILE_READOUT_ROWS`) i el lot de
+  drafts mostrejats.
+- **Es queda el de la 1.2.2:** DeltaNet dels fluxos en un llançament; el nostre
+  `TF_FLASHNEXT_GDN_LANES` ja no fa res.
+- **Es trasllada:** la resta de tf119d (estats residents, planificador de
+  prompts, cache elàstica, pas mixt, multiplicació de prompt, HC fusionat,
+  `SAMPLE_CAND`, llindars de rajola i la correcció de la franja de 64–127
+  files), més caches fp8 als carrils d'atenció de la 1.2.2.
+
+**Dos errors de la 1.2.2 amb el nostre perfil.** La 1.2.2 dimensiona el
+scratch de prompt per l'ús (`2a92fb6c9`) i suposa que els llindars de rajola
+són 64. Amb els nostres 128, els passos de 64–127 files escrivien fora de dos
+buffers:
+
+- `hc_part`: la lectura antiga fa `hc_sk` trossos fins al llindar de lectura.
+  A la càrrega d'agent el servidor s'aturava amb `UnexpectedTensor`.
+- `part`: la rajola de carril fa `out_sk` trossos fins a
+  `TF_TILE_MATMUL_ROWS`. Error `CUDA_ERROR_ILLEGAL_ADDRESS`, també amb la lectura
+  a 64.
+
+Ara tots dos es dimensionen pel llindar configurat
+(`cuda_scratch_sizes.zig`). Les comprovacions d'exactitud no ho detecten:
+només falla amb rondes compartides de 64–127 files.
+
+La 1.2.2 sola (`variants/v122`, sense patch; caches bf16 i context de 40k, perquè
+no admet fp8 en aquesta família) passa la càrrega d'agent amb
+`TF_FLASHNEXT_READOUT_ROWS=128` sense cap error ([`v122-check.sh`](v122-check.sh)).
+Els passos petits que arriben a la lectura antiga són els nostres (el pas mixt i
+`TF_TILE_MATMUL_ROWS`), de manera que no és un error de la 1.2.2 i no s'ha
+informat.
+
+**Parts de carril apagades (`TF_FLASHNEXT_LANE_PARTS=0`).** La 1.2.2 reserva per
+a cada flux un bloc de drafts de 4096 files fora del pressupost de memòria, uns
+5 GiB amb setze fluxos a 74k. La ronda freda de 74k es quedava amb 1,4–2,7 GiB
+lliures i el servidor s'aturava per seguretat (tf119d: 7,5 GiB). Apagades, en
+queden 7,8 i no hi ha swap.
+
+| Prova | tf119d (1.1.9) | tf122 (1.2.2) |
+|---|---|---|
+| Setze respostes curtes: tokens/s | 242,1 / 237,8 | 241,9 / 239,7 |
+| Setze respostes curtes: ronda (verificació / draft) | 201,9 ms (179,0 / 22,8) | 201,2 ms (185,1 / 15,9) |
+| Un prompt de 74k sol | — | **32,4 s** (2.279 tokens/s) |
+| 74k freda: temps total | 627 s | **599 s** |
+| 74k freda: TTFT p50 / p95 | 298 / 538 s | **283 / 510 s** |
+| 74k retorn 1 / 2 | 102 / 80 s | 99 / 91 s |
+| 74k: memòria lliure mínima, swap | 7,5 GiB, 1.204 pàgines | 7,8 GiB, **0** |
+| 45k freda: temps total | 389 s | **372 s** |
+| 45k retorn 1 / 2 | 66 / 43 s | 68 / 41 s |
+| Agent: tokens/s, errors | 118,8, 0 | **120,4**, 0 |
+| Documents llargs (74k), sis respostes | 206 s | **197 s** |
+
+- Exactitud: greedy junts = sols 8 de 8 (dues rondes), agulles 9 de 9,
+  respostes 8 de 8, mostrejades 8 de 8, franja de 64–127 files igual a tf119d
+  (50 de 50 a temperatura 0, 65 de 65 a 0,1) i reaprofitament en dos torns 8 de 8.
+- El retorn 2 de 74k varia entre execucions: una altra passada de tf122 amb
+  parts apagades va donar 94 / 69 s.
+
+**Interruptors que se solapen amb la 1.2.2** ([`ab122.sh`](ab122.sh); un prompt
+de 74k sol dues vegades, i setze respostes de 800 tokens dues vegades a cada
+temperatura):
+
+| Configuració | Prompt de 74k sol | Respostes, temperatura 0 | Respostes, temperatura 0,55 |
+|---|---|---|---|
+| tf122 (tot encès) | 32,4 / 32,6 s | 240,7 / 238,8 | 238,5 / 235,5 |
+| sense la nostra multiplicació de prompt (la de la 1.2.2, #1764) | 35,2 / 35,0 s | 242,6 / 240,5 | 240,8 / 241,2 |
+| sense HC fusionat | 32,4 / 32,6 s | 242,9 / 240,8 | 236,3 / 239,7 |
+| sense `SAMPLE_CAND` | 32,2 / 32,6 s | 242,9 / 239,9 | 240,4 / 236,3 |
+
+- La nostra multiplicació de prompt omple un 8% més ràpid que la de la 1.2.2: es
+  queda.
+- HC fusionat i `SAMPLE_CAND` no tenen efecte mesurable; les respostes queden
+  dins del soroll (±1,5%). Es queden encesos, com a tf119d.
+
+## Preparació de tf122 per substituir la 2225 (4 de novembre)
+
+Les mateixes proves que tf119d abans de la 2225, a la 2226 amb tf122
+([`prod122.sh`](prod122.sh)). Dades a [`results/prod-tf122/`](results/prod-tf122/).
+**Totes passen.**
+
+| Prova | tf119d (31 d'octubre) | tf122 |
+|---|---|---|
+| Eina forçada i imatge | passen | passen |
+| Agulles a 16k, 65k i 74k | 3 de 3 | 3 de 3 |
+| Una hora de càrrega d'agent: passades, peticions, errors | 12, 1.536, 0 | 13, 1.664, 0 |
+| Una hora: tokens/s (mitjana) | 113–122 (117,4) | 119,6–123,7 (121,4) |
+| Una hora: memòria activa | 97,2 → 97,7 GB | 95,4 → 95,9 GB |
+| Menú i eines (`menu_check.py`) | 46 de 46 | 46 de 46 |
+| Després de càrrega: 128 peticions i 16 documents de ~7,5k | 0 errors, 16 de 16 | 0 errors, 16 de 16 |
+| OpenCode `none` / `low` / `medium` / `xhigh` | passen, 9–34 s | passen, 17–29 s i 6–9 crides d'eina |
+| OpenCode amb una imatge | la descriu bé | la descriu bé (11 s) |
+
+- Cap error als registres del servidor en tota la prova.
+- OpenCode va directe al servidor, no pel proxy. A la v2.0.27 la variant va amb el
+  model (`-m proveïdor/model#variant`), no amb `--variant`.
+
 ## Mètode
 
 - [`quick.sh`](quick.sh): cribratge, una passada de cinc torns per candidat
@@ -546,7 +671,8 @@ mateixa prova que el Python i el vLLM van fer a
 
 | Nom | Contingut | Patch | Volum a la 2226 |
 |---|---|---|---|
-| **best** (variants/tf119d) | tf119c + multiplicació de prompt del Python | [`best/best.patch`](best/best.patch) | `ieti-native117-tf119d-build` |
+| **best** (variants/tf122) | tf119d traslladada a TensorFold 1.2.2, amb les correccions de scratch | [`best/best.patch`](best/best.patch) | `ieti-native117-tf122-build` |
+| variants/tf119d | tf119c + multiplicació de prompt del Python (tornada enrere de tf122) | [`variants/tf119d/fn.patch`](variants/tf119d/fn.patch) | `ieti-native117-tf119d-build` |
 | variants/tf119c | tf119 + correcció definitiva de les respostes corrompudes | [`variants/tf119c/fn.patch`](variants/tf119c/fn.patch) | `ieti-native117-tf119c-build` |
 | variants/tf119b | tf119 + primera correcció, substituïda per tf119c | [`variants/tf119b/fn.patch`](variants/tf119b/fn.patch) | `ieti-native117-tf119b-build` |
 | variants/tf119 | resident12 traslladada a TensorFold 1.1.9 (amb l'error) | [`variants/tf119/fn.patch`](variants/tf119/fn.patch) | `ieti-native117-tf119-build` |
@@ -561,4 +687,4 @@ mateixa prova que el Python i el vLLM van fer a
 | tf114-20261026b | 1.1.4 + patch | `../tensorfold-zig-114-parity-20261024/tf114-20261026b.patch` | `ieti-native114-tf20261026b` |
 
 Els arxius `source.tar` (61 MB, còpia del codi de TensorFold) no es versionen;
-cada build es pot refer aplicant el seu patch a TensorFold 1.1.7 (tf119: 1.1.9).
+cada build es pot refer aplicant el seu patch a TensorFold 1.1.7 (tf119: 1.1.9; tf122: 1.2.2).
