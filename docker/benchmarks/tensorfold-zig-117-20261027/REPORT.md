@@ -599,6 +599,28 @@ temperatura):
 - HC fusionat i `SAMPLE_CAND` no tenen efecte mesurable; les respostes queden
   dins del soroll (±1,5%). Es queden encesos, com a tf119d.
 
+## Preparació de tf122 per substituir la 2225 (4 de novembre)
+
+Les mateixes proves que tf119d abans de la 2225, a la 2226 amb tf122
+([`prod122.sh`](prod122.sh)). Dades a [`results/prod-tf122/`](results/prod-tf122/).
+**Totes passen.**
+
+| Prova | tf119d (31 d'octubre) | tf122 |
+|---|---|---|
+| Eina forçada i imatge | passen | passen |
+| Agulles a 16k, 65k i 74k | 3 de 3 | 3 de 3 |
+| Una hora de càrrega d'agent: passades, peticions, errors | 12, 1.536, 0 | 13, 1.664, 0 |
+| Una hora: tokens/s (mitjana) | 113–122 (117,4) | 119,6–123,7 (121,4) |
+| Una hora: memòria activa | 97,2 → 97,7 GB | 95,4 → 95,9 GB |
+| Menú i eines (`menu_check.py`) | 46 de 46 | 46 de 46 |
+| Després de càrrega: 128 peticions i 16 documents de ~7,5k | 0 errors, 16 de 16 | 0 errors, 16 de 16 |
+| OpenCode `none` / `low` / `medium` / `xhigh` | passen, 9–34 s | passen, 17–29 s i 6–9 crides d'eina |
+| OpenCode amb una imatge | la descriu bé | la descriu bé (11 s) |
+
+- Cap error als registres del servidor en tota la prova.
+- OpenCode va directe al servidor, no pel proxy. A la v2.0.27 la variant va amb el
+  model (`-m proveïdor/model#variant`), no amb `--variant`.
+
 ## Mètode
 
 - [`quick.sh`](quick.sh): cribratge, una passada de cinc torns per candidat
