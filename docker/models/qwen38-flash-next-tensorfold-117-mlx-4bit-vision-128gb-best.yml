@@ -89,6 +89,9 @@ services:
       # 1.2.2 pools a 4096-row draft block a stream outside the memory budget (~5 GiB at 16 streams), which full 74k
       # windows cannot spare; 0: drafts take the shared scratch. Older builds ignore it.
       TF_FLASHNEXT_LANE_PARTS: "${TF_FLASHNEXT_LANE_PARTS:-0}"
+      # 1.2.4 keeps prompt-cache marks inside a pass (#1866); our resident states need a chunk cut at the mark
+      # (NotAtMark otherwise) and bits match tf122 only with 0. Older builds ignore it.
+      TF_FLASHNEXT_KEEP_INPASS: "${TF_FLASHNEXT_KEEP_INPASS:-0}"
       # Builds before resident12 read all three thresholds from the first one asked (the read-out's 128): these keep
       # the measured behaviour now that each knob is its own.
       TF_TILE_EXPERTS_ROWS: "${TF_TILE_EXPERTS_ROWS:-128}"

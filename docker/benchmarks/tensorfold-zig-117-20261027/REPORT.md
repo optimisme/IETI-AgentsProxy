@@ -6,6 +6,10 @@
 > No s'han de desplegar. `variants/tf119c` el corregeix, i `variants/tf119d`, que el
 > conté, va ser la millor build fins al 4 de novembre.
 
+**Des del 7 de novembre la 2225 i la 2226 serveixen `variants/tf124`, tf122 sobre
+TensorFold 1.2.4:** igual d'exacta, un 3% més ràpida en descodificació curta i
+igual a 74k. Vegeu [TensorFold 1.2.4](#tensorfold-124-i-desplegament-de-tf124-7-de-novembre).
+
 **La millor build (4 de novembre) és `variants/tf122`: tf119d traslladada a
 TensorFold 1.2.2.** Passa totes les comprovacions d'exactitud i millora tf119d a
 74k (ronda freda en 599 s davant de 627 s, sense swap), a 45k (372 s davant de
@@ -436,6 +440,40 @@ peticions reals del proxy amb resposta 200. Dades a
 Per tornar al Python, a la 2225:
 `docker stop qwen38_flash_next_tensorfold_best_cuda`, i després
 `docker start qwen38_flash_next_cuda_vram128_tensorfold_mlx_4bit_mtp_int8_ssd_vision`.
+
+## TensorFold 1.2.4 i desplegament de tf124 (7 de novembre)
+
+`variants/tf124` és tf122 (el nostre patch sobre 1.2.2) rebasat sobre TensorFold
+1.2.4. El patch fa el mateix (5.680 línies, 59 fitxers, davant de 5.668 i 58). De
+la 1.2.4 aprofita el mostreig top-k al dispositiu (el nostre SAMPLE_CAND queda
+només de reserva), els grafs CUDA de finestra i les lectures DtoH per etapes (les
+dues còpies nostres passen per aquest camí). Les marques de la cache de prompts dins
+d'una passada (#1866) canvien la forma dels trossos (7 de 50 prompts de la banda
+amb el primer token diferent de tf119d) i els nostres estats residents necessiten un
+tall a la marca (`NotAtMark`): cal `TF_FLASHNEXT_KEEP_INPASS=0`, ara al perfil.
+
+Comprovacions a la 2226 ([`tf124-check.sh`](tf124-check.sh), amb la càrrega d'agent,
+els documents llargs i els 45k omesos):
+
+| Prova | tf122 | tf124 |
+|---|---|---|
+| Exactitud (greedy, needles, kvcheck, mostrejat) | tot igual | tot igual, 8 de 8 |
+| Banda de 64–127 files (t 0 / 0,1) | 50/50, 65/65 | 50/50, 65/65 |
+| Reutilització (torn 1 i 2) | 8 de 8 | 8 de 8 |
+| Descodificació curta, 16 fluxos (tok/s) | 241,9 / 239,7 | **250,0 / 246,7** (+3%) |
+| 74k: ronda freda | 599,2 s | 598,8 s |
+| 74k: retorn 1 / 2 | 99,0 / 91,2 s | **97,2 / 65,1 s** |
+| 74k: memòria lliure mínima, swap | 7,8 GiB, 0 | 7,0 GiB, 0 |
+| Pressupost de la cache de prompts | 23.809 MiB | 23.522 MiB |
+
+tf124 serveix a la 2226 i a la 2225 des de les 22:28 del 7 de novembre (port públic
+8000, reinici automàtic; a la 2225 amb [`switch124.sh`](switch124.sh), que torna a
+tf122 si tf124 no arrenca). El volum es va copiar de la 2226 (4 min 16 s, sumes
+iguals). Crides d'OpenCode pel proxy: fizzbuzz amb tests en 21 s, tests correctes,
+respostes curtes en 1–6 s, cap error als registres de cap de les dues màquines.
+
+Per tornar a tf122 (a la 2225 o a la 2226):
+`cd ~/docker/benchmarks/tensorfold-zig-117-20261027 && TENSORFOLD_BIND_ADDRESS=0.0.0.0 TENSORFOLD_BIND_PORT=8000 TENSORFOLD_RESTART=unless-stopped VARIANT=tf122 bash up-117.sh`.
 
 ## Desplegament de tf122 a la 2225 (4 de novembre)
 
