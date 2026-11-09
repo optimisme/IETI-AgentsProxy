@@ -58,3 +58,9 @@ That association has not been isolated in a one-policy ablation.
 The old mixed16 second-return signal also reproduces: median first token
 1.421→3.005s. Small one-user short-code first-token times remain near0.16s.
 These are one-pair observations, not the final three-pair recommendation.
+
+## Retired profiles
+
+On 2026-11-09 `models/qwen38-flash-next-python-typical-tuned-test-128gb.yml` was
+removed from `models/`; it remains in git history. The original-profile counterpart
+is still used by the tensorfold-zig-117 comparison scripts.

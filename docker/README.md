@@ -68,8 +68,9 @@ retorn, contra 531,88/432,58/418,40 s de vLLM: +21,25%, +3,10% i −10,32%.
 Els resultats amb contextos curts continuen afavorint Python, però el requisit
 estricte de setze contextos llargs generant alhora té més validació amb vLLM.
 No s'ha canviat la configuració d'inferència ni la selecció del servei habitual.
-Perfil privat de prova:
-`models/qwen38-flash-next-python-capacity16-private-test-128gb.yml`.
+El perfil privat de prova
+`qwen38-flash-next-python-capacity16-private-test-128gb.yml` s'ha retirat i
+només és a l'historial de git.
 Metodologia, dades, percentatges de TTFT i límits de la conclusió:
 `benchmarks/tensorfold-python-capacity16-20261023/ASSESSMENT.md`.
 

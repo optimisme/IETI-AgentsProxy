@@ -80,7 +80,7 @@ Credentials and resolved secret environment values are not captured.
 The canonical profile remains the local
 `models/qwen38-flash-next-tensorfold-vontra-mlx-4bit-mtp-int8-ssd-vision-128gb.yml`.
 The isolated profile is
-`models/qwen38-flash-next-python-capacity16-private-test-128gb.yml`.
+`models/qwen38-flash-next-python-capacity16-private-test-128gb.yml`. (Retired 2026-11-09; see git history.)
 Local `docker/` files are authored first, synchronized into the experimental
 host's own `~/docker/`, and executed there. The reference host is untouched.
 

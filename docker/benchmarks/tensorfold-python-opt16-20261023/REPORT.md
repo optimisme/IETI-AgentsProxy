@@ -280,3 +280,10 @@ inventory and complete pip install versions, allowing a separately labeled
 historical audit with file hashes. `resolved-version-audit.json` records this
 proof. Paired eligibility now also checks effective versions. The reusable lock
 was corrected before release qualification; no serving/test setting changed.
+
+## Retired profiles
+
+On 2026-11-09 the sweep profiles (`models/qwen38-flash-next-python-opt16-*-128gb.yml`,
+except `opt16-tuned`) were removed from `models/`; they remain in git history, so
+`MANIFEST.sha256` entries for them no longer verify against the working tree.
+`snapshots/release-private-executed.yml` keeps the executed release profile.
