@@ -15,7 +15,7 @@ const {
   MAX_USER_API_KEYS
 } = require('../services/userApiKeyService');
 const { isAdminSession, startAdminSession, verifyAdminCredentials } = require('../middleware/authAdmin');
-const { getUsageTotals, recentUsage, dailyUsage } = require('../services/usageService');
+const { getUsageTotals, dailyUsage } = require('../services/usageService');
 const { getSetting } = require('../services/settingsService');
 const { getEnabledModelEntries } = require('../services/providerService');
 const { getUserGroup } = require('../services/accessService');
@@ -629,16 +629,6 @@ router.get('/portal', requireStudentSession, (req, res) => {
   const models = getActiveModelsForUser(user);
   const shellCommand = getClientScriptCommand(req, 'set_agents_opencode.sh');
   const powershellCommand = getClientScriptCommand(req, 'set_agents_opencode.ps1');
-  const usageRows = recentUsage(25, user.id).map((row) => `
-    <tr>
-      <td>${escapeHtml(row.created_at)}</td>
-      <td>${escapeHtml(row.model)}</td>
-      <td>${row.input_tokens}</td>
-      <td>${row.output_tokens}</td>
-      <td>${row.total_tokens}</td>
-      <td>${escapeHtml(row.status)}</td>
-    </tr>
-  `).join('');
 
   render(req, res, {
     title: 'User Portal',
@@ -710,12 +700,6 @@ router.get('/portal', requireStudentSession, (req, res) => {
       <div class="dashboard-section">${usageLimitCards(models[0]?.group, usage)}</div>
       <div class="dashboard-section">${dailyUsageCard(usageByDay)}</div>
       <script src="/portal/assets/dashboard-usage.js" defer></script>
-      <div class="dashboard-section">
-        <table>
-          <thead><tr><th>When</th><th>Model</th><th>Input</th><th>Output</th><th>Total</th><th>Status</th></tr></thead>
-          <tbody>${usageRows || '<tr><td colspan="6" class="muted">No usage yet.</td></tr>'}</tbody>
-        </table>
-      </div>
     `
   });
 });

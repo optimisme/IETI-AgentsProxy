@@ -112,10 +112,10 @@ test('portal chart shows only the signed-in student’s completed or stopped cal
     .map((label) => response.text.indexOf(`<strong>${label}</strong>`));
   const chartPosition = response.text.indexOf('id="daily-usage-heading"');
   const recentPosition = response.text.indexOf('<h2>Recent usage</h2>');
-  const usageTablePosition = response.text.indexOf('<thead><tr><th>When</th><th>Model</th>');
   assert.ok(modelsPosition >= 0 && modelsPosition < recentPosition);
   assert.ok(quotaPositions.every((position) => recentPosition < position && position < chartPosition));
-  assert.ok(chartPosition < usageTablePosition);
+  assert.ok(chartPosition > 0);
+  assert.doesNotMatch(response.text, /<th>When<\/th><th>Model<\/th>/);
   assert.equal((response.text.match(/<h2>Recent usage<\/h2>/g) || []).length, 1);
   assert.equal((response.text.match(/class="quota-grid"/g) || []).length, 1);
   assert.match(response.text, /<script src="\/portal\/assets\/dashboard-usage\.js" defer><\/script>/);
