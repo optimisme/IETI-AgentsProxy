@@ -281,7 +281,7 @@ test('Shift+Enter and IME composition keep native text entry without sending a m
   assert.equal(fixture.calls.length, 0);
 });
 
-test('the composer indicator is green when ready, red while generating, and exposes provider errors', async () => {
+test('the composer indicator is green when ready, orange while generating, and red on provider errors', async () => {
   const fixture = browser();
   const indicator = fixture.get('state');
   assert.equal(indicator.attributes.get('data-state'), 'ready');
@@ -295,7 +295,8 @@ test('the composer indicator is green when ready, red while generating, and expo
   const sending = fixture.submit('Question while watching status');
   await waitForCalls(fixture, 1);
   assert.equal(indicator.attributes.get('data-state'), 'busy');
-  assert.equal(indicator.classes.has('chat-status-indicator-red'), true);
+  assert.equal(indicator.classes.has('chat-status-indicator-busy'), true);
+  assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
   assert.match(indicator.title, /Generating response/);
   assert.equal(indicator.attributes.get('aria-label'), indicator.title);
   assert.equal(fixture.get('status').classes.has('visually-hidden'), true);
@@ -303,12 +304,14 @@ test('the composer indicator is green when ready, red while generating, and expo
   await sending;
   assert.equal(indicator.attributes.get('data-state'), 'ready');
   assert.equal(indicator.classes.has('chat-status-indicator-red'), false);
+  assert.equal(indicator.classes.has('chat-status-indicator-busy'), false);
   assert.match(indicator.title, /Ready/);
 
   fixture.queue(response('The provider is unavailable.', { status: 503 }));
   await fixture.submit('Question that fails');
   assert.equal(indicator.attributes.get('data-state'), 'error');
   assert.equal(indicator.classes.has('chat-status-indicator-red'), true);
+  assert.equal(indicator.classes.has('chat-status-indicator-busy'), false);
   assert.match(indicator.title, /The provider is unavailable/);
   assert.equal(indicator.attributes.get('aria-label'), indicator.title);
   assert.equal(fixture.get('status').classes.has('visually-hidden'), false, 'actionable errors remain visible');

@@ -755,16 +755,37 @@ test('cookie-authenticated forms reject cross-site requests', async () => {
   const student = createStudent();
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
-  await agent.post('/portal/settings/name').type('form').set('Sec-Fetch-Site', 'same-site').send({ name: 'Renamed by a sibling site' }).expect(403);
-  await agent.post('/portal/settings/name').type('form').set('Origin', 'https://attacker.example.test').send({ name: 'Renamed cross-site' }).expect(403);
+  const wrongPassword = { current_password: 'incorrect-password', new_password: 'new-student-password', confirm_password: 'new-student-password' };
+  await agent.post('/portal/settings/password').type('form').set('Sec-Fetch-Site', 'same-site').send(wrongPassword).expect(403);
+  await agent.post('/portal/settings/password').type('form').set('Origin', 'https://attacker.example.test').send(wrongPassword).expect(403);
   await request(app).post('/login').type('form').set('Sec-Fetch-Site', 'cross-site').send({ login: 'admin', password: 'secret' }).expect(403);
-  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, student.name);
-  await agent.post('/portal/settings/name').type('form').set('Sec-Fetch-Site', 'same-origin').send({ name: 'Renamed here' }).expect(302);
+  await agent.post('/portal/settings/password').type('form').set('Sec-Fetch-Site', 'same-origin').send(wrongPassword)
+    .expect(302).expect('Location', '/portal/settings?password_error=1');
   // Browsers send "Origin: null" on same-origin form posts under some referrer policies.
   await request(app).post('/login').type('form').set('Sec-Fetch-Site', 'same-origin').set('Origin', 'null')
     .send({ login: 'admin', password: 'secret' }).expect(302).expect('Location', '/admin');
-  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, 'Renamed here');
-  await agent.post('/portal/settings/name').type('form').send({ name: 'x'.repeat(256) }).expect(302).expect('Location', '/portal/settings?name_error=1');
+});
+
+test('students see their name read-only and cannot change it; admins still can', async () => {
+  const student = createStudent();
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  const settings = await agent.get('/portal/settings').expect(200);
+  assert.match(settings.text, /<input id="account-name" value="[^"]*" disabled/);
+  assert.doesNotMatch(settings.text, /Save name/);
+  assert.doesNotMatch(settings.text, /action="\/portal\/settings\/name"/);
+  await agent.post('/portal/settings/name').type('form').send({ name: 'Renamed by student' }).expect(404);
+  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, student.name);
+
+  const admin = request.agent(app);
+  await admin.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const row = db.prepare('SELECT email, role FROM users WHERE id = ?').get(student.id);
+  const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
+  await admin.post(`/admin/users/${student.id}`).type('form').send({
+    name: 'Renamed by admin', email: row.email, role: row.role, enabled: '1', group_id: String(groupId)
+  }).expect(302);
+  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(student.id).name, 'Renamed by admin');
+  await agent.get('/portal/settings').expect(200).expect(/value="Renamed by admin" disabled/);
 });
 
 test('large JSON bodies are only accepted on authenticated completion routes', async () => {
@@ -2768,11 +2789,6 @@ test('student password changes show feedback and invalidate older portal session
 
   await currentAgent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   await olderAgent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
-
-  await currentAgent.post('/portal/settings/name').type('form').send({
-    name: 'Updated Student Name'
-  }).expect(302).expect('Location', '/portal/settings?name_saved=1');
-  await currentAgent.get('/portal/settings?name_saved=1').expect(200).expect(/Name updated/).expect(/Updated Student Name/);
 
   await currentAgent.post('/portal/settings/password').type('form').send({
     current_password: 'incorrect-password',

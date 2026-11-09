@@ -50,7 +50,6 @@ const {
 
 const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
-const NAME_MAX_LENGTH = 255;
 const PENDING_API_KEY = 'student-api-key';
 const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..', 'assets');
 const chatAssets = new Map([
@@ -525,12 +524,12 @@ router.get('/portal/chat', requireApprovedStudentSession, (req, res) => {
     title: 'Chat',
     content: `
       <link rel="stylesheet" href="${chatAssetUrls.get('portal-chat.css')}">
-      <h1>Chat</h1>
+      <h1 class="visually-hidden">Chat</h1>
       <section class="panel chat-panel">
         <div id="chat-messages" class="chat-messages" aria-label="Conversation"></div>
         <form id="chat-form" class="chat-form">
           <label for="chat-input" class="visually-hidden">Message</label>
-          <textarea id="chat-input" rows="4" placeholder="Write a message…"></textarea>
+          <textarea id="chat-input" rows="2" placeholder="Write a message…"></textarea>
           <div id="chat-attachments" class="chat-attachments"></div>
           <div class="chat-composer-actions">
             <div class="chat-composer-controls">
@@ -704,14 +703,6 @@ router.get('/portal', requireStudentSession, (req, res) => {
   });
 });
 
-router.post('/portal/settings/name', requireApprovedStudentSession, (req, res) => {
-  const name = String(req.body.name || '').trim();
-  if (!name) return res.redirect('/portal/settings');
-  if (name.length > NAME_MAX_LENGTH) return res.redirect('/portal/settings?name_error=1');
-  getDb().prepare('UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(name, req.portalUser.id);
-  res.redirect('/portal/settings?name_saved=1');
-});
-
 router.post('/portal/settings/password', requireApprovedStudentSession, async (req, res, next) => {
   const user = req.portalUser;
   const currentPassword = String(req.body.current_password || '');
@@ -761,8 +752,6 @@ router.get('/portal/settings', requireApprovedStudentSession, (req, res) => {
       ${req.query.created ? '<div class="notice">API key added.</div>' : ''}
       ${req.query.revoked ? '<div class="notice">API key deleted.</div>' : ''}
       ${req.query.key_error === 'limit' ? `<div class="notice" style="background:#fee;color:#c33">${apiKeyLimitMessage} Delete an existing key before adding another.</div>` : ''}
-      ${req.query.name_saved ? '<div class="notice">Name updated.</div>' : ''}
-      ${req.query.name_error ? `<div class="notice" style="background:#fee;color:#c33">The name must be at most ${NAME_MAX_LENGTH} characters.</div>` : ''}
       ${req.query.password_error ? '<div class="notice" style="background:#fee;color:#c33">Current password is incorrect, the new password is shorter than 10 characters, or the passwords do not match.</div>' : ''}
       ${req.query.password_saved ? '<div class="notice">Password updated.</div>' : ''}
       <div class="panel" style="margin-top:16px">
@@ -866,11 +855,11 @@ router.get('/portal/settings', requireApprovedStudentSession, (req, res) => {
       ` : ''}
       <div class="panel" style="margin-top:16px">
         <h2>Account</h2>
-        <form method="post" action="/portal/settings/name" style="margin-bottom:16px">
-          <label>Name</label>
-          <input name="name" value="${escapeHtml(user.name)}" maxlength="${NAME_MAX_LENGTH}" required>
-          <button type="submit" style="margin-top:16px">Save name</button>
-        </form>
+        <div style="margin-bottom:16px">
+          <label for="account-name">Name</label>
+          <input id="account-name" value="${escapeHtml(user.name)}" disabled aria-describedby="account-name-help">
+          <p id="account-name-help" class="muted" style="margin:6px 0 0;font-size:13px">Only an administrator can change your name.</p>
+        </div>
         <form method="post" action="/portal/settings/password" style="border-top:1px solid #ddd;padding-top:16px">
           <label>Current password</label>
           <input name="current_password" type="password" autocomplete="current-password" required>

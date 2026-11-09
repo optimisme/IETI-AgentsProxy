@@ -191,7 +191,8 @@
     const unavailable = !selectedModel();
     const state = unavailable ? 'unavailable' : statusHasError ? 'error' : busy ? 'busy' : 'ready';
     const text = unavailable ? 'No active models are available.' : busy ? ui.status.textContent || 'Working…' : statusHasError ? ui.status.textContent : 'Ready.';
-    statusIndicator.classList.toggle('chat-status-indicator-red', state !== 'ready');
+    statusIndicator.classList.toggle('chat-status-indicator-busy', state === 'busy');
+    statusIndicator.classList.toggle('chat-status-indicator-red', state === 'error' || state === 'unavailable');
     statusIndicator.setAttribute('data-state', state);
     statusIndicator.title = text;
     statusIndicator.setAttribute('aria-label', text);
