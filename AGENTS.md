@@ -141,3 +141,6 @@ Default port is `3000`. The script:
 | `proxmoxConnect.sh` | Quick SSH to the container |
 | `proxmoxSendFile.sh` | SCP a single file to `~` on the remote |
 | `proxmoxDeploy.sh` | Full deploy (zip + transfer + npm install + pm2 restart) |
+| `proxmoxBackup.sh` | Read-only copy of production `data/` (SQLite via online backup) and `settings.env` into git-ignored `proxyServer/backups/<UTC stamp>/`, checksum- and integrity-verified |
+
+Only `proxmoxDeploy.sh`, `proxmoxBackup.sh` and `config.env.example` are tracked; other files in `proxmox/` stay local.
