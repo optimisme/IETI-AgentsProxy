@@ -151,6 +151,13 @@ function listProviders() {
   }));
 }
 
+// Positive cap on images per request, or null when the model accepts any number.
+function maxImagesValue(model) {
+  if (!Number(model.supports_image_input)) return null;
+  const value = Number(model.max_images);
+  return model.max_images !== null && model.max_images !== undefined && Number.isInteger(value) && value > 0 ? value : null;
+}
+
 function getEnabledModelEntries() {
   const rows = getDb().prepare(`
     SELECT
@@ -162,6 +169,7 @@ function getEnabledModelEntries() {
       provider_models.output_limit,
       provider_models.supports_text_input,
       provider_models.supports_image_input,
+      provider_models.max_images,
       provider_models.supports_tools,
       provider_models.supports_reasoning,
       provider_models.reasoning_efforts,
@@ -186,6 +194,7 @@ function getEnabledModelEntries() {
       capabilities: {
         text: Boolean(row.supports_text_input),
         image: Boolean(row.supports_image_input),
+        maxImages: maxImagesValue(row),
         tools: Boolean(row.supports_tools),
         reasoning: Boolean(row.supports_reasoning),
         reasoningEfforts: parseReasoningEfforts(row.reasoning_efforts) || [],
@@ -264,6 +273,7 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
       provider_models.output_limit,
       provider_models.supports_text_input,
       provider_models.supports_image_input,
+      provider_models.max_images,
       provider_models.supports_tools,
       provider_models.supports_reasoning,
       provider_models.reasoning_efforts,
@@ -297,6 +307,16 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
     if (requiredCapabilities.parallelTools && !provider.supports_parallel_tools) return false;
     return true;
   });
+  const imageCount = Number(requiredCapabilities.imageCount || 0);
+  if (imageCount > 0 && capableCandidates.length) {
+    const limits = capableCandidates.map(maxImagesValue);
+    const fitting = capableCandidates.filter((provider, index) => limits[index] === null || imageCount <= limits[index]);
+    if (!fitting.length) {
+      const largest = Math.max(...limits);
+      throw apiError(413, 'too_many_images', `Model ${publicModelAlias} accepts at most ${largest} image${largest === 1 ? '' : 's'} per request; this request has ${imageCount}.`);
+    }
+    capableCandidates.splice(0, capableCandidates.length, ...fitting);
+  }
   if (!capableCandidates.length) {
     if (requiredCapabilities.reasoningEffort) {
       throw apiError(
@@ -313,7 +333,7 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
       );
     }
     const missing = Object.entries(requiredCapabilities)
-      .filter(([capability, required]) => required && !['reasoningEffort', 'chatTemplateKwargs'].includes(capability))
+      .filter(([capability, required]) => required && !['reasoningEffort', 'chatTemplateKwargs', 'imageCount'].includes(capability))
       .map(([capability]) => capability)
       .join(', ');
     throw apiError(400, 'model_capability_unavailable', `Model ${publicModelAlias} has no assigned provider supporting: ${missing}.`);
@@ -343,11 +363,13 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
 function inferRequiredCapabilities(payload) {
   const reasoning = validateReasoningControls(payload);
   const contentParts = (payload.messages || []).flatMap((message) => Array.isArray(message?.content) ? message.content : []);
-  const hasImages = contentParts.some((part) => part?.type === 'image_url' || part?.type === 'input_image');
+  const imageCount = contentParts.filter((part) => part?.type === 'image_url' || part?.type === 'input_image').length;
+  const hasImages = imageCount > 0;
   const hasTools = Array.isArray(payload.tools) && payload.tools.length > 0 && payload.tool_choice !== 'none';
   return {
     text: true,
     image: hasImages,
+    imageCount,
     tools: hasTools,
     parallelTools: Boolean(hasTools && payload.parallel_tool_calls),
     reasoning: reasoning.reasoningRequested,
@@ -361,6 +383,7 @@ async function callChatCompletions(payload, { signal, providerSlug = null, provi
   const requirements = {
     text: Boolean(inferred.text || requiredCapabilities.text),
     image: Boolean(inferred.image || requiredCapabilities.image),
+    imageCount: inferred.imageCount,
     tools: Boolean(inferred.tools || requiredCapabilities.tools),
     parallelTools: Boolean(inferred.parallelTools || requiredCapabilities.parallelTools),
     reasoning: Boolean(inferred.reasoning || requiredCapabilities.reasoning),

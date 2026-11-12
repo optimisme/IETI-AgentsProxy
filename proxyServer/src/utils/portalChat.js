@@ -22,7 +22,6 @@ function chatLimits() {
   return {
     maxOutputTokens: Math.min(4096, positiveSetting('max_tokens_per_request', config.maxTokensPerRequest)),
     imageLimits: {
-      maxImages: positiveSetting('max_images_per_request', config.maxImagesPerRequest),
       maxImageBytes: positiveSetting('max_image_bytes', config.maxImageBytes),
       maxTotalImageBytes: positiveSetting('max_total_image_bytes', config.maxTotalImageBytes)
     },

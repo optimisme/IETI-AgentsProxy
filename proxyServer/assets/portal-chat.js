@@ -142,7 +142,11 @@
   const imageTokens = finitePositive(config.imageTokens, DEFAULT_IMAGE_TOKENS);
   const ratio = Math.min(0.95, Math.max(0.1, finitePositive(config.autoCompactRatio, 0.65)));
   const imageLimits = {
-    count: Math.floor(finitePositive(config.imageLimits?.maxImages, 4)),
+    // Per selected model; a model without maxImages accepts any number of images.
+    get count() {
+      const max = selectedModel()?.capabilities?.maxImages;
+      return Number.isInteger(max) && max > 0 ? max : Infinity;
+    },
     each: finitePositive(config.imageLimits?.maxImageBytes, 4 * 1024 * 1024),
     total: finitePositive(config.imageLimits?.maxTotalImageBytes, 8 * 1024 * 1024)
   };

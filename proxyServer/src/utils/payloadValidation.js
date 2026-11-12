@@ -56,7 +56,6 @@ function validateImageUrl(url, limits) {
 function validateRequestPayload(payload) {
   const limits = {
     maxTokensPerRequest: numberSetting('max_tokens_per_request', config.maxTokensPerRequest),
-    maxImagesPerRequest: numberSetting('max_images_per_request', config.maxImagesPerRequest),
     maxImageBytes: numberSetting('max_image_bytes', config.maxImageBytes),
     maxTotalImageBytes: numberSetting('max_total_image_bytes', config.maxTotalImageBytes),
     allowVideoInput: boolSetting('allow_video_input', config.allowVideoInput)
@@ -86,11 +85,8 @@ function validateRequestPayload(payload) {
       }
 
       if (part.type === 'image_url' || part.type === 'input_image') {
+        // The image count is checked per provider model when a provider is chosen.
         images += 1;
-        if (images > limits.maxImagesPerRequest) {
-          throw apiError(413, 'too_many_images', `Request exceeds ${limits.maxImagesPerRequest} images.`);
-        }
-
         const url = part.image_url?.url || part.image_url || part.image || part.url;
         const result = validateImageUrl(url, limits);
         totalImageBytes += result.bytes;

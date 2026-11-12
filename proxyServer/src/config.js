@@ -107,7 +107,6 @@ module.exports = {
   defaultDailyTokenLimit: numberEnv('DEFAULT_DAILY_TOKEN_LIMIT', 10000000),
   defaultModelContextLimit: numberEnv('DEFAULT_MODEL_CONTEXT_LIMIT', 90000),
   defaultModelOutputLimit: numberEnv('DEFAULT_MODEL_OUTPUT_LIMIT', 8192),
-  maxImagesPerRequest: numberEnv('MAX_IMAGES_PER_REQUEST', 4),
   maxImageBytes: numberEnv('MAX_IMAGE_BYTES', 8000000),
   maxTotalImageBytes: numberEnv('MAX_TOTAL_IMAGE_BYTES', 16000000),
   allowVideoInput: boolEnv('ALLOW_VIDEO_INPUT', false),

@@ -117,11 +117,11 @@ function browser(overrides = {}) {
   const config = {
     models: [
       { id: 'text-model', limit: { context: 32768, output: 4096 }, capabilities: { image: false } },
-      { id: 'vision-model', limit: { context: 32768, output: 4096 }, capabilities: { image: true } }
+      { id: 'vision-model', limit: { context: 32768, output: 4096 }, capabilities: { image: true, maxImages: 4 } }
     ],
     csrfToken: 'fixture-csrf-token', streaming: false, harnessTokens: 512, imageTokens: 2048,
     maxOutputTokens: 4096, autoCompactRatio: 0.65,
-    imageLimits: { maxImages: 4, maxImageBytes: 4096, maxTotalImageBytes: 8192 },
+    imageLimits: { maxImageBytes: 4096, maxTotalImageBytes: 8192 },
     ...overrides
   };
   elements.get('portal-chat-config').textContent = JSON.stringify(config);
@@ -1217,7 +1217,7 @@ test('manual compaction removes image nodes and replaces their exchange with a t
 });
 
 test('historical image limits trigger compaction before the token threshold is reached', async () => {
-  const fixture = browser({ imageLimits: { maxImages: 1, maxImageBytes: 4096, maxTotalImageBytes: 8192 } });
+  const fixture = browser({ models: [{ id: 'vision-model', limit: { context: 32768, output: 4096 }, capabilities: { image: true, maxImages: 1 } }] });
   await fixture.select('vision-model');
   await fixture.upload(new ImageFile(PNG));
   fixture.queue(response('First image description.'));

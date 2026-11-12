@@ -11,6 +11,9 @@ function commonCapabilities(previous, incoming = {}) {
   const defaultEffort = previous && previous.defaultReasoningEffort !== incoming.defaultReasoningEffort
     ? null : incoming.defaultReasoningEffort;
   capabilities.defaultReasoningEffort = capabilities.reasoningEfforts.includes(defaultEffort) ? defaultEffort : null;
+  // A shared alias is limited by its strictest provider; null means unlimited.
+  const limits = [incoming.maxImages, ...(previous ? [previous.maxImages] : [])].filter((value) => Number.isInteger(value) && value > 0);
+  capabilities.maxImages = capabilities.image && limits.length ? Math.min(...limits) : null;
   capabilities.parallelTools &&= capabilities.tools;
   capabilities.chatTemplateKwargs &&= capabilities.reasoning;
   return capabilities;

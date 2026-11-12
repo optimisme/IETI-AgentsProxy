@@ -233,6 +233,7 @@ function parseModelMappingForm(body) {
     return ['1', 'true', 'yes', 'on'].includes(String(selected).toLowerCase()) ? 1 : 0;
   };
   const supportsReasoning = capabilityValue('supports_reasoning');
+  const supportsImageInput = capabilityValue('supports_image_input');
   const reasoningHistoryField = optionalText(body.reasoning_history_field);
   if (reasoningHistoryField && !['reasoning', 'reasoning_content'].includes(reasoningHistoryField)) {
     throw apiError(400, 'invalid_form', 'Reasoning history field must be reasoning or reasoning_content.');
@@ -257,7 +258,8 @@ function parseModelMappingForm(body) {
     contextLimit: nonNegativeIntegerOrNull(body.context_limit, 'Context limit'),
     outputLimit: nonNegativeIntegerOrNull(body.output_limit, 'Output limit'),
     supportsTextInput: capabilityValue('supports_text_input'),
-    supportsImageInput: capabilityValue('supports_image_input'),
+    supportsImageInput,
+    maxImages: supportsImageInput ? (nonNegativeIntegerOrNull(body.max_images, 'Max images per request') || null) : null,
     supportsTools: capabilityValue('supports_tools'),
     supportsReasoning,
     reasoningHistoryField: reasoningHistoryField || null,
@@ -291,7 +293,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
     db.prepare(`
       UPDATE provider_models
       SET public_model = ?, upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
-          supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?,
+          supports_text_input = ?, supports_image_input = ?, max_images = ?, supports_tools = ?, supports_reasoning = ?,
           reasoning_efforts = ?, default_reasoning_effort = ?, reasoning_history_field = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -303,6 +305,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       form.outputLimit,
       form.supportsTextInput,
       form.supportsImageInput,
+      form.maxImages,
       form.supportsTools,
       form.supportsReasoning,
       form.reasoningEfforts,
@@ -316,9 +319,9 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
     db.prepare(`
       INSERT INTO provider_models
         (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-         supports_text_input, supports_image_input, supports_tools, supports_reasoning,
+         supports_text_input, supports_image_input, max_images, supports_tools, supports_reasoning,
          reasoning_efforts, default_reasoning_effort, reasoning_history_field, supports_chat_template_kwargs, supports_parallel_tools)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       providerId,
       form.publicModel,
@@ -328,6 +331,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       form.outputLimit,
       form.supportsTextInput,
       form.supportsImageInput,
+      form.maxImages,
       form.supportsTools,
       form.supportsReasoning,
       form.reasoningEfforts,
@@ -520,6 +524,7 @@ const MODEL_ALIGNMENT_FIELDS = [
   ['outputLimit', 'Output limit'],
   ['text', 'Text input'],
   ['image', 'Image input'],
+  ['maxImages', 'Max images per request'],
   ['tools', 'Tool calling'],
   ['reasoning', 'Reasoning'],
   ['reasoningEfforts', 'Reasoning efforts'],
@@ -532,6 +537,7 @@ const MODEL_ALIGNMENT_COLUMNS = [
   'output_limit',
   'supports_text_input',
   'supports_image_input',
+  'max_images',
   'supports_tools',
   'supports_reasoning',
   'reasoning_efforts',
@@ -546,6 +552,7 @@ function providerModelContract(model = {}) {
     outputLimit: Number(model.output_limit || getSetting('default_model_output_limit')),
     text: Number(model.supports_text_input) === 1,
     image: Number(model.supports_image_input) === 1,
+    maxImages: Number(model.supports_image_input) === 1 && Number(model.max_images) > 0 ? Number(model.max_images) : null,
     tools: Number(model.supports_tools) === 1,
     reasoning: Number(model.supports_reasoning) === 1,
     reasoningEfforts: parseReasoningEfforts(model.reasoning_efforts),
@@ -562,6 +569,7 @@ function alignmentValue(value, field) {
     return value.length ? value.join(', ') : 'none selectable';
   }
   if (field === 'defaultReasoningEffort') return value || 'provider default';
+  if (field === 'maxImages') return value === null ? 'unlimited' : String(value);
   return value ? 'supported' : 'not supported';
 }
 
@@ -584,7 +592,7 @@ function modelCapabilitySummary(model) {
   const contract = providerModelContract(model);
   const capabilities = [
     contract.text ? 'Text' : null,
-    contract.image ? 'Images' : null,
+    contract.image ? (contract.maxImages === null ? 'Images' : `Images (max ${contract.maxImages})`) : null,
     contract.tools ? 'Tools' : null,
     contract.parallelTools ? 'Parallel tools' : null,
     contract.reasoning
@@ -697,6 +705,10 @@ function modelMappingFields(provider = {}, model = activeProviderModel(provider.
     <p class="muted">Capabilities are aggregated and published automatically to Codex and OpenCode.</p>
     <input type="hidden" name="supports_text_input" value="0"><label><input name="supports_text_input" type="checkbox" value="1" style="width:auto" ${capability('supports_text_input') ? 'checked' : ''}> Text input</label>
     <input type="hidden" name="supports_image_input" value="0"><label><input name="supports_image_input" type="checkbox" value="1" style="width:auto" ${capability('supports_image_input') ? 'checked' : ''}> Image input</label>
+    <div class="max-images-field">
+      <label>Max images per request <span class="muted" style="display:block;font-weight:400">Blank or 0 means unlimited. Set it to the upstream's own cap (for example vLLM <code>--limit-mm-per-prompt</code>) so oversized requests are rejected before they reach the provider.</span></label>
+      <input name="max_images" type="number" min="0" value="${escapeHtml(model.max_images ?? '')}" placeholder="Unlimited">
+    </div>
     <input type="hidden" name="supports_tools" value="0"><label><input name="supports_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_tools') ? 'checked' : ''}> Tool calling</label>
     <input type="hidden" name="supports_reasoning" value="0"><label><input name="supports_reasoning" type="checkbox" value="1" style="width:auto" ${capability('supports_reasoning') ? 'checked' : ''}> Reasoning</label>
     <fieldset style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0 12px">
@@ -1475,7 +1487,6 @@ router.get('/admin/server', requireAdmin, (req, res) => {
         <label>OpenCode model context limit</label><input name="default_model_context_limit" type="number" value="${escapeHtml(settings.default_model_context_limit)}">
         <label>OpenCode model output limit</label><input name="default_model_output_limit" type="number" value="${escapeHtml(settings.default_model_output_limit)}">
         <label>Max output tokens per request</label><input name="max_tokens_per_request" type="number" value="${escapeHtml(settings.max_tokens_per_request)}">
-        <label>Max images per request</label><input name="max_images_per_request" type="number" value="${escapeHtml(settings.max_images_per_request)}">
         <label>Max image bytes</label><input name="max_image_bytes" type="number" value="${escapeHtml(settings.max_image_bytes)}">
         <label>Max total image bytes</label><input name="max_total_image_bytes" type="number" value="${escapeHtml(settings.max_total_image_bytes)}">
         <label><input name="allow_video_input" type="checkbox" value="true" style="width:auto" ${settings.allow_video_input === 'true' ? 'checked' : ''}> Allow video input</label>
@@ -1510,7 +1521,7 @@ router.get('/admin/server', requireAdmin, (req, res) => {
 
 router.post('/admin/server', requireAdmin, (req, res) => {
   setSetting('public_base_url', req.body.public_base_url || '');
-  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute', 'max_concurrent_requests_per_user', 'max_images_per_request', 'max_image_bytes', 'max_total_image_bytes']) {
+  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute', 'max_concurrent_requests_per_user', 'max_image_bytes', 'max_total_image_bytes']) {
     setSetting(key, req.body[key]);
   }
   setSetting('allow_video_input', req.body.allow_video_input ? 'true' : 'false');

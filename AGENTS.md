@@ -85,6 +85,7 @@ Test suite at `test/` uses a local mock DeepSeek server. Run with `npm test`. Ex
 - **Quota reservations** for in-flight requests and the per-user concurrency limit (`MAX_CONCURRENT_REQUESTS_PER_USER`) are in-memory and assume a single server process
 - **Token estimation** is character-based (`Math.ceil(text.length / 4)`) — not a real tokenizer. It feeds quota reservations, so a request whose real input exceeds the estimate can overshoot the quota by that difference
 - **Media** must be inline `data:` URLs; remote URLs are rejected so inference hosts never fetch student-supplied addresses
+- **Image count limits** are per provider model (`provider_models.max_images`, NULL = unlimited, only editable while Image input is enabled). The proxy skips providers whose cap is too low and returns 413 `too_many_images` when none fits; byte limits stay global server settings
 - **Internet-facing servers** (`NODE_ENV=production` or an HTTPS `PUBLIC_BASE_URL`) refuse to start with default or placeholder `ADMIN_PASSWORD`/`SESSION_SECRET`
 - **Cross-site POSTs** to cookie-authenticated routes are rejected by `middleware/sameOrigin.js`; large JSON bodies are only parsed on the completion routes after auth (`middleware/bodyParsers.js`)
 - **API keys** and **invite tokens** are only shown once at creation; API keys are stored as SHA-256 digests (older bcrypt hashes still verify), invite nonces as digests, and pending one-time secrets live in process memory (`utils/pendingSecrets.js`), never in the session store
@@ -110,6 +111,7 @@ cd proxyServer/proxmox
 ```
 
 Default port is `3000`. The script:
+- Backs up `data/` and `settings.env`, then runs the release's migrations on a copy and cancels if any existing record would change. Allowed exceptions: new columns that stay NULL, and settings keys listed in `RETIRED_SETTINGS`
 - Archives the committed `proxyServer/` subtree without a directory wrapper (excluding deployment tooling, private settings, `node_modules/`, and `data/`); sibling `docker/` is outside its scope
 - SCPs the zip to the remote host
 - Stops the existing pm2 process

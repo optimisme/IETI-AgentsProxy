@@ -598,19 +598,30 @@ test('multimodal image base64 is forwarded and usage comes from provider', async
   assert.deepEqual(usage, { input_tokens: 5, output_tokens: 2, total_tokens: 7, status: 'success' });
 });
 
-test('multimodal validation rejects too many images and video', async () => {
+test('multimodal validation applies the model image cap and rejects video', async () => {
   const student = createStudent();
   const image = { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('image').toString('base64')}` } };
+  const fiveImages = { model: 'active-model', messages: [{ role: 'user', content: [{ type: 'text', text: 'Images' }, image, image, image, image, image] }] };
 
-  const tooMany = await request(app)
+  assert.equal(db.prepare("SELECT max_images FROM provider_models WHERE public_model = 'active-model'").get().max_images, null);
+  await request(app)
     .post('/v1/chat/completions')
     .set('Authorization', `Bearer ${student.key}`)
-    .send({
-      model: 'active-model',
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Images' }, image, image, image, image, image] }]
-    })
-    .expect(413);
-  assert.equal(tooMany.body.error.code, 'too_many_images');
+    .send(fiveImages)
+    .expect(200);
+
+  db.prepare("UPDATE provider_models SET max_images = 4 WHERE public_model = 'active-model'").run();
+  try {
+    const tooMany = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${student.key}`)
+      .send(fiveImages)
+      .expect(413);
+    assert.equal(tooMany.body.error.code, 'too_many_images');
+    assert.match(tooMany.body.error.message, /at most 4 images/);
+  } finally {
+    db.prepare("UPDATE provider_models SET max_images = NULL WHERE public_model = 'active-model'").run();
+  }
 
   const video = await request(app)
     .post('/v1/chat/completions')
@@ -1735,6 +1746,53 @@ test('admin provider keep-warm dropdown defaults to Never and saves both interva
   });
   const clearedEdit = await agent.get(`/admin/providers/${defaultProvider.id}`).expect(200);
   assert.equal(selectedInterval(clearedEdit.text), 0);
+});
+
+test('admin model mapping stores a per-model image cap only while image input is enabled', async (t) => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const form = {
+    slug: `max-images-${Date.now()}`,
+    name: 'Max Images',
+    base_url: mockBaseUrl,
+    api_key: 'local-key',
+    enabled: '1',
+    public_model: 'max-images-alias',
+    upstream_model: 'max-images-upstream',
+    context_limit: '8192',
+    output_limit: '1024',
+    supports_image_input: ['0', '1']
+  };
+  await agent.post('/admin/providers').type('form').send(form).expect(302);
+  const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get(form.slug);
+  t.after(() => db.prepare('DELETE FROM providers WHERE id = ?').run(provider.id));
+  const maxImages = () => db.prepare('SELECT max_images FROM provider_models WHERE provider_id = ?').get(provider.id).max_images;
+  assert.equal(maxImages(), null, 'new models accept unlimited images');
+
+  const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200);
+  assert.match(edit.text, /<div class="max-images-field">[\s\S]*?name="max_images"[^>]*value=""/);
+
+  await agent.post(`/admin/providers/${provider.id}`).type('form').send({ ...form, max_images: '5' }).expect(302);
+  assert.equal(maxImages(), 5);
+  assert.match((await agent.get(`/admin/providers/${provider.id}`).expect(200)).text, /name="max_images"[^>]*value="5"/);
+  assert.match((await agent.get('/admin/providers').expect(200)).text, /Images \(max 5\)/);
+
+  await agent.post(`/admin/providers/${provider.id}`).type('form').send({ ...form, max_images: '0' }).expect(302);
+  assert.equal(maxImages(), null, '0 means unlimited');
+
+  await agent.post(`/admin/providers/${provider.id}`).type('form').send({ ...form, supports_image_input: '0', max_images: '3' }).expect(302);
+  assert.equal(maxImages(), null, 'the cap is cleared when image input is disabled');
+
+  await agent.post(`/admin/providers/${provider.id}`).type('form').send({ ...form, max_images: '-1' }).expect(400);
+  assert.equal(maxImages(), null);
+});
+
+test('server settings no longer offer a global image count limit', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const page = await agent.get('/admin/server').expect(200);
+  assert.doesNotMatch(page.text, /max_images_per_request|Max images per request/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key = 'max_images_per_request'").get().n, 0);
 });
 
 test('admin provider keep-warm rejects unsupported intervals before writing provider or mapping changes', async (t) => {

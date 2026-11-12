@@ -93,7 +93,7 @@ test.beforeEach(() => {
   db.exec('DELETE FROM usage_logs; DELETE FROM users; DELETE FROM groups;');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('false', 'maintenance_mode');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('1000', 'max_requests_per_minute');
-  db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('4', 'max_images_per_request');
+  db.prepare('UPDATE provider_models SET max_images = 4').run();
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('8000000', 'max_image_bytes');
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('16000000', 'max_total_image_bytes');
   db.prepare('UPDATE provider_models SET supports_reasoning = 0, reasoning_efforts = NULL, default_reasoning_effort = NULL WHERE provider_id = ?').run(providerId);

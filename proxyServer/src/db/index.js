@@ -174,6 +174,7 @@ function initSchema(database) {
       output_limit INTEGER,
       supports_text_input INTEGER NOT NULL DEFAULT 1,
       supports_image_input INTEGER NOT NULL DEFAULT 1,
+      max_images INTEGER,
       supports_tools INTEGER NOT NULL DEFAULT 1,
       supports_reasoning INTEGER NOT NULL DEFAULT 1,
       reasoning_efforts TEXT,
@@ -303,6 +304,8 @@ function migrateSchema(database) {
   addProviderModelColumn('default_reasoning_effort', 'TEXT');
   addProviderModelColumn('supports_chat_template_kwargs', 'INTEGER NOT NULL DEFAULT 0');
   addProviderModelColumn('supports_parallel_tools', 'INTEGER NOT NULL DEFAULT 1');
+  // NULL means no proxy-side image cap for the model.
+  addProviderModelColumn('max_images', 'INTEGER');
   for (const name of ['input_eur_per_1m', 'output_eur_per_1m']) {
     if (providerModelColumns.includes(name)) database.exec(`ALTER TABLE provider_models DROP COLUMN ${name}`);
   }
@@ -424,7 +427,6 @@ function seedSettings(database) {
     maintenance_mode: 'false',
     max_tokens_per_request: String(config.maxTokensPerRequest),
     max_requests_per_minute: String(config.maxRequestsPerMinute),
-    max_images_per_request: String(config.maxImagesPerRequest),
     max_image_bytes: String(config.maxImageBytes),
     max_total_image_bytes: String(config.maxTotalImageBytes),
     allow_video_input: String(config.allowVideoInput)
@@ -433,6 +435,8 @@ function seedSettings(database) {
   for (const [key, value] of Object.entries(defaults)) {
     insert.run(key, value);
   }
+  // Image count limits now live on each provider model (provider_models.max_images).
+  database.prepare("DELETE FROM settings WHERE key = 'max_images_per_request'").run();
 
   // An environment value is deployment configuration and remains authoritative
   // even when the database was created before PUBLIC_BASE_URL was added.

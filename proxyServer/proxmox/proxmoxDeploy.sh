@@ -215,6 +215,8 @@ RUNTIME_BACKUP_DIR="$(mktemp -d "$HOME/proxy-deploy-backups/$(date -u +%Y%m%dT%H
 rsync -a "$APP_DIR/data" "$APP_DIR/settings.env" "$RUNTIME_BACKUP_DIR/"
 python3 - "$APP_DIR" "$RUNTIME_BACKUP_DIR" "$DATABASE_RELATIVE" <<'PYTHON'
 import hashlib, json, pathlib, sqlite3, sys
+# Settings keys a release migration deletes on purpose (provider_models.max_images replaced the first).
+RETIRED_SETTINGS = {'max_images_per_request'}
 app, backup = map(pathlib.Path, sys.argv[1:3])
 protected = [app / 'settings.env', app / 'data', *(app / 'data').rglob('*')]
 assert not any(p.is_symlink() for p in protected), 'Runtime symlinks require independent target backups; deployment cancelled'
@@ -239,11 +241,14 @@ for table in tables:
     rows = []
     for row in cursor:
         values = dict(zip(columns, row))
+        # Retired settings are deleted by release migrations; they are not compared.
+        if table == 'settings' and values.get('key') in RETIRED_SETTINGS:
+            continue
         # Startup refreshes this setting's timestamp even if its value is unchanged.
         if table == 'settings' and values.get('key') == 'public_base_url':
             values.pop('updated_at', None)
         rows.append(json.dumps(values, sort_keys=True, default=lambda v: v.hex()))
-    states[table] = {'count': len(rows), 'sha256': hashlib.sha256('\n'.join(sorted(rows)).encode()).hexdigest()}
+    states[table] = {'columns': columns, 'count': len(rows), 'sha256': hashlib.sha256('\n'.join(sorted(rows)).encode()).hexdigest()}
 (backup / 'database-before.json').write_text(json.dumps(states, indent=2))
 db.close()
 print('Consistent runtime backup verified; SQLite integrity and foreign keys are valid.')
@@ -268,24 +273,38 @@ try {
 NODE
 python3 - "$VALIDATION_DIR/$DATABASE_RELATIVE" "$RUNTIME_BACKUP_DIR/database-before.json" <<'PYTHON'
 import hashlib, json, pathlib, sqlite3, sys
+# Settings keys a release migration deletes on purpose (provider_models.max_images replaced the first).
+RETIRED_SETTINGS = {'max_images_per_request'}
 db = sqlite3.connect(pathlib.Path(sys.argv[1]).as_uri() + '?mode=ro', uri=True)
 assert db.execute('PRAGMA integrity_check').fetchall() == [('ok',)], 'Release startup failed SQLite integrity validation'
 assert db.execute('PRAGMA foreign_key_check').fetchall() == [], 'Release startup failed SQLite foreign key validation'
 states = {}
 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+before = json.loads(pathlib.Path(sys.argv[2]).read_text())
 for table in tables:
     quoted = '"' + table.replace('"', '""') + '"'
     cursor = db.execute('SELECT * FROM ' + quoted)
     columns = [c[0] for c in cursor.description]
+    # A migration may add columns, but only empty (all NULL) ones: existing data
+    # is then compared on the columns that existed before the release.
+    kept = before.get(table, {}).get('columns', columns)
+    added = [column for column in columns if column not in kept]
     rows = []
     for row in cursor:
         values = dict(zip(columns, row))
+        assert all(values[column] is None for column in added), f'Release startup filled new column(s) {added} in {table}; deployment cancelled'
+        if table == 'settings' and values.get('key') in RETIRED_SETTINGS:
+            continue
+        values = {column: values[column] for column in columns if column in kept}
         if table == 'settings' and values.get('key') == 'public_base_url':
             values.pop('updated_at', None)
         rows.append(json.dumps(values, sort_keys=True, default=lambda v: v.hex()))
-    states[table] = {'count': len(rows), 'sha256': hashlib.sha256('\n'.join(sorted(rows)).encode()).hexdigest()}
+    states[table] = {'columns': [column for column in columns if column in kept], 'count': len(rows), 'sha256': hashlib.sha256('\n'.join(sorted(rows)).encode()).hexdigest()}
 db.close()
-assert states == json.loads(pathlib.Path(sys.argv[2]).read_text()), 'Release startup would change production records; deployment cancelled'
+for table, state in states.items():
+    if table in before and state['columns'] != before[table]['columns']:
+        raise AssertionError(f'Release startup removed or reordered columns in {table}; deployment cancelled')
+assert {t: {k: v for k, v in s.items() if k != 'columns'} for t, s in states.items()} == {t: {k: v for k, v in s.items() if k != 'columns'} for t, s in before.items()}, 'Release startup would change production records; deployment cancelled'
 print('New release startup preserves every database table and record on the isolated backup.')
 PYTHON
 rm -rf "$VALIDATION_DIR"
