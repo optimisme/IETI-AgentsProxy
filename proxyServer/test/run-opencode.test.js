@@ -50,6 +50,11 @@ function assertNoRuntimeFiles(f, before, beforeDirectories) {
   }
 }
 
+// The IETI provider entry in either OpenCode configuration format.
+function ietiProvider(config) {
+  return config.providers?.['ieti-agents'] || config.provider?.['ieti-agents'];
+}
+
 function capabilities(models = [{}]) {
   return {
     object: 'ieti.model_capabilities.list',
@@ -87,7 +92,7 @@ test('ps1: installs using PowerShell built-ins with no external helper commands 
   f.env.PROXY_AGENTS_KEY = 'ieti_sk_replacement';
   await f.launch();
   assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
-  assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
+  assert.equal(f.read().providers['ieti-agents'].settings.baseURL, f.baseURL);
 });
 
 test('sh: installs with Python and system utilities while Node and package tools are absent from PATH', async t => {
@@ -110,7 +115,7 @@ test('sh: installs with Python and system utilities while Node and package tools
   }
   await f.launch();
   assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
-  assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
+  assert.equal(f.read().providers['ieti-agents'].settings.baseURL, f.baseURL);
   assert.deepEqual(f.state.requests, [{ path: '/course/v1/model-capabilities', authorization: 'Bearer ieti_sk_replacement' }]);
   for (const module of ['json', 'http']) assert.equal(fs.readFileSync(path.join(f.cwd, `${module}.py`), 'utf8'), shadowSource);
 });
@@ -151,6 +156,8 @@ async function fixture(t, platform) {
   const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot, TMPDIR: temporary, PROXY_AGENTS_BASE_URL: `${baseURL}/` };
   delete env.PROXY_AGENTS_KEY;
   delete env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS;
+  // Tests choose the configuration format; detection has its own tests.
+  env.IETI_OPENCODE_VERSION = '2';
   if (platform === 'ps1') {
     // The PowerShell host creates its own startup cache even for an empty run.
     // Establish that baseline before checking files created by the installer.
@@ -193,8 +200,9 @@ async function expectFailure(f, pattern) {
 for (const platform of ['sh', 'ps1']) {
   const skip = platform === 'ps1' && !hasPowerShell && 'PowerShell is unavailable; set POWERSHELL_BIN to exercise native Windows-compatible flow.';
 
-  test(`${platform}: updates global model capabilities while preserving unrelated settings and the saved key`, { skip }, async t => {
+  test(`${platform}: OpenCode 1 format updates model capabilities while preserving unrelated settings and the saved key`, { skip }, async t => {
     const f = await fixture(t, platform);
+    f.env.IETI_OPENCODE_VERSION = '1';
     const original = {
       $schema: 'https://opencode.ai/config.json',
       provider: {
@@ -286,15 +294,15 @@ for (const platform of ['sh', 'ps1']) {
     f.write(f.keyPath, 'ieti_sk_saved\n');
     f.state.catalog = capabilities([{ id: 'changing-model', reasoning: true, reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low' }]);
     await f.launch();
-    assert.deepEqual(f.read().provider['ieti-agents'].models['changing-model'].interleaved, { field: 'reasoning_content' });
+    assert.deepEqual(f.read().providers['ieti-agents'].models['changing-model'].compatibility, { reasoningField: 'reasoning_content' });
     f.state.catalog = capabilities([{ id: 'changing-model', reasoning: false, tools: false }]);
     await f.launch();
-    const model = f.read().provider['ieti-agents'].models['changing-model'];
-    assert.equal(model.interleaved, undefined);
-    assert.equal(model.options, undefined);
-    assert.deepEqual(model.variants, {});
-    assert.equal(model.tool_call, false);
-    assert.equal(model.reasoning, false);
+    const model = f.read().providers['ieti-agents'].models['changing-model'];
+    assert.equal(model.compatibility, undefined);
+    assert.equal(model.settings, undefined);
+    assert.equal(model.variants, undefined);
+    assert.equal(model.capabilities.tools, false);
+    assert.deepEqual(model.capabilities.reasoning, { supported: false });
   });
 
   test(`${platform}: failed replacement auth preserves original config and key bytes`, { skip }, async t => {
@@ -367,6 +375,138 @@ for (const platform of ['sh', 'ps1']) {
     }
   });
 
+  test(`${platform}: OpenCode 2 format lists exactly the published reasoning levels and moves the old provider entry`, { skip }, async t => {
+    const f = await fixture(t, platform);
+    const original = {
+      $schema: 'https://opencode.ai/config.json',
+      provider: {
+        other: { npm: '@ai-sdk/openai-compatible', models: { keep: {} } },
+        'ieti-agents': {
+          custom_property: 'not valid in OpenCode 2',
+          options: { customOption: 'keep-me', baseURL: 'https://old.example/v1', chunkTimeout: 600000 },
+          models: { obsolete: { name: 'Remove me' } }
+        }
+      },
+      model: 'ieti-agents/obsolete',
+      permission: { bash: 'ask' }
+    };
+    f.write(f.configPath, original); f.write(f.keyPath, 'ieti_sk_saved\n');
+    f.state.catalog = capabilities([
+      {
+        id: 'Qwen36', context: 75000, output: 8192, image: true, reasoning: true,
+        reasoningEfforts: ['none', 'low', 'medium', 'xhigh'], defaultReasoningEffort: 'low'
+      },
+      { id: 'plain', reasoning: false, tools: false }
+    ]);
+    const output = await f.launch();
+    assert.match(output.stdout, /OpenCode 2 configuration format/);
+    const config = f.read();
+    assert.deepEqual(config.provider, { other: original.provider.other });
+    assert.deepEqual(config.permission, original.permission);
+    assert.equal(config.model, 'ieti-agents/Qwen36');
+    const provider = config.providers['ieti-agents'];
+    assert.deepEqual(provider, {
+      name: 'IETI Agents',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {
+        customOption: 'keep-me',
+        baseURL: f.baseURL,
+        apiKey: `{file:${f.keyPath.replaceAll('\\', '/')}}`,
+        timeout: 900000
+      },
+      models: {
+        Qwen36: {
+          limit: { context: 75000, output: 8192 },
+          capabilities: { tools: true, input: ['text', 'image'], output: ['text'], reasoning: { supported: true } },
+          compatibility: { reasoningField: 'reasoning_content' },
+          variants: ['none', 'low', 'medium', 'xhigh'].map(id => ({ id, settings: { reasoningEffort: id } })),
+          settings: { reasoningEffort: 'low' }
+        },
+        plain: {
+          limit: { context: 32768, output: 8192 },
+          capabilities: { tools: false, input: ['text'], output: ['text'], reasoning: { supported: false } }
+        }
+      }
+    });
+
+    f.env.IETI_OPENCODE_VERSION = '1';
+    await f.launch();
+    const downgraded = f.read();
+    assert.equal(downgraded.providers, undefined);
+    assert.equal(downgraded.provider['ieti-agents'].options.customOption, 'keep-me');
+    assert.equal(downgraded.provider['ieti-agents'].npm, '@ai-sdk/openai-compatible');
+    assert.deepEqual(downgraded.provider['ieti-agents'].models.Qwen36.variants.high, { disabled: true });
+  });
+
+  test(`${platform}: the configuration format follows the installed OpenCode version`, {
+    skip: skip || (process.platform === 'win32' && 'The OpenCode fixtures use POSIX command names.')
+  }, async t => {
+    const f = await fixture(t, platform);
+    f.write(f.keyPath, 'ieti_sk_saved\n');
+    delete f.env.IETI_OPENCODE_VERSION;
+    f.env.XDG_STATE_HOME = path.join(f.root, '.local', 'state');
+    delete f.env.XDG_DATA_HOME;
+    const bin = path.join(f.root, 'fake-bin');
+    const marker = path.join(f.root, 'opencode-was-run');
+    // The scripts read the version from files; running OpenCode would create the marker.
+    f.write(path.join(bin, 'opencode'), `#!/bin/sh\ntouch '${marker}'\necho "opencode v9.9.9"\n`);
+    fs.chmodSync(path.join(bin, 'opencode'), 0o755);
+    const npmPackage = version => f.write(path.join(bin, 'node_modules', 'opencode-ai', 'package.json'),
+      JSON.stringify({ name: 'opencode-ai', version }));
+    // Hide any real OpenCode on this machine so only the fixtures are found.
+    const withoutOpenCode = f.env.PATH.split(path.delimiter)
+      .filter(directory => !fs.existsSync(path.join(directory, 'opencode'))).join(path.delimiter);
+    f.env.PATH = `${bin}${path.delimiter}${withoutOpenCode}`;
+
+    npmPackage('1.19.5');
+    let output = await f.launch();
+    assert.match(output.stdout, /OpenCode 1 configuration format \(found OpenCode 1\.19\.5\)/);
+    assert.ok(f.read().provider['ieti-agents']);
+    assert.equal(f.read().providers, undefined);
+
+    npmPackage('2.2.7');
+    output = await f.launch();
+    assert.match(output.stdout, /OpenCode 2 configuration format \(found OpenCode 2\.2\.7\)/);
+    assert.ok(f.read().providers['ieti-agents']);
+    assert.equal(f.read().provider, undefined);
+
+    // An install with no version on disk gets the format both majors load.
+    fs.rmSync(path.join(bin, 'node_modules'), { recursive: true });
+    output = await f.launch();
+    assert.match(output.stdout, /OpenCode 1 configuration format \(found OpenCode of unknown version/);
+
+    fs.rmSync(bin, { recursive: true });
+    f.env.PATH = withoutOpenCode;
+    // The official installer leaves a bare binary whose build flags name the version.
+    const installed = path.join(f.root, '.opencode', 'bin', 'opencode');
+    f.write(installed, `#!/bin/sh\ntouch '${marker}'\n#\0--smol --user-agent=opencode/latest/1.19.5/cli\0`);
+    fs.chmodSync(installed, 0o755);
+    output = await f.launch();
+    assert.match(output.stdout, /OpenCode 1 configuration format \(found OpenCode 1\.19\.5\)/);
+    fs.rmSync(path.join(f.root, '.opencode'), { recursive: true });
+
+    const service = path.join(f.env.XDG_STATE_HOME, 'opencode', 'service.json');
+    f.write(service, JSON.stringify({ id: 'x', version: '2.2.7', password: 'service-secret' }));
+    output = await f.launch();
+    assert.match(output.stdout, /OpenCode 2 configuration format \(found OpenCode 2\.2\.7\)/);
+    assert.doesNotMatch(output.stdout + output.stderr, /service-secret/);
+    fs.rmSync(service);
+
+    const desktop = path.join(f.root, 'Library', 'Application Support', 'ai.opencode.desktop', 'cli');
+    fs.mkdirSync(path.join(desktop, '1.19.5-arm64'), { recursive: true });
+    fs.mkdirSync(path.join(desktop, '2.2.7-arm64'), { recursive: true });
+    output = await f.launch();
+    assert.match(output.stdout, /OpenCode 2 configuration format \(found OpenCode Desktop 2\.2\.7\)/);
+    fs.rmSync(path.join(f.root, 'Library'), { recursive: true });
+
+    output = await f.launch();
+    assert.match(output.stdout, /OpenCode 2 configuration format \(OpenCode was not found/);
+    assert.equal(fs.existsSync(marker), false);
+
+    f.env.IETI_OPENCODE_VERSION = '3';
+    await expectFailure(f, /version must be 1 or 2/i);
+  });
+
   test(`${platform}: supports an existing JSONC file without creating a competing JSON configuration`, { skip }, async t => {
     const f = await fixture(t, platform);
     const jsonc = `${f.configPath}c`;
@@ -376,7 +516,7 @@ for (const platform of ['sh', 'ps1']) {
     assert.equal(f.read(jsonc).mcp.url, 'https://example.test/a,//b');
     assert.equal(f.read(jsonc).model, 'ieti-agents/model-1');
     assert.equal(fs.existsSync(f.configPath), false);
-    assert.equal(f.read(jsonc).provider['ieti-agents'].options.apiKey, `{file:${f.keyPath.replaceAll('\\', '/')}}`);
+    assert.equal(f.read(jsonc).providers['ieti-agents'].settings.apiKey, `{file:${f.keyPath.replaceAll('\\', '/')}}`);
   });
 
   test(`${platform}: rejects ambiguous or malformed existing configuration before mutation`, { skip }, async t => {
@@ -398,6 +538,7 @@ for (const platform of ['sh', 'ps1']) {
     const f = await fixture(t, platform);
     const original = {
       provider: { 'ieti-agents': { models: { old: {} } }, other: { models: { keep: {} } } },
+      providers: { 'ieti-agents': { models: { old: {} } }, next: { models: { keep: {} } } },
       model: 'ieti-agents/old', small_model: 'other/keep',
       enabled_providers: ['other', 'ieti-agents'], disabled_providers: ['ieti-agents', 'unused'],
       agent: { custom: { model: 'ieti-agents/old', temperature: 0.4 }, other: { model: 'other/keep' } },
@@ -409,6 +550,7 @@ for (const platform of ['sh', 'ps1']) {
     await f.launch('uninstall');
     const config = f.read();
     assert.deepEqual(config.provider, { other: original.provider.other });
+    assert.deepEqual(config.providers, { next: original.providers.next });
     assert.equal(config.model, undefined);
     assert.equal(config.small_model, 'other/keep');
     assert.deepEqual(config.enabled_providers, ['other']);
@@ -430,7 +572,7 @@ for (const platform of ['sh', 'ps1']) {
     f.write(f.script, script); f.write(f.keyPath, 'ieti_sk_saved\n');
     delete f.env.PROXY_AGENTS_BASE_URL;
     await f.launch();
-    assert.equal(f.read().provider['ieti-agents'].options.baseURL, f.baseURL);
+    assert.equal(f.read().providers['ieti-agents'].settings.baseURL, f.baseURL);
     assert.deepEqual(f.state.requests, [{ path: '/course/v1/model-capabilities', authorization: 'Bearer ieti_sk_saved' }]);
   });
 

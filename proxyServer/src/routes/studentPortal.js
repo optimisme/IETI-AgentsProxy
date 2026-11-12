@@ -126,7 +126,12 @@ function getClientScriptCommand(req, filename) {
   return `$p=Join-Path $env:TEMP ('ieti-set-agents-server-'+[Guid]::NewGuid().ToString('N')+'.ps1'); try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop -Uri ${powershellQuote(scriptUrl)} -OutFile $p; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`;
 }
 
-function getModelEntries(models) {
+// Model entries in the OpenCode 2 configuration format, or the OpenCode 1
+// format when major is 1. The setup scripts write the same shapes.
+const OPENCODE2_PACKAGE = '@opencode/ai/providers/openai-compatible';
+const OPENCODE1_PACKAGE = '@ai-sdk/openai-compatible';
+
+function getModelEntries(models, major = 2) {
   const configured = new Map(getEnabledModelEntries().map((model) => [model.publicModel, model]));
   const context = Number(getSetting('default_model_context_limit', config.defaultModelContextLimit));
   const output = Number(getSetting('default_model_output_limit', OPENCODE_DEFAULT_OUTPUT_LIMIT));
@@ -140,6 +145,32 @@ function getModelEntries(models) {
     const defaultReasoningEffort = reasoningEfforts.includes(capabilities.defaultReasoningEffort)
       ? capabilities.defaultReasoningEffort
       : null;
+    const inputs = [
+      ...(capabilities.text === false ? [] : ['text']),
+      ...(capabilities.image === false ? [] : ['image'])
+    ];
+    if (major >= 2) {
+      const reasoning = Boolean(capabilities.reasoning ?? true);
+      // Variants are listed explicitly: some OpenCode 2 releases keep only
+      // low, medium and high from capabilities.reasoning.effort.
+      return [
+        model.id,
+        {
+          limit,
+          capabilities: {
+            tools: capabilities.tools ?? true,
+            input: inputs,
+            output: ['text'],
+            reasoning: { supported: reasoning }
+          },
+          ...(reasoning ? {
+            compatibility: { reasoningField: 'reasoning_content' },
+            variants: reasoningEfforts.map((effort) => ({ id: effort, settings: { reasoningEffort: effort } }))
+          } : {}),
+          ...(defaultReasoningEffort ? { settings: { reasoningEffort: defaultReasoningEffort } } : {})
+        }
+      ];
+    }
     const variants = capabilities.reasoning
       ? Object.fromEntries(REASONING_EFFORTS.map((effort) => [
           effort,
@@ -153,13 +184,7 @@ function getModelEntries(models) {
         tool_call: capabilities.tools ?? true,
         reasoning: capabilities.reasoning ?? true,
         ...(capabilities.reasoning ? { interleaved: { field: 'reasoning_content' } } : {}),
-        modalities: {
-          input: [
-            ...(capabilities.text === false ? [] : ['text']),
-            ...(capabilities.image === false ? [] : ['image'])
-          ],
-          output: ['text']
-        },
+        modalities: { input: inputs, output: ['text'] },
         variants,
         ...(defaultReasoningEffort ? { options: { reasoningEffort: defaultReasoningEffort } } : {})
       }
@@ -201,10 +226,24 @@ function getActiveModelsForUser(user) {
   return [...byAlias.values()];
 }
 
-function buildOpenCodeProviderBlock({ req, models, apiKey }) {
+function buildOpenCodeProviderBlock({ req, models, apiKey, major = 2 }) {
+  if (major >= 2) {
+    return {
+      'ieti-agents': {
+        name: 'IETI Agents',
+        package: OPENCODE2_PACKAGE,
+        settings: {
+          baseURL: getNormalizedRequestBaseUrl(req),
+          apiKey,
+          timeout: 900000
+        },
+        models: getModelEntries(models, 2)
+      }
+    };
+  }
   return {
     'ieti-agents': {
-      npm: '@ai-sdk/openai-compatible',
+      npm: OPENCODE1_PACKAGE,
       name: 'IETI Agents',
       options: {
         baseURL: getNormalizedRequestBaseUrl(req),
@@ -212,16 +251,16 @@ function buildOpenCodeProviderBlock({ req, models, apiKey }) {
         timeout: 900000,
         chunkTimeout: 600000
       },
-      models: getModelEntries(models)
+      models: getModelEntries(models, 1)
     }
   };
 }
 
-function buildOpenCodeConfig({ req, models, apiKey }) {
+function buildOpenCodeConfig({ req, models, apiKey, major = 2 }) {
   const selectedModel = models[0]?.id || '';
   return {
     $schema: 'https://opencode.ai/config.json',
-    provider: buildOpenCodeProviderBlock({ req, models, apiKey }),
+    [major >= 2 ? 'providers' : 'provider']: buildOpenCodeProviderBlock({ req, models, apiKey, major }),
     model: selectedModel ? `ieti-agents/${selectedModel}` : ''
   };
 }
@@ -239,7 +278,7 @@ function renderActiveModels(req, models) {
     const reasoningEfforts = capabilities.reasoningEfforts?.length
       ? capabilities.reasoningEfforts.join(', ')
       : (capabilities.reasoning ? 'Provider-managed' : 'Not supported');
-    const inputs = entry.modalities.input.join(', ') || 'None';
+    const inputs = entry.capabilities.input.join(', ') || 'None';
     return `
       <details class="active-model">
         <summary>
@@ -252,12 +291,12 @@ function renderActiveModels(req, models) {
             <div><dt>Base URL</dt><dd><code>${escapeHtml(baseUrl)}</code></dd></div>
             <div><dt>Model ID</dt><dd><code>${escapeHtml(model.id)}</code></dd></div>
             <div><dt>OpenCode model</dt><dd><code>ieti-agents/${escapeHtml(model.id)}</code></dd></div>
-            <div><dt>OpenCode package</dt><dd><code>@ai-sdk/openai-compatible</code></dd></div>
+            <div><dt>OpenCode package</dt><dd><code>${OPENCODE2_PACKAGE}</code> (OpenCode 1: <code>${OPENCODE1_PACKAGE}</code>)</dd></div>
             <div><dt>Context window</dt><dd>${escapeHtml(entry.limit.context)} tokens</dd></div>
             <div><dt>Maximum output</dt><dd>${escapeHtml(entry.limit.output)} tokens</dd></div>
             <div><dt>Input modalities</dt><dd>${escapeHtml(inputs)}</dd></div>
-            <div><dt>Tool calling</dt><dd>${yesNo(entry.tool_call)}</dd></div>
-            <div><dt>Reasoning</dt><dd>${yesNo(entry.reasoning)}</dd></div>
+            <div><dt>Tool calling</dt><dd>${yesNo(entry.capabilities.tools)}</dd></div>
+            <div><dt>Reasoning</dt><dd>${yesNo(entry.capabilities.reasoning.supported)}</dd></div>
             <div><dt>Reasoning efforts</dt><dd>${escapeHtml(reasoningEfforts)}</dd></div>
           </dl>
         </div>
@@ -918,7 +957,9 @@ router.get('/portal/opencode.json', requireApprovedStudentSession, (req, res) =>
   const user = req.portalUser;
   const models = getActiveModelsForUser(user);
   const apiKey = '{file:.secrets/agents_server_key}';
-  const opencodeConfig = buildOpenCodeConfig({ req, models, apiKey });
+  // ?version=1 returns the OpenCode 1 format.
+  const major = String(req.query.version || '') === '1' ? 1 : 2;
+  const opencodeConfig = buildOpenCodeConfig({ req, models, apiKey, major });
 
   res.set({
     'Content-Type': 'application/json; charset=utf-8',

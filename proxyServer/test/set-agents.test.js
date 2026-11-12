@@ -112,7 +112,7 @@ async function fixture(t) {
   const script = path.join(scripts, 'set_agents_opencode.sh');
   fs.writeFileSync(script, fs.readFileSync(path.join(assets, 'set_agents_opencode.sh'), 'utf8').replaceAll('__IETI_DEFAULT_BASE_URL__', baseURL));
   const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: configRoot, TMPDIR: temporary };
-  delete env.PROXY_AGENTS_KEY; delete env.PROXY_AGENTS_BASE_URL; delete env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS;
+  delete env.PROXY_AGENTS_KEY; delete env.PROXY_AGENTS_BASE_URL; delete env.PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS; env.IETI_OPENCODE_VERSION = '2';
   const write = (file, value) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof value === 'string' ? value : `${JSON.stringify(value)}\n`);
@@ -150,7 +150,7 @@ test('interactive first install confirms the embedded server URL and hides API k
   assert.match(result.stdout, new RegExp(f.baseURL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(result.stdout + result.stderr, /ieti_sk_replacement/);
   assert.equal(fs.readFileSync(f.keyPath, 'utf8'), 'ieti_sk_replacement\n');
-  assert.equal(JSON.parse(fs.readFileSync(f.configPath, 'utf8')).provider['ieti-agents'].options.baseURL, f.baseURL);
+  assert.equal(JSON.parse(fs.readFileSync(f.configPath, 'utf8')).providers['ieti-agents'].settings.baseURL, f.baseURL);
   assert.deepEqual(f.state.requests, ['Bearer ieti_sk_replacement']);
 });
 
@@ -162,7 +162,7 @@ test('interactive server URL confirmation accepts a different server before vali
     ['Paste your IETI Agents API key:', 'ieti_sk_replacement\n']
   ]);
   assert.doesNotMatch(result.stdout + result.stderr, /ieti_sk_replacement/);
-  assert.equal(JSON.parse(fs.readFileSync(f.configPath, 'utf8')).provider['ieti-agents'].options.baseURL, f.baseURL);
+  assert.equal(JSON.parse(fs.readFileSync(f.configPath, 'utf8')).providers['ieti-agents'].settings.baseURL, f.baseURL);
   assert.deepEqual(f.state.requests, ['Bearer ieti_sk_replacement']);
 });
 

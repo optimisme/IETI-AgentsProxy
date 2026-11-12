@@ -1,5 +1,6 @@
 [CmdletBinding()]
-param([switch]$SyncOnly, [switch]$Uninstall)
+# -OpenCodeVersion 1 or 2 overrides the detected OpenCode configuration format.
+param([switch]$SyncOnly, [switch]$Uninstall, [string]$OpenCodeVersion = $env:IETI_OPENCODE_VERSION)
 
 $ErrorActionPreference = 'Stop'
 # Downloads replace this assignment with the server's public API URL.
@@ -289,7 +290,7 @@ function Get-ModelCatalog {
   }
 }
 function Convert-CatalogModels {
-  param($Catalog)
+  param($Catalog, [int]$Major = 2)
   if ($Catalog -isnot [System.Collections.IDictionary] -or $Catalog['object'] -cne 'ieti.model_capabilities.list' -or
       $Catalog['schema_version'] -ne 1 -or $Catalog['data'] -isnot [System.Array] -or $Catalog['data'].Length -eq 0) {
     throw 'The authenticated server returned no available models.'
@@ -329,6 +330,26 @@ function Convert-CatalogModels {
         else { $variants[$effort] = [ordered]@{ disabled = $true } }
       }
     }
+    if ($Major -ge 2) {
+      # OpenCode 2 lists exactly these variants. Its capabilities.reasoning.effort
+      # list is not used because some 2.x releases keep only low, medium and high.
+      $model = [ordered]@{
+        limit = [ordered]@{ context = [long]$context; output = [long]$output }
+        capabilities = [ordered]@{
+          tools = $capabilities['tools']; input = [object[]]$inputModalities; output = [object[]]@('text')
+          reasoning = [ordered]@{ supported = $capabilities['reasoning'] }
+        }
+      }
+      if ($capabilities['reasoning']) {
+        $model['compatibility'] = [ordered]@{ reasoningField = 'reasoning_content' }
+        $model['variants'] = [object[]]@($supportedEfforts | ForEach-Object { [ordered]@{ id = $_; settings = [ordered]@{ reasoningEffort = $_ } } })
+        if ($published['default_reasoning_effort'] -cin $supportedEfforts) {
+          $model['settings'] = [ordered]@{ reasoningEffort = $published['default_reasoning_effort'] }
+        }
+      }
+      $models[$id] = $model
+      continue
+    }
     $model = [ordered]@{
       limit = [ordered]@{ context = $context; output = $output }
       tool_call = $capabilities['tools']; reasoning = $capabilities['reasoning']
@@ -343,12 +364,124 @@ function Convert-CatalogModels {
   }
   return ,$models
 }
+function Get-OpenCodeFormat {
+  param([string]$Requested)
+  # Returns the config format to write (1 or 2) and a description of why.
+  if (-not [string]::IsNullOrWhiteSpace($Requested)) {
+    if ($Requested -cnotin @('1', '2')) { throw 'OpenCode version must be 1 or 2 (-OpenCodeVersion or IETI_OPENCODE_VERSION).' }
+    return @([int]$Requested, 'as requested')
+  }
+  # OpenCode is never run: its version is read from files it leaves behind.
+  $found = [System.Collections.Generic.List[object]]::new()
+  # The OpenCode 2 background service records its version; OpenCode 1 has no service.
+  $stateHome = if ([string]::IsNullOrWhiteSpace($env:XDG_STATE_HOME)) { [System.IO.Path]::Combine($HOME, '.local', 'state') } else { $env:XDG_STATE_HOME }
+  try {
+    $servicePath = [System.IO.Path]::Combine($stateHome, 'opencode', 'service.json')
+    if ([System.IO.File]::Exists($servicePath)) {
+      $match = [regex]::Match([string](ConvertFrom-Json ([System.IO.File]::ReadAllText($servicePath))).version, '(\d+)\.\d+\.\d+')
+      if ($match.Success) { $found.Add(@([int]$match.Groups[1].Value, "OpenCode $($match.Value)")) }
+    }
+  } catch { }
+  # npm installs keep a package.json next to the command; Homebrew keeps the version in its path.
+  $command = $null
+  foreach ($directory in ([string]$env:PATH).Split([System.IO.Path]::PathSeparator)) {
+    if ([string]::IsNullOrWhiteSpace($directory) -or $command) { continue }
+    foreach ($name in @('opencode.cmd', 'opencode.exe', 'opencode.ps1', 'opencode')) {
+      $path = [System.IO.Path]::Combine($directory, $name)
+      if ([System.IO.File]::Exists($path)) { $command = $path; break }
+    }
+  }
+  $version = $null
+  if ($command) {
+    $paths = @([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($command), 'node_modules', 'opencode-ai', 'package.json'),
+      [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($command), '..', 'lib', 'node_modules', 'opencode-ai', 'package.json'))
+    try {
+      $target = [string](Get-Item -LiteralPath $command -Force).Target
+      if ($target) { $paths += [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($command), $target) }
+    } catch { }
+    foreach ($path in $paths) {
+      $cellar = [regex]::Match($path, '[\\/]Cellar[\\/]opencode[\\/](\d+\.\d+\.\d+)')
+      if ($cellar.Success) { $version = $cellar.Groups[1].Value; break }
+      try {
+        if (-not $path.EndsWith('package.json') -or -not [System.IO.File]::Exists($path)) { continue }
+        $package = ConvertFrom-Json ([System.IO.File]::ReadAllText($path))
+        if ($package.name -cin @('opencode-ai', 'opencode')) { $version = [string]$package.version; break }
+      } catch { }
+    }
+  }
+  # OpenCode binaries end with their build flags, which include the version
+  # (for example --user-agent=opencode/latest/2.2.7). Only that tail is read.
+  $binaries = @([System.IO.Path]::Combine($HOME, '.opencode', 'bin', 'opencode.exe'), [System.IO.Path]::Combine($HOME, '.opencode', 'bin', 'opencode'))
+  if ($command -and $command -notmatch '\.(cmd|ps1)$') { $binaries = @($command) + $binaries }
+  foreach ($binary in $binaries) {
+    if ($version -or -not [System.IO.File]::Exists($binary)) { continue }
+    try {
+      $stream = [System.IO.File]::OpenRead($binary)
+      try {
+        $length = [Math]::Min($stream.Length, 8MB)
+        $null = $stream.Seek(-$length, [System.IO.SeekOrigin]::End)
+        $buffer = New-Object byte[] $length
+        $read = 0
+        while ($read -lt $length) { $count = $stream.Read($buffer, $read, $length - $read); if ($count -le 0) { break }; $read += $count }
+      } finally { $stream.Dispose() }
+      $tail = [System.Text.Encoding]::GetEncoding(28591).GetString($buffer, 0, $read)
+      $marker = [regex]::Match($tail, '--user-agent=opencode/(?:[^/\s]+/)?(\d+\.\d+\.\d+)')
+      if ($marker.Success) { $version = $marker.Groups[1].Value }
+    } catch { }
+  }
+  $match = [regex]::Match([string]$version, '(\d+)\.\d+\.\d+')
+  if ($match.Success) { $found.Add(@([int]$match.Groups[1].Value, "OpenCode $($match.Value)")) }
+  # The desktop app keeps its bundled CLI in a folder named after its version.
+  $desktop = $null
+  $roots = @($env:APPDATA, $env:LOCALAPPDATA, $env:XDG_DATA_HOME,
+    [System.IO.Path]::Combine($HOME, 'Library', 'Application Support'), [System.IO.Path]::Combine($HOME, '.local', 'share'))
+  foreach ($root in $roots) {
+    if ([string]::IsNullOrWhiteSpace($root)) { continue }
+    $folder = [System.IO.Path]::Combine($root, 'ai.opencode.desktop', 'cli')
+    if (-not [System.IO.Directory]::Exists($folder)) { continue }
+    foreach ($entry in [System.IO.Directory]::GetDirectories($folder)) {
+      $match = [regex]::Match([System.IO.Path]::GetFileName($entry), '^(\d+)\.(\d+)\.(\d+)')
+      if ($match.Success -and (-not $desktop -or [version]$match.Value -gt [version]$desktop.Value)) { $desktop = $match }
+    }
+  }
+  if ($desktop) { $found.Add(@([int]$desktop.Groups[1].Value, "OpenCode Desktop $($desktop.Value)")) }
+  if ($found.Count -eq 0 -and ($command -or [System.IO.File]::Exists([System.IO.Path]::Combine($HOME, '.opencode', 'bin', 'opencode.exe')) -or
+      [System.IO.File]::Exists([System.IO.Path]::Combine($HOME, '.opencode', 'bin', 'opencode')))) {
+    return @(1, 'found OpenCode of unknown version; this format works in OpenCode 1 and 2. For OpenCode 2, rerun with -OpenCodeVersion 2')
+  }
+  if ($found.Count -eq 0) { return @(2, 'OpenCode was not found; assuming OpenCode 2. For OpenCode 1, rerun with -OpenCodeVersion 1') }
+  $names = ($found | ForEach-Object { $_[1] } | Sort-Object -Unique) -join ', '
+  # The OpenCode 1 format also loads in OpenCode 2, so it is used whenever both are installed.
+  $major = 2
+  foreach ($item in $found) { if ($item[0] -lt 2) { $major = 1 } }
+  return @($major, "found $names")
+}
+function Remove-ProviderEntry {
+  param([string]$Key)
+  $container = $Config[$Key]
+  if ($container -isnot [System.Collections.IDictionary] -or -not $container.Contains('ieti-agents')) { return $null }
+  $removed = $container['ieti-agents']
+  $container.Remove('ieti-agents')
+  if ($container.Count -eq 0) { $Config.Remove($Key) }
+  if ($removed -is [System.Collections.IDictionary]) { return ,$removed }
+  return $null
+}
+function Get-ExtraOptions {
+  param($Entry, [string]$Key)
+  $result = New-Map
+  if ($Entry -is [System.Collections.IDictionary] -and $Entry[$Key] -is [System.Collections.IDictionary]) {
+    foreach ($name in @($Entry[$Key].Keys)) {
+      if ($name -cnotin @('baseURL', 'apiKey', 'timeout', 'chunkTimeout')) { $result[$name] = $Entry[$Key][$name] }
+    }
+  }
+  return ,$result
+}
 function Test-ApiKey {
   if ($script:IetiApiKey -cnotmatch '^ieti_sk_[A-Za-z0-9_-]+$') { [Console]::Error.WriteLine('Error: invalid API key format; expected an ieti_sk_ key.'); return 1 }
   try {
     $result = Get-ModelCatalog $script:IetiApiKey
     if ($result.InvalidKey) { [Console]::Error.WriteLine('Error: invalid API key (HTTP 401).'); return 1 }
-    $script:Models = Convert-CatalogModels $result.Catalog
+    $script:Models = Convert-CatalogModels $result.Catalog $script:ConfigFormat
   } catch { [Console]::Error.WriteLine("Error: $($_.Exception.Message)"); return 2 }
   return 0
 }
@@ -403,7 +536,10 @@ public static class IetiNativePermissions {
     catch { throw "Cannot update ${ConfigFile}: $($_.Exception.Message)" }
     if ($Config -isnot [System.Collections.IDictionary]) { throw "Cannot update ${ConfigFile}: expected a JSON object." }
   }
-  $Installed = $OriginalKey.Exists -or ($Config['provider'] -is [System.Collections.IDictionary] -and $Config['provider'].Contains('ieti-agents'))
+  $Installed = $OriginalKey.Exists
+  foreach ($key in @('provider', 'providers')) {
+    if ($Config[$key] -is [System.Collections.IDictionary] -and $Config[$key].Contains('ieti-agents')) { $Installed = $true }
+  }
   $Interactive = $false
   if (-not $SyncOnly) {
     try { $Interactive = -not [Console]::IsInputRedirected }
@@ -420,7 +556,9 @@ public static class IetiNativePermissions {
   }
   if ($Uninstall) {
     $originalJson = ConvertTo-Json -InputObject $Config -Depth 100
-    if ($Config['provider'] -is [System.Collections.IDictionary]) { $Config['provider'].Remove('ieti-agents') }
+    foreach ($key in @('provider', 'providers')) {
+      if ($Config[$key] -is [System.Collections.IDictionary]) { $Config[$key].Remove('ieti-agents') }
+    }
     foreach ($selection in @('model', 'small_model')) {
       if ($Config[$selection] -is [string] -and $Config[$selection].StartsWith('ieti-agents/', [StringComparison]::Ordinal)) { $Config.Remove($selection) }
     }
@@ -438,6 +576,9 @@ public static class IetiNativePermissions {
     Write-Host "Removed IETI Agents from $ConfigFile and removed $KeyFile."
     return
   }
+  $detected = Get-OpenCodeFormat $OpenCodeVersion
+  $script:ConfigFormat = $detected[0]
+  Write-Host "Writing the OpenCode $($script:ConfigFormat) configuration format ($($detected[1]))."
   Add-Type -AssemblyName System.Net.Http
   if ($OnWindows) { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 }
   $TimeoutSeconds = 30
@@ -477,16 +618,38 @@ public static class IetiNativePermissions {
     } else { Read-NewKey }
   }
   if (-not $Config['$schema']) { $Config['$schema'] = 'https://opencode.ai/config.json' }
-  if ($Config['provider'] -isnot [System.Collections.IDictionary]) { $Config['provider'] = New-Map }
-  $provider = $Config['provider']['ieti-agents']
-  if ($provider -isnot [System.Collections.IDictionary]) { $provider = New-Map }
-  $options = $provider['options']
-  if ($options -isnot [System.Collections.IDictionary]) { $options = New-Map }
-  $provider['npm'] = '@ai-sdk/openai-compatible'; $provider['name'] = 'IETI Agents'
-  $options['baseURL'] = $ApiBaseUrl; $options['apiKey'] = '{file:' + $KeyFile.Replace('\', '/') + '}'
-  $options['timeout'] = 900000; $options['chunkTimeout'] = 600000
-  $provider['options'] = $options; $provider['models'] = $script:Models
-  $Config['provider']['ieti-agents'] = $provider
+  $apiKeyReference = '{file:' + $KeyFile.Replace('\', '/') + '}'
+  if ($script:ConfigFormat -ge 2) {
+    # OpenCode 2 reads "providers"; an entry left in the deprecated
+    # "provider" block would be merged with it, so it moves here.
+    $legacy = Remove-ProviderEntry 'provider'
+    if ($Config['providers'] -isnot [System.Collections.IDictionary]) { $Config['providers'] = New-Map }
+    $existing = $Config['providers']['ieti-agents']
+    $provider = New-Map
+    if ($existing -is [System.Collections.IDictionary]) {
+      foreach ($name in @('canonical', 'env', 'compatibility', 'headers', 'body')) { if ($existing.Contains($name)) { $provider[$name] = $existing[$name] } }
+    }
+    $settings = Get-ExtraOptions $legacy 'options'
+    $extra = Get-ExtraOptions $existing 'settings'
+    foreach ($name in @($extra.Keys)) { $settings[$name] = $extra[$name] }
+    # OpenCode 2 waits 15 minutes between streamed chunks by default.
+    $settings['baseURL'] = $ApiBaseUrl; $settings['apiKey'] = $apiKeyReference; $settings['timeout'] = 900000
+    $provider['name'] = 'IETI Agents'; $provider['package'] = '@opencode/ai/providers/openai-compatible'
+    $provider['settings'] = $settings; $provider['models'] = $script:Models
+    $Config['providers']['ieti-agents'] = $provider
+  } else {
+    $current = Remove-ProviderEntry 'providers'
+    if ($Config['provider'] -isnot [System.Collections.IDictionary]) { $Config['provider'] = New-Map }
+    $provider = $Config['provider']['ieti-agents']
+    if ($provider -isnot [System.Collections.IDictionary]) { $provider = New-Map }
+    $options = Get-ExtraOptions $current 'settings'
+    if ($provider['options'] -is [System.Collections.IDictionary]) { foreach ($name in @($provider['options'].Keys)) { $options[$name] = $provider['options'][$name] } }
+    $provider['npm'] = '@ai-sdk/openai-compatible'; $provider['name'] = 'IETI Agents'
+    $options['baseURL'] = $ApiBaseUrl; $options['apiKey'] = $apiKeyReference
+    $options['timeout'] = 900000; $options['chunkTimeout'] = 600000
+    $provider['options'] = $options; $provider['models'] = $script:Models
+    $Config['provider']['ieti-agents'] = $provider
+  }
   if ($Config['enabled_providers'] -is [System.Array] -and 'ieti-agents' -cnotin $Config['enabled_providers']) { $Config['enabled_providers'] += 'ieti-agents' }
   if ($Config['disabled_providers'] -is [System.Array]) { $Config['disabled_providers'] = [object[]]@($Config['disabled_providers'] | Where-Object { $_ -cne 'ieti-agents' }) }
   $selected = ''

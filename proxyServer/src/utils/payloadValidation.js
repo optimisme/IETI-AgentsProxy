@@ -61,6 +61,12 @@ function validateRequestPayload(payload) {
     allowVideoInput: boolSetting('allow_video_input', config.allowVideoInput)
   };
 
+  // OpenCode 2 and newer OpenAI clients send max_completion_tokens instead of
+  // max_tokens. Treat it as max_tokens so the limit and quota checks apply.
+  if (payload.max_completion_tokens !== undefined && payload.max_completion_tokens !== null) {
+    if (payload.max_tokens === undefined || payload.max_tokens === null) payload.max_tokens = payload.max_completion_tokens;
+    delete payload.max_completion_tokens;
+  }
   const requestedMaxTokens = Number(payload.max_tokens || 0);
   if (requestedMaxTokens > limits.maxTokensPerRequest) {
     throw apiError(413, 'max_tokens_too_large', `Requested max_tokens exceeds ${limits.maxTokensPerRequest}.`);

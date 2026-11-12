@@ -6,13 +6,16 @@ umask 077
 DEFAULT_BASE_URL="__IETI_DEFAULT_BASE_URL__"
 SYNC_ONLY=0
 UNINSTALL=0
+OPENCODE_VERSION="${IETI_OPENCODE_VERSION:-}"
 for argument in "$@"; do
   case "$argument" in
     --sync-only) SYNC_ONLY=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --opencode-version=*) OPENCODE_VERSION="${argument#*=}" ;;
     --help|-h)
-      echo 'Usage: set_agents_opencode.sh [--sync-only] [--uninstall]'
+      echo 'Usage: set_agents_opencode.sh [--sync-only] [--uninstall] [--opencode-version=1|2]'
       echo 'Installs IETI Agents in the user-wide OpenCode configuration.'
+      echo 'The configuration format follows the installed OpenCode version; --opencode-version overrides it.'
       exit 0 ;;
     *) echo "Error: unknown option: $argument" >&2; exit 1 ;;
   esac
@@ -24,12 +27,14 @@ fi
 
 IFS= read -r -d '' GLOBAL_SCRIPT <<'PYTHON' || true
 import base64
+import glob
 import http.client
 import json
 import math
 import os
 import queue
 import re
+import shutil
 import ssl
 import stat
 import sys
@@ -204,7 +209,7 @@ def positive_number(value):
     return int(number) if number.is_integer() else number
 
 
-def models_from_catalog(catalog_path):
+def models_from_catalog(catalog_path, major=2):
     try:
         catalog = read_json(catalog_path)
     except (ValueError, UnicodeError) as error:
@@ -240,6 +245,20 @@ def models_from_catalog(catalog_path):
         published_efforts = published.get("reasoning_efforts")
         published_efforts = published_efforts if isinstance(published_efforts, list) else []
         supported = [effort for effort in efforts if capabilities["reasoning"] and effort in published_efforts]
+        default_effort = published.get("default_reasoning_effort")
+        if major >= 2:
+            # OpenCode 2 lists exactly these variants. Its capabilities.reasoning.effort
+            # list is not used because some 2.x releases keep only low, medium and high.
+            model = {"limit": {"context": int(context), "output": int(output)},
+                     "capabilities": {"tools": capabilities["tools"], "input": inputs, "output": ["text"],
+                                      "reasoning": {"supported": capabilities["reasoning"]}}}
+            if capabilities["reasoning"]:
+                model["compatibility"] = {"reasoningField": "reasoning_content"}
+                model["variants"] = [{"id": effort, "settings": {"reasoningEffort": effort}} for effort in supported]
+            if default_effort in supported:
+                model["settings"] = {"reasoningEffort": default_effort}
+            models[model_id] = model
+            continue
         variants = {effort: ({"reasoningEffort": effort} if effort in supported else {"disabled": True})
                     for effort in efforts} if capabilities["reasoning"] else {}
         model = {"limit": {"context": context, "output": output}, "tool_call": capabilities["tools"],
@@ -248,7 +267,6 @@ def models_from_catalog(catalog_path):
             model["interleaved"] = {"field": "reasoning_content"}
         model["modalities"] = {"input": inputs, "output": ["text"]}
         model["variants"] = variants
-        default_effort = published.get("default_reasoning_effort")
         if default_effort in supported:
             model["options"] = {"reasoningEffort": default_effort}
         models[model_id] = model
@@ -330,13 +348,134 @@ def fetch(base_url, key_path, output_path, timeout_seconds):
         raise ValueError("Could not connect to the IETI server, or the request timed out. Existing configuration was kept.") from error
 
 
-def prepare(config_path, catalog_path, output_path, base_url, key_path, action):
+def version_major(text):
+    match = re.search(r"(\d+)\.\d+\.\d+", text or "")
+    return (int(match.group(1)), match.group(0)) if match else None
+
+
+def package_version(command):
+    # Reads the version of an npm or Homebrew OpenCode install without running it.
+    real = os.path.realpath(command)
+    match = re.search(r"[\\/]Cellar[\\/]opencode[\\/](\d+\.\d+\.\d+)", real)
+    if match:
+        return match.group(1)
+    here = os.path.dirname(command)
+    candidates = [os.path.join(here, "node_modules", "opencode-ai", "package.json"),
+                  os.path.join(here, "..", "lib", "node_modules", "opencode-ai", "package.json")]
+    folder = os.path.dirname(real)
+    for _ in range(3):
+        candidates.append(os.path.join(folder, "package.json"))
+        folder = os.path.dirname(folder)
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as source:
+                package = load_json(source.read())
+        except (OSError, ValueError, UnicodeError):
+            continue
+        if isinstance(package, dict) and package.get("name") in ["opencode-ai", "opencode"]:
+            return package.get("version")
+    return None
+
+
+def binary_version(path):
+    # OpenCode binaries end with their build flags, which include the version
+    # (for example --user-agent=opencode/latest/2.2.7). Only that tail is read.
+    try:
+        with open(path, "rb") as source:
+            source.seek(0, os.SEEK_END)
+            source.seek(max(0, source.tell() - 8 * 1024 * 1024))
+            tail = source.read()
+    except OSError:
+        return None
+    match = re.search(rb"--user-agent=opencode/(?:[^/\s]+/)?(\d+\.\d+\.\d+)", tail)
+    return match.group(1).decode("ascii") if match else None
+
+
+def detect_opencode(requested):
+    # Returns the config format to write (1 or 2) and a description of why.
+    # OpenCode is never run: its version is read from files it leaves behind.
+    if requested:
+        if requested not in ["1", "2"]:
+            raise ValueError("--opencode-version must be 1 or 2.")
+        return int(requested), "as requested"
+    home = os.path.expanduser("~")
+    found = []
+    # The OpenCode 2 background service records its version; OpenCode 1 has no service.
+    state_home = os.environ.get("XDG_STATE_HOME") or os.path.join(home, ".local", "state")
+    try:
+        with open(os.path.join(state_home, "opencode", "service.json"), "r", encoding="utf-8") as source:
+            service = load_json(source.read())
+        version = version_major(service.get("version") if isinstance(service, dict) else None)
+        if version:
+            found.append((version[0], "OpenCode " + version[1]))
+    except (OSError, ValueError, UnicodeError):
+        pass
+    # The desktop app keeps its bundled CLI in a folder named after its version.
+    desktop = []
+    for root in [os.path.join(home, "Library", "Application Support"), os.path.join(home, ".local", "share"),
+                 os.environ.get("XDG_DATA_HOME", "")]:
+        for folder in glob.glob(os.path.join(root, "ai.opencode.desktop", "cli", "*")) if root else []:
+            version = version_major(os.path.basename(folder))
+            if version:
+                desktop.append((tuple(int(part) for part in version[1].split(".")), version))
+    if desktop:
+        version = max(desktop)[1]
+        found.append((version[0], "OpenCode Desktop " + version[1]))
+    command = shutil.which("opencode")
+    binaries = [os.path.join(home, ".opencode", "bin", "opencode")]
+    if command:
+        binaries.insert(0, os.path.realpath(command))
+    version = version_major(package_version(command)) if command else None
+    for binary in binaries:
+        version = version or version_major(binary_version(binary))
+    if version:
+        found.append((version[0], "OpenCode " + version[1]))
+    if found:
+        names = ", ".join(sorted(set(name for _, name in found)))
+        # The OpenCode 1 format also loads in OpenCode 2, so it wins when both are found.
+        return (1 if any(major < 2 for major, _ in found) else 2), "found " + names
+    if command or os.path.isfile(os.path.join(home, ".opencode", "bin", "opencode")):
+        return 1, ("found OpenCode of unknown version; this format works in OpenCode 1 and 2. "
+                   "For OpenCode 2, rerun with --opencode-version=2")
+    return 2, "OpenCode was not found; assuming OpenCode 2. For OpenCode 1, rerun with --opencode-version=1"
+
+
+def remove_provider_entry(config, key):
+    container = config.get(key)
+    if not isinstance(container, dict) or "ieti-agents" not in container:
+        return None
+    removed = container.pop("ieti-agents")
+    if not container:
+        del config[key]
+    return removed if isinstance(removed, dict) else None
+
+
+MANAGED_PROVIDER_OPTIONS = ["baseURL", "apiKey", "timeout", "chunkTimeout"]
+OPENCODE2_PROVIDER_KEYS = ["canonical", "env", "compatibility", "headers", "body"]
+
+
+def extra_options(entry, key):
+    values = entry.get(key) if isinstance(entry, dict) else None
+    return {name: value for name, value in values.items() if name not in MANAGED_PROVIDER_OPTIONS} \
+        if isinstance(values, dict) else {}
+
+
+def ieti_provider(config):
+    for key in ["providers", "provider"]:
+        container = config.get(key)
+        if isinstance(container, dict) and isinstance(container.get("ieti-agents"), dict):
+            return container["ieti-agents"]
+    return None
+
+
+def prepare(config_path, catalog_path, output_path, base_url, key_path, action, major="2"):
     original = snapshot(config_path)
     config = read_config(config_path, original)
     original_json = json.dumps(config, ensure_ascii=True, allow_nan=False)
     if action == "uninstall":
-        if isinstance(config.get("provider"), dict):
-            config["provider"].pop("ieti-agents", None)
+        for key in ["provider", "providers"]:
+            if isinstance(config.get(key), dict):
+                config[key].pop("ieti-agents", None)
         for selection in ["model", "small_model"]:
             if isinstance(config.get(selection), str) and config[selection].startswith("ieti-agents/"):
                 del config[selection]
@@ -348,19 +487,38 @@ def prepare(config_path, catalog_path, output_path, base_url, key_path, action):
             if isinstance(config.get(selection), list):
                 config[selection] = [value for value in config[selection] if value != "ieti-agents"]
     else:
-        models = models_from_catalog(catalog_path)
+        major = int(major)
+        models = models_from_catalog(catalog_path, major)
         if not config.get("$schema"):
             config["$schema"] = "https://opencode.ai/config.json"
-        if not isinstance(config.get("provider"), dict):
-            config["provider"] = {}
-        provider = config["provider"].get("ieti-agents")
-        provider = provider.copy() if isinstance(provider, dict) else {}
-        options = provider.get("options")
-        options = options.copy() if isinstance(options, dict) else {}
-        options.update({"baseURL": base_url, "apiKey": "{file:" + key_path.replace("\\", "/") + "}",
-                        "timeout": 900000, "chunkTimeout": 600000})
-        provider.update({"npm": "@ai-sdk/openai-compatible", "name": "IETI Agents", "options": options, "models": models})
-        config["provider"]["ieti-agents"] = provider
+        api_key = "{file:" + key_path.replace("\\", "/") + "}"
+        if major >= 2:
+            # OpenCode 2 reads "providers"; an entry left in the deprecated
+            # "provider" block would be merged with it, so it moves here.
+            legacy = remove_provider_entry(config, "provider")
+            if not isinstance(config.get("providers"), dict):
+                config["providers"] = {}
+            existing = config["providers"].get("ieti-agents")
+            existing = existing if isinstance(existing, dict) else {}
+            provider = {key: value for key, value in existing.items() if key in OPENCODE2_PROVIDER_KEYS}
+            settings = extra_options(legacy, "options")
+            settings.update(extra_options(existing, "settings"))
+            # OpenCode 2 waits 15 minutes between streamed chunks by default.
+            settings.update({"baseURL": base_url, "apiKey": api_key, "timeout": 900000})
+            provider.update({"name": "IETI Agents", "package": "@opencode/ai/providers/openai-compatible",
+                             "settings": settings, "models": models})
+            config["providers"]["ieti-agents"] = provider
+        else:
+            current = remove_provider_entry(config, "providers")
+            if not isinstance(config.get("provider"), dict):
+                config["provider"] = {}
+            provider = config["provider"].get("ieti-agents")
+            provider = provider.copy() if isinstance(provider, dict) else {}
+            options = extra_options(current, "settings")
+            options.update(provider.get("options") if isinstance(provider.get("options"), dict) else {})
+            options.update({"baseURL": base_url, "apiKey": api_key, "timeout": 900000, "chunkTimeout": 600000})
+            provider.update({"npm": "@ai-sdk/openai-compatible", "name": "IETI Agents", "options": options, "models": models})
+            config["provider"]["ieti-agents"] = provider
         if isinstance(config.get("enabled_providers"), list) and "ieti-agents" not in config["enabled_providers"]:
             config["enabled_providers"].append("ieti-agents")
         if isinstance(config.get("disabled_providers"), list):
@@ -508,8 +666,10 @@ def commit(manifest_path):
 
 def main(operation, args):
     if operation == "inspect-config":
-        provider = read_config(args[0]).get("provider")
-        sys.stdout.write("1" if isinstance(provider, dict) and "ieti-agents" in provider else "0")
+        sys.stdout.write("1" if ieti_provider(read_config(args[0])) is not None else "0")
+    elif operation == "detect-opencode":
+        major, reason = detect_opencode(args[0])
+        sys.stdout.write(str(major) + "\t" + reason)
     elif operation == "snapshot-key":
         write_json(args[1], snapshot(args[0]))
     elif operation == "normalize":
@@ -543,7 +703,7 @@ def main(operation, args):
         with open(args[0], "r", encoding="utf-8-sig") as source:
             sys.stdout.write(source.read().strip())
     elif operation == "model-count":
-        sys.stdout.write(str(len(read_json(args[0])["provider"]["ieti-agents"]["models"])))
+        sys.stdout.write(str(len(ieti_provider(read_json(args[0]))["models"])))
     else:
         raise ValueError("Unknown installer operation.")
 
@@ -619,6 +779,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
   echo "Removed IETI Agents from $CONFIG_FILE and removed $KEY_FILE."
   exit 0
 fi
+DETECTED="$(run_python detect-opencode "$OPENCODE_VERSION")"
+CONFIG_FORMAT="${DETECTED%%$'\t'*}"
+echo "Writing the OpenCode $CONFIG_FORMAT configuration format (${DETECTED#*$'\t'})."
 TIMEOUT_SECONDS="${PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS:-30}"
 if [[ ! "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [ "$TIMEOUT_SECONDS" -lt 1 ] || [ "$TIMEOUT_SECONDS" -gt 30 ]; then
   echo 'Error: PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS must be an integer from 1 to 30.' >&2; exit 1
@@ -665,7 +828,7 @@ validate_key() {
     fi
     return 2
   fi
-  if ! run_python prepare "$CONFIG_FILE" "$CAPABILITIES_FILE" "$PREPARED_CONFIG" "$API_BASE_URL" "$KEY_FILE" update; then return 2; fi
+  if ! run_python prepare "$CONFIG_FILE" "$CAPABILITIES_FILE" "$PREPARED_CONFIG" "$API_BASE_URL" "$KEY_FILE" update "$CONFIG_FORMAT"; then return 2; fi
   return 0
 }
 prompt_for_key() {

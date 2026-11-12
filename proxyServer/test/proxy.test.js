@@ -418,11 +418,18 @@ test('configured reasoning levels are advertised, validated, and forwarded uncha
     const portal = request.agent(app);
     await portal.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
     const openCodeConfig = await portal.get('/portal/opencode.json').expect(200);
-    const openCodeModel = openCodeConfig.body.provider['ieti-agents'].models['active-model'];
-    assert.equal(openCodeModel.options.reasoningEffort, 'low');
-    assert.deepEqual(openCodeModel.variants.low, { reasoningEffort: 'low' });
-    assert.deepEqual(openCodeModel.variants.xhigh, { reasoningEffort: 'xhigh' });
-    assert.deepEqual(openCodeModel.variants.high, { disabled: true });
+    const openCodeModel = openCodeConfig.body.providers['ieti-agents'].models['active-model'];
+    assert.equal(openCodeConfig.body.provider, undefined);
+    assert.deepEqual(openCodeModel.settings, { reasoningEffort: 'low' });
+    assert.deepEqual(openCodeModel.variants, ['low', 'medium', 'xhigh'].map((id) => ({ id, settings: { reasoningEffort: id } })));
+    assert.deepEqual(openCodeModel.compatibility, { reasoningField: 'reasoning_content' });
+    const openCode1Config = await portal.get('/portal/opencode.json?version=1').expect(200);
+    const openCode1Model = openCode1Config.body.provider['ieti-agents'].models['active-model'];
+    assert.equal(openCode1Config.body.providers, undefined);
+    assert.equal(openCode1Model.options.reasoningEffort, 'low');
+    assert.deepEqual(openCode1Model.variants.low, { reasoningEffort: 'low' });
+    assert.deepEqual(openCode1Model.variants.xhigh, { reasoningEffort: 'xhigh' });
+    assert.deepEqual(openCode1Model.variants.high, { disabled: true });
 
     await request(app)
       .post('/v1/chat/completions')
@@ -675,6 +682,24 @@ test('max_tokens defaults to the remaining token quota', async () => {
 
   await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`).send({ ...body, max_tokens: 64 }).expect(200);
   assert.equal(lastChatPayload.max_tokens, 64, 'A request that fits the quota keeps its own max_tokens');
+});
+
+test('max_completion_tokens from OpenCode 2 is applied as max_tokens', async () => {
+  const student = createStudent();
+  const body = { model: 'active-model', messages: [{ role: 'user', content: 'Say OK.' }] };
+  await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ ...body, max_completion_tokens: 48, store: false }).expect(200);
+  assert.equal(lastChatPayload.max_tokens, 48);
+  assert.equal(lastChatPayload.max_completion_tokens, undefined);
+  assert.equal(lastChatPayload.store, undefined);
+
+  await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ ...body, max_tokens: 32, max_completion_tokens: 48 }).expect(200);
+  assert.equal(lastChatPayload.max_tokens, 32, 'An explicit max_tokens wins');
+
+  const res = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ ...body, max_completion_tokens: 200000 }).expect(413);
+  assert.equal(res.body.error.code, 'max_tokens_too_large');
 });
 
 test('in-flight requests reserve calls and tokens and are limited per user', () => {
@@ -2033,7 +2058,7 @@ test('repository-qualified public model IDs survive form saving, discovery, clie
   await portal.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const config = await portal.get('/portal/opencode.json').expect(200);
   assert.equal(config.body.model, `ieti-agents/${identity}`);
-  assert.deepEqual(Object.keys(config.body.provider['ieti-agents'].models), [identity]);
+  assert.deepEqual(Object.keys(config.body.providers['ieti-agents'].models), [identity]);
   await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
     .send({ model: identity, messages: [{ role: 'user', content: 'Say OK.' }] }).expect(200);
   assert.equal(lastChatPayload.model, identity);
@@ -2322,7 +2347,7 @@ test('user provider access controls api models and opencode download', async () 
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const configRes = await agent.get('/portal/opencode.json').expect(200);
-  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models), ['group-internal']);
+  assert.deepEqual(Object.keys(configRes.body.providers['ieti-agents'].models), ['group-internal']);
   assert.equal(configRes.body.model, 'ieti-agents/group-internal');
 
   const dashboard = await agent
@@ -2398,12 +2423,12 @@ test('opencode config lists every public model pool assigned to the user group',
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const configRes = await agent.get('/portal/opencode.json').expect(200);
-  assert.deepEqual(Object.keys(configRes.body.provider['ieti-agents'].models).sort(), ['fast-model', 'fast-secondary-model', 'vision-model']);
+  assert.deepEqual(Object.keys(configRes.body.providers['ieti-agents'].models).sort(), ['fast-model', 'fast-secondary-model', 'vision-model']);
   assert.equal(configRes.body.model, 'ieti-agents/fast-model');
-  assert.equal(configRes.body.provider['ieti-agents'].models['fast-model'].limit.context, 32000);
-  assert.equal(configRes.body.provider['ieti-agents'].models['fast-model'].limit.output, 4096);
-  assert.equal(configRes.body.provider['ieti-agents'].models['vision-model'].limit.context, 64000);
-  assert.equal(configRes.body.provider['ieti-agents'].models['vision-model'].limit.output, 2048);
+  assert.equal(configRes.body.providers['ieti-agents'].models['fast-model'].limit.context, 32000);
+  assert.equal(configRes.body.providers['ieti-agents'].models['fast-model'].limit.output, 4096);
+  assert.equal(configRes.body.providers['ieti-agents'].models['vision-model'].limit.context, 64000);
+  assert.equal(configRes.body.providers['ieti-agents'].models['vision-model'].limit.output, 2048);
 });
 
 test('streaming works with a small request', async () => {
@@ -2690,20 +2715,22 @@ test('student portal shows setup commands and serves configuration scripts', asy
       .run(publicBaseUrlSetting?.value || '', 'public_base_url');
   }
 
-  assert.equal(configRes.body.provider['ieti-agents'].options.baseURL, 'https://configured.example.test/v1');
-  assert.equal(configRes.body.provider['ieti-agents'].options.apiKey, '{file:.secrets/agents_server_key}');
-  assert.equal(configRes.body.provider['ieti-agents'].options.timeout, 900000);
-  assert.equal(configRes.body.provider['ieti-agents'].options.chunkTimeout, 600000);
+  assert.deepEqual(configRes.body.providers['ieti-agents'].settings, {
+    baseURL: 'https://configured.example.test/v1',
+    apiKey: '{file:.secrets/agents_server_key}',
+    timeout: 900000
+  });
+  assert.equal(configRes.body.providers['ieti-agents'].package, '@opencode/ai/providers/openai-compatible');
   assert.equal(configRes.body.model, 'ieti-agents/active-model');
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.context, 131072);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].limit.output, 16384);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].max_tokens, undefined);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].parallel_tool_call, undefined);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].tool_call, true);
-  assert.equal(configRes.body.provider['ieti-agents'].models['active-model'].reasoning, true);
-  assert.deepEqual(configRes.body.provider['ieti-agents'].models['active-model'].modalities, {
+  assert.equal(configRes.body.providers['ieti-agents'].models['active-model'].limit.context, 131072);
+  assert.equal(configRes.body.providers['ieti-agents'].models['active-model'].limit.output, 16384);
+  assert.equal(configRes.body.providers['ieti-agents'].models['active-model'].max_tokens, undefined);
+  assert.equal(configRes.body.providers['ieti-agents'].models['active-model'].parallel_tool_call, undefined);
+  assert.deepEqual(configRes.body.providers['ieti-agents'].models['active-model'].capabilities, {
+    tools: true,
     input: ['text', 'image'],
-    output: ['text']
+    output: ['text'],
+    reasoning: { supported: true }
   });
 
   await agent.get('/portal/codex.toml').expect(404);
