@@ -129,17 +129,20 @@ function isLocked(user) {
 }
 
 function recordFailedLogin(userId) {
-  const user = getDb().prepare('SELECT failed_login_count FROM users WHERE id = ?').get(userId);
-  const count = Number(user?.failed_login_count || 0) + 1;
+  const user = getDb().prepare('SELECT failed_login_count, locked_until FROM users WHERE id = ?').get(userId);
+  // A lock that has run out starts a fresh count. Otherwise the count would stay at the
+  // threshold and a single wrong password would lock the account again, indefinitely.
+  const lockExpired = Boolean(user?.locked_until) && !isLocked(user);
+  const count = (lockExpired ? 0 : Number(user?.failed_login_count || 0)) + 1;
   // Per-address limits stop ordinary guessing; this account-wide lock only catches attempts
   // spread across many addresses, so its threshold is high enough that a stranger cannot
   // casually lock a student out.
   const lockUntil = count >= ACCOUNT_LOCK_THRESHOLD ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
   getDb().prepare(`
     UPDATE users
-    SET failed_login_count = ?, locked_until = COALESCE(?, locked_until), updated_at = CURRENT_TIMESTAMP
+    SET failed_login_count = ?, locked_until = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(count, lockUntil, userId);
+  `).run(count, lockUntil || (lockExpired ? null : user?.locked_until ?? null), userId);
 }
 
 function clearFailedLogins(userId) {

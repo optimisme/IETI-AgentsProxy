@@ -13,11 +13,10 @@ function loadTemplate(name) {
 }
 
 function renderTemplate(name, data = {}) {
-  let html = loadTemplate(name);
-  for (const [key, value] of Object.entries(data)) {
-    html = html.replaceAll(`{{${key}}}`, htmlValue(value));
-  }
-  return html.replaceAll(/\{\{[^}]+}}/g, '');
+  // One pass with a replacer function: values are inserted literally (no "$" replacement
+  // patterns) and inserted text is never scanned again for placeholders.
+  return loadTemplate(name).replace(/\{\{([^}]+)}}/g, (_match, key) =>
+    Object.hasOwn(data, key) ? htmlValue(data[key]) : '');
 }
 
 module.exports = { renderTemplate };

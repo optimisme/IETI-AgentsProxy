@@ -1,3 +1,4 @@
+const config = require('../config');
 const { apiError } = require('../utils/errors');
 const { getSetting } = require('../services/settingsService');
 
@@ -41,7 +42,9 @@ function studentRateLimit(req, res, next) {
   try {
     const user = req.student;
     if (!user) return next();
-    const max = Number(getSetting('max_requests_per_minute', 1000));
+    // A blank or invalid stored value falls back to the configured default instead of zero.
+    const stored = Number(getSetting('max_requests_per_minute', '') || NaN);
+    const max = Number.isFinite(stored) && stored >= 0 ? stored : config.maxRequestsPerMinute;
     const bucket = hit(buckets, String(user.id), 60_000);
 
     res.set('X-RateLimit-Limit', String(max));

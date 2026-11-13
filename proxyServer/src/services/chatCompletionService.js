@@ -4,7 +4,7 @@ const { callChatCompletions } = require('./providerService');
 const { checkQuota } = require('./quotaService');
 const { recordUsage } = require('./usageService');
 const { estimateChatTokens, estimateTokensFromText } = require('../utils/tokens');
-const { validateRequestPayload } = require('../utils/payloadValidation');
+const { validateModelName, validateRequestPayload } = require('../utils/payloadValidation');
 const { apiError } = require('../utils/errors');
 const { affinityContextFromRequest } = require('./conversationAffinityService');
 const { providerAvailability } = require('./providerAvailabilityService');
@@ -63,7 +63,6 @@ async function handleChatCompletion(req, res, next) {
   res.once('close', disconnect);
 
   try {
-    estimatedInputTokens = estimateChatTokens(payload);
     if (req.aborted || responseIsClosed(res)) {
       clientDisconnected = true;
       throw new DOMException('Client disconnected.', 'AbortError');
@@ -74,10 +73,12 @@ async function handleChatCompletion(req, res, next) {
     if (!model) {
       throw apiError(503, 'no_models_available', 'No enabled provider models are available.');
     }
+    validateModelName(model);
     if (wasStreaming && !config.enableStreaming) {
       throw apiError(400, 'streaming_disabled', 'Streaming is disabled on this server.');
     }
     validateRequestPayload(payload);
+    estimatedInputTokens = estimateChatTokens(payload);
     const { group, maxTokens, release: quotaRelease } = checkQuota({
       user,
       model,

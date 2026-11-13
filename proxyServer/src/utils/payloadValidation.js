@@ -6,6 +6,8 @@ const DATA_IMAGE_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z
 
 function numberSetting(key, fallback) {
   const value = getSetting(key, fallback);
+  // A blank stored value means "not set", not zero.
+  if (value === null || value === undefined || String(value).trim() === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -53,6 +55,34 @@ function validateImageUrl(url, limits) {
   return { bytes };
 }
 
+const MAX_MODEL_NAME_LENGTH = 255;
+
+function validateModelName(model) {
+  if (typeof model !== 'string' || model.length > MAX_MODEL_NAME_LENGTH) {
+    throw apiError(400, 'invalid_request', `model must be a string of at most ${MAX_MODEL_NAME_LENGTH} characters.`);
+  }
+}
+
+// Media fields and the part types allowed to carry them. Some upstreams read these fields
+// from parts that have no type, or another type, so such parts are rejected instead of
+// being forwarded with an unchecked URL.
+const MEDIA_FIELD_TYPES = {
+  image_url: ['image_url', 'input_image'],
+  video_url: ['video_url', 'input_video'],
+  audio_url: ['audio_url']
+};
+
+function validateContentPart(part) {
+  if (typeof part.type !== 'string' || !part.type) {
+    throw apiError(400, 'invalid_content_part', 'Every message content part must have a type.');
+  }
+  for (const [field, types] of Object.entries(MEDIA_FIELD_TYPES)) {
+    if (part[field] !== undefined && part[field] !== null && !types.includes(part.type)) {
+      throw apiError(400, 'invalid_content_part', `${field} is only accepted in content parts of type ${types.join(' or ')}.`);
+    }
+  }
+}
+
 function validateRequestPayload(payload) {
   const limits = {
     maxTokensPerRequest: numberSetting('max_tokens_per_request', config.maxTokensPerRequest),
@@ -74,10 +104,16 @@ function validateRequestPayload(payload) {
 
   let images = 0;
   let totalImageBytes = 0;
-  for (const message of payload.messages || []) {
-    const parts = Array.isArray(message?.content) ? message.content : [];
+  for (const message of Array.isArray(payload.messages) ? payload.messages : []) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      throw apiError(400, 'invalid_request', 'Every message must be an object.');
+    }
+    const parts = Array.isArray(message.content) ? message.content : [];
     for (const part of parts) {
-      if (!part || typeof part !== 'object') continue;
+      if (!part || typeof part !== 'object' || Array.isArray(part)) {
+        throw apiError(400, 'invalid_content_part', 'Every message content part must be an object.');
+      }
+      validateContentPart(part);
 
       if (part.type === 'video_url' || part.type === 'input_video') {
         if (!limits.allowVideoInput) {
@@ -108,5 +144,6 @@ function validateRequestPayload(payload) {
 
 module.exports = {
   base64Bytes,
+  validateModelName,
   validateRequestPayload
 };

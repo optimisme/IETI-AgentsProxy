@@ -37,8 +37,29 @@ function getUsageTotals(userId) {
   };
 }
 
+const MAX_LOGGED_MODEL_LENGTH = 255;
+const MAX_LOGGED_ERROR_LENGTH = 2000;
+
+function loggedText(value, maxLength, fallback = null) {
+  if (typeof value !== 'string' || !value) return fallback;
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
+}
+
+function loggedCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+// Runs inside request error paths, so it accepts whatever a client sent (a model that is
+// not a string, an oversized name) and stores bounded, bindable values.
 function recordUsage({ userId, model, providerSlug = null, inputTokens = 0, outputTokens = 0, totalTokens, wasStreaming = false, status, errorMessage = null }) {
-  const safeTotal = totalTokens ?? (inputTokens + outputTokens);
+  userId = userId ?? null;
+  model = loggedText(model, MAX_LOGGED_MODEL_LENGTH, 'unknown');
+  providerSlug = loggedText(providerSlug, MAX_LOGGED_MODEL_LENGTH);
+  errorMessage = loggedText(errorMessage, MAX_LOGGED_ERROR_LENGTH);
+  inputTokens = loggedCount(inputTokens);
+  outputTokens = loggedCount(outputTokens);
+  const safeTotal = totalTokens === undefined || totalTokens === null ? inputTokens + outputTokens : loggedCount(totalTokens);
   getDb().prepare(`
     INSERT INTO usage_logs
       (user_id, model, provider_slug, input_tokens, output_tokens, total_tokens, was_streaming, status, error_message, created_at)

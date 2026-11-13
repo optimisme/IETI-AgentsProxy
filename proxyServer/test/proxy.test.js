@@ -3122,3 +3122,101 @@ test('admin registration filter defaults to approved/enabled and preserves filte
   assert.ok(allNext.includes('status=all'));
   await agent.get(allNext).expect(200).expect(/Page 2 of 2\. 32 users\./);
 });
+
+test('a model that is not a short string is rejected without breaking usage logging', async () => {
+  const student = createStudent();
+  const send = (route, body) => request(app).post(route).set('Authorization', `Bearer ${student.key}`).send(body);
+  for (const model of [{}, ['active-model'], true, 'm'.repeat(256)]) {
+    const chat = await send('/v1/chat/completions', { model, messages: [{ role: 'user', content: 'Hi' }] }).expect(400);
+    assert.equal(chat.body.error.code, 'invalid_request');
+    const responses = await send('/v1/responses', { model, input: 'Hi' }).expect(400);
+    assert.equal(responses.body.error.code, 'invalid_request');
+  }
+  const logged = db.prepare('SELECT MAX(length(model)) AS longest, COUNT(*) AS count FROM usage_logs WHERE user_id = ?').get(student.id);
+  assert.equal(logged.count, 8);
+  assert.ok(logged.longest <= 255);
+  await send('/v1/chat/completions', { model: 'active-model', messages: [{ role: 'user', content: 'Hi' }] }).expect(200);
+});
+
+test('usage logging stores bounded values for anything a failed request carried', () => {
+  const { recordUsage } = require('../src/services/usageService');
+  const student = createStudent();
+  recordUsage({ userId: student.id, model: { a: 1 }, providerSlug: 7, inputTokens: 'x', totalTokens: -3, status: 'error', errorMessage: 'e'.repeat(5000) });
+  const row = db.prepare('SELECT * FROM usage_logs WHERE user_id = ?').get(student.id);
+  assert.equal(row.model, 'unknown');
+  assert.equal(row.provider_slug, null);
+  assert.equal(row.input_tokens, 0);
+  assert.equal(row.total_tokens, 0);
+  assert.equal(row.error_message.length, 2000);
+});
+
+test('content parts must be typed objects and media fields must match the part type', async () => {
+  const student = createStudent();
+  const send = (content) => request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'active-model', messages: [{ role: 'user', content }] });
+  lastChatPayload = null;
+  for (const part of [
+    { image_url: { url: 'http://169.254.169.254/latest/meta-data/' } },
+    { type: 'text', text: 'Look', image_url: { url: 'http://internal.example/a.png' } },
+    { type: 'text', text: 'Listen', audio_url: 'http://internal.example/a.wav' },
+    { type: 7, text: 'Hi' },
+    'plain string part'
+  ]) {
+    const res = await send([{ type: 'text', text: 'Hi' }, part]).expect(400);
+    assert.equal(res.body.error.code, 'invalid_content_part');
+  }
+  assert.equal(lastChatPayload, null);
+  const malformed = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'active-model', messages: [null] }).expect(400);
+  assert.equal(malformed.body.error.code, 'invalid_request');
+  await send([{ type: 'text', text: 'Hi' }]).expect(200);
+});
+
+test('an expired account lock starts a fresh failed-login count', async () => {
+  const student = createStudent();
+  db.prepare('UPDATE users SET failed_login_count = 50, locked_until = ? WHERE id = ?')
+    .run(new Date(Date.now() - 1000).toISOString(), student.id);
+  await request(app).post('/login').type('form').send({ login: student.email, password: 'wrong-password' }).expect(302);
+  const row = db.prepare('SELECT failed_login_count, locked_until FROM users WHERE id = ?').get(student.id);
+  assert.equal(row.failed_login_count, 1);
+  assert.equal(row.locked_until, null);
+  const login = await request(app).post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
+  assert.equal(login.headers.location, '/portal');
+
+  db.prepare('UPDATE users SET failed_login_count = 49, locked_until = NULL WHERE id = ?').run(student.id);
+  studentAuthService.recordFailedLogin(student.id);
+  assert.ok(studentAuthService.isLocked(db.prepare('SELECT locked_until FROM users WHERE id = ?').get(student.id)));
+});
+
+test('templates insert values literally and do not rescan inserted text', () => {
+  const { renderTemplate } = require('../src/utils/templates');
+  const { escapeHtml, trustedHtml } = require('../src/utils/html');
+  const page = (text) => renderTemplate('layout', { title: 'T', nav: trustedHtml(''), content: trustedHtml(`<td>${escapeHtml(text)}</td>`) });
+  const plain = page('plain');
+  for (const text of ['$`', '$$', '$&', "$'", '{{nav}}', '{{unknown}}']) {
+    const html = page(text);
+    assert.ok(html.includes(`<td>${escapeHtml(text)}</td>`), `${text} is rendered as written`);
+    assert.equal(html.length, plain.length - 'plain'.length + escapeHtml(text).length);
+  }
+  assert.doesNotMatch(renderTemplate('layout', { title: 'T' }), /\{\{/);
+});
+
+test('server settings reject invalid numbers and keep the current value for blank fields', async () => {
+  const { getSetting } = require('../src/services/settingsService');
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const before = getSetting('max_requests_per_minute');
+  await agent.post('/admin/server').type('form').send({ max_requests_per_minute: '', max_tokens_per_request: '' }).expect(302);
+  assert.equal(getSetting('max_requests_per_minute'), before);
+  for (const value of ['0', '-5', '1.5', 'abc']) {
+    await agent.post('/admin/server').type('form').send({ max_requests_per_minute: value, max_image_bytes: '123' }).expect(400);
+  }
+  assert.equal(getSetting('max_requests_per_minute'), before);
+  assert.notEqual(getSetting('max_image_bytes'), '123');
+  await agent.post('/admin/server').type('form').send({ max_requests_per_minute: '750' }).expect(302);
+  assert.equal(getSetting('max_requests_per_minute'), '750');
+  await agent.post('/admin/server').type('form').send({ max_requests_per_minute: before }).expect(302);
+  const student = createStudent();
+  await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'active-model', messages: [{ role: 'user', content: 'Hi' }] }).expect(200);
+});

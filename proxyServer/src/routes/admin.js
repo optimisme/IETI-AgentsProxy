@@ -1519,11 +1519,30 @@ router.get('/admin/server', requireAdmin, (req, res) => {
   render(req, res, 'server', { title: 'Edit Server', content, flash: flash(cleanupFlash || (req.query.saved ? 'Server settings saved.' : '')) });
 });
 
+const NUMERIC_SERVER_SETTINGS = [
+  ['default_daily_token_limit', 'Default daily token limit'],
+  ['default_model_context_limit', 'OpenCode model context limit'],
+  ['default_model_output_limit', 'OpenCode model output limit'],
+  ['max_tokens_per_request', 'Max output tokens per request'],
+  ['max_requests_per_minute', 'Max requests per minute'],
+  ['max_concurrent_requests_per_user', 'Max concurrent requests per user'],
+  ['max_image_bytes', 'Max image bytes'],
+  ['max_total_image_bytes', 'Max total image bytes']
+];
+
 router.post('/admin/server', requireAdmin, (req, res) => {
-  setSetting('public_base_url', req.body.public_base_url || '');
-  for (const key of ['default_daily_token_limit', 'default_model_context_limit', 'default_model_output_limit', 'max_tokens_per_request', 'max_requests_per_minute', 'max_concurrent_requests_per_user', 'max_image_bytes', 'max_total_image_bytes']) {
-    setSetting(key, req.body[key]);
+  // Everything is validated before anything is saved. A blank field keeps its current
+  // value: stored as an empty string it would be read as zero and block every request.
+  const numericSettings = [];
+  for (const [key, label] of NUMERIC_SERVER_SETTINGS) {
+    const raw = String(req.body[key] ?? '').trim();
+    if (!raw) continue;
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < 1) throw apiError(400, 'invalid_form', `${label} must be a whole number of at least 1.`);
+    numericSettings.push([key, String(value)]);
   }
+  setSetting('public_base_url', optionalText(req.body.public_base_url, { max: 2048 }));
+  for (const [key, value] of numericSettings) setSetting(key, value);
   setSetting('allow_video_input', req.body.allow_video_input ? 'true' : 'false');
   setSetting('maintenance_mode', req.body.maintenance_mode ? 'true' : 'false');
   res.redirect('/admin/server?saved=1');
@@ -1765,11 +1784,15 @@ router.post('/admin/providers/:id/delete', requireAdmin, (req, res) => {
   res.redirect('/admin/providers?deleted=1');
 });
 
-router.post('/admin/providers/:id/test', requireAdmin, async (req, res) => {
-  const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
-  if (!provider) return res.status(404).send('Provider not found');
-  const result = await testProvider({ slug: provider.slug });
-  res.redirect(`/admin/providers/${provider.id}?test=${encodeURIComponent(`${provider.name} test ${result.ok ? 'passed' : 'failed'} with status ${result.status}.`)}`);
+router.post('/admin/providers/:id/test', requireAdmin, async (req, res, next) => {
+  try {
+    const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
+    if (!provider) return res.status(404).send('Provider not found');
+    const result = await testProvider({ slug: provider.slug });
+    res.redirect(`/admin/providers/${provider.id}?test=${encodeURIComponent(`${provider.name} test ${result.ok ? 'passed' : 'failed'} with status ${result.status}.`)}`);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post('/admin/providers/:id/test.json', requireAdmin, async (req, res, next) => {

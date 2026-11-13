@@ -84,7 +84,7 @@ Test suite at `test/` uses a local mock DeepSeek server. Run with `npm test`. Ex
 - **Rate limiting** is in-memory (not persisted), resets on server restart. Failed logins are also limited in memory per address and per address+login
 - **Quota reservations** for in-flight requests and the per-user concurrency limit (`MAX_CONCURRENT_REQUESTS_PER_USER`) are in-memory and assume a single server process
 - **Token estimation** is character-based (`Math.ceil(text.length / 4)`) — not a real tokenizer. It feeds quota reservations, so a request whose real input exceeds the estimate can overshoot the quota by that difference
-- **Media** must be inline `data:` URLs; remote URLs are rejected so inference hosts never fetch student-supplied addresses
+- **Media** must be inline `data:` URLs; remote URLs are rejected so inference hosts never fetch student-supplied addresses. Content parts must be objects with a string `type`, and `image_url`/`video_url`/`audio_url` fields are only accepted on parts of the matching type
 - **Image count limits** are per provider model (`provider_models.max_images`, NULL = unlimited, only editable while Image input is enabled). The proxy skips providers whose cap is too low and returns 413 `too_many_images` when none fits; byte limits stay global server settings
 - **Internet-facing servers** (`NODE_ENV=production` or an HTTPS `PUBLIC_BASE_URL`) refuse to start with default or placeholder `ADMIN_PASSWORD`/`SESSION_SECRET`
 - **Cross-site POSTs** to cookie-authenticated routes are rejected by `middleware/sameOrigin.js`; large JSON bodies are only parsed on the completion routes after auth (`middleware/bodyParsers.js`)
