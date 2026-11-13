@@ -73,8 +73,8 @@ test('dashboard renders all three cards with global calls and safely escaped use
   assert.match(page.text, /<h2 id="recent-errors-heading">Recent errors<\/h2>/);
   assert.match(page.text, /<canvas tabindex="0"/);
   assert.match(page.text, /View daily usage table/);
-  assert.match(page.text, /<strong>175<\/strong> tokens/);
-  assert.match(page.text, /<strong>3<\/strong> completed or stopped calls/);
+  assert.match(page.text, /<strong><span data-number="175">175<\/span><\/strong> tokens/);
+  assert.match(page.text, /<strong><span data-number="3">3<\/span><\/strong> completed or stopped calls/);
   assert.match(page.text, /<script src="\/admin\/assets\/dashboard-usage.js" defer><\/script>/);
   assert.ok(page.text.includes(escapeHtml(name)));
   assert.ok(page.text.includes(escapeHtml(email)));
@@ -109,7 +109,7 @@ test('empty dashboard remains usable and chart asset requires admin authenticati
   const agent = await admin();
   const page = await agent.get('/admin').expect(200);
   assert.match(page.text, /No completed or stopped calls from current users in the last 15 days\./);
-  assert.match(page.text, /<strong>0<\/strong> tokens/);
+  assert.match(page.text, /<strong><span data-number="0">0<\/span><\/strong> tokens/);
   assert.match(page.text, /No records\./);
   const script = await agent.get('/admin/assets/dashboard-usage.js').expect(200);
   assert.match(script.headers['content-type'], /javascript/);
@@ -169,8 +169,8 @@ test('admin user detail fills fifteen empty days without including another userâ
   assert.equal(rows[0].date, day(-14));
   assert.equal(rows[14].date, day());
   assert.ok(rows.every((row) => row.calls === 0 && row.tokens === 0));
-  assert.match(page.text, /<strong>0<\/strong> tokens/);
-  assert.match(page.text, /<strong>0<\/strong> completed or stopped calls/);
+  assert.match(page.text, /<strong><span data-number="0">0<\/span><\/strong> tokens/);
+  assert.match(page.text, /<strong><span data-number="0">0<\/span><\/strong> completed or stopped calls/);
   assert.match(page.text, /View daily usage table/);
   assert.doesNotMatch(page.text, /123456/);
 });

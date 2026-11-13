@@ -1,6 +1,14 @@
 (() => {
-  const number = new Intl.NumberFormat();
-  const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+  // The browser's language and region preferences decide the grouping and decimal marks.
+  const locales = typeof navigator !== 'undefined' && navigator.languages?.length ? navigator.languages : undefined;
+  const number = new Intl.NumberFormat(locales);
+  const compact = new Intl.NumberFormat(locales, { notation: 'compact', maximumFractionDigits: 1 });
+
+  // Counts are rendered by the server with en-US grouping and their raw value in data-number.
+  for (const element of document.querySelectorAll('[data-number]')) {
+    const value = Number(element.dataset.number);
+    if (Number.isFinite(value)) element.textContent = number.format(value);
+  }
 
   for (const container of document.querySelectorAll('[data-usage-chart]')) {
     const canvas = container.querySelector('canvas');

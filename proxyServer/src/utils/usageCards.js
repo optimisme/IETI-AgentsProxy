@@ -1,7 +1,8 @@
-const { escapeHtml } = require('./html');
+const { escapeHtml, localizedNumber } = require('./html');
 
+// HTML for a usage count, shown with the browser's own digit grouping.
 function formatUsageNumber(value) {
-  return Number(value || 0).toLocaleString('en-US');
+  return localizedNumber(value);
 }
 
 function dailyUsageCard(rows) {

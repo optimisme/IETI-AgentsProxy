@@ -126,3 +126,28 @@ test('zero usage renders a usable chart and unavailable canvas preserves the fal
   assert.deepEqual(Object.keys(chart('invalid JSON').events), []);
   assert.deepEqual(Object.keys(chart([]).events), []);
 });
+
+test('tagged counts are rewritten with the grouping of the browser language', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'assets', 'dashboard-usage.js'), 'utf8');
+  const render = (languages) => {
+    const elements = [{ dataset: { number: '30000000' }, textContent: '30,000,000' }, { dataset: { number: 'abc' }, textContent: 'kept' }];
+    vm.runInNewContext(source, {
+      Intl,
+      navigator: { languages },
+      document: { querySelectorAll: (selector) => selector === '[data-number]' ? elements : [] }
+    });
+    return elements.map((element) => element.textContent);
+  };
+  assert.deepEqual(render(['es-ES']), ['30.000.000', 'kept']);
+  assert.deepEqual(render(['en-US']), ['30,000,000', 'kept']);
+  assert.deepEqual(render(['ca-ES', 'en']), ['30.000.000', 'kept']);
+});
+
+test('usage cards tag every count with its raw value and an en-US fallback', () => {
+  const { quotaLimitCards } = require('../src/utils/html');
+  const html = quotaLimitCards({ daily_token_limit: 30000000, daily_call_limit: null, hourly_call_limit: null, hourly_token_limit: null },
+    { todayTokens: 1234567, todayCalls: 12, hourTokens: 0, hourCalls: 0 });
+  assert.match(html, /<span data-number="28765433">28,765,433<\/span> left/);
+  assert.match(html, /<span data-number="1234567">1,234,567<\/span> used of <span data-number="30000000">30,000,000<\/span>/);
+  assert.match(html, /<span data-number="12">12<\/span> used<\/div>/);
+});

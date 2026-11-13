@@ -73,6 +73,14 @@ function paginationControls({ page, totalPages, totalItems, label = 'records', u
   `;
 }
 
+// A number grouped for en-US, tagged so assets/dashboard-usage.js can rewrite it with the
+// grouping of the browser's language and region. Without the script the en-US text stays.
+function localizedNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return escapeHtml(value);
+  return `<span data-number="${number}">${number.toLocaleString('en-US')}</span>`;
+}
+
 function quotaLimitCards(group, usage) {
   const items = [
     ['Calls today', usage.todayCalls, group?.daily_call_limit],
@@ -88,9 +96,9 @@ function quotaLimitCards(group, usage) {
         const percent = hasLimit && Number(limit) > 0 ? Math.min(100, Math.round((Number(used || 0) / Number(limit)) * 100)) : 0;
         return `
           <div class="quota">
-            <div class="quota-row"><strong>${escapeHtml(label)}</strong><span>${hasLimit ? `${escapeHtml(remaining)} left` : 'unlimited'}</span></div>
+            <div class="quota-row"><strong>${escapeHtml(label)}</strong><span>${hasLimit ? `${localizedNumber(remaining)} left` : 'unlimited'}</span></div>
             <div class="progress"><span style="width:${escapeHtml(percent)}%"></span></div>
-            <div class="muted">${escapeHtml(used || 0)} used${hasLimit ? ` of ${escapeHtml(limit)}` : ''}</div>
+            <div class="muted">${localizedNumber(used)} used${hasLimit ? ` of ${localizedNumber(limit)}` : ''}</div>
           </div>
         `;
       }).join('')}
@@ -104,6 +112,7 @@ module.exports = {
   getRequestBaseUrl,
   htmlValue,
   isTrustedHtml,
+  localizedNumber,
   paginationControls,
   quotaLimitCards,
   siteHeader,
