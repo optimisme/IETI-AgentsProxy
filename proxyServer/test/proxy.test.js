@@ -990,6 +990,106 @@ test('admin user forms explain an email that is already taken instead of failing
   assert.match(logged.mock.calls[0].arguments[1].message, /forced insert failure/);
 });
 
+test('admin can duplicate a provider through a prefilled form that saves nothing until submitted', async (t) => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const slug = `dup-source-${Date.now()}`;
+  const sourceId = db.prepare(`
+    INSERT INTO providers (slug, name, base_url, api_key, enabled, keep_warm_interval_minutes, max_concurrent_requests, timeout_ms)
+    VALUES (?, ?, ?, ?, 1, 5, 3, 45000)
+  `).run(slug, 'Dup <Source>', 'http://127.0.0.1:9', 'source-secret-key').lastInsertRowid;
+  db.prepare(`
+    INSERT INTO provider_models
+      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
+       supports_text_input, supports_image_input, max_images, supports_tools, supports_reasoning,
+       reasoning_efforts, default_reasoning_effort, supports_parallel_tools)
+    VALUES (?, 'dup-alias', 'dup-upstream', 'Dup', 1, 64000, 2048, 1, 1, 4, 1, 1, ?, 'high', 0)
+  `).run(sourceId, JSON.stringify(['low', 'high']));
+  const groupId = db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id;
+  db.prepare('INSERT INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, sourceId);
+  t.after(() => db.prepare('DELETE FROM providers WHERE slug LIKE ?').run(`${slug}%`));
+  const sourceMapping = () => db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(sourceId);
+  const mappingBefore = sourceMapping();
+
+  await agent.get('/admin/providers/new?from=999999').expect(404);
+  const providersBefore = db.prepare('SELECT COUNT(*) AS count FROM providers').get().count;
+  const page = await agent.get(`/admin/providers/new?from=${sourceId}`).expect(200);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM providers').get().count, providersBefore);
+  assert.match(page.text, /This is a copy of Dup &lt;Source&gt;\. Nothing is saved until/);
+  assert.match(page.text, new RegExp(`name="slug" value="${slug}-copy"`));
+  assert.match(page.text, /name="name" value="Copy of Dup &lt;Source&gt;"/);
+  assert.match(page.text, /name="base_url" value="http:\/\/127\.0\.0\.1:9"/);
+  assert.match(page.text, /name="enabled" type="checkbox" value="1" style="width:auto" >/);
+  assert.match(page.text, /name="upstream_model" value="dup-upstream"/);
+  assert.match(page.text, /name="max_images" type="number" min="0" value="4"/);
+  assert.match(page.text, /name="copy_api_key" type="checkbox" value="1" style="width:auto" checked> Use the same API key as Dup &lt;Source&gt;/);
+  assert.doesNotMatch(page.text, /source-secret-key/);
+  assert.doesNotMatch(page.text, /Duplicate provider</);
+
+  // Submits the page's own fields the way a browser would.
+  const fields = (html, overrides = {}) => {
+    const body = {};
+    const add = (name, value) => { body[name] = body[name] === undefined ? value : [].concat(body[name], value); };
+    for (const [tag] of html.matchAll(/<input\b[^>]*>/g)) {
+      const name = tag.match(/\bname="([^"]*)"/)?.[1];
+      if (!name) continue;
+      const type = tag.match(/\btype="([^"]*)"/)?.[1] || 'text';
+      if (type === 'checkbox' && !/\schecked\b/.test(tag)) continue;
+      add(name, (tag.match(/\bvalue="([^"]*)"/)?.[1] ?? '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'));
+    }
+    for (const [, name, options] of html.matchAll(/<select\b[^>]*\bname="([^"]*)"[^>]*>([\s\S]*?)<\/select>/g)) {
+      add(name, options.match(/<option value="([^"]*)" selected/)?.[1] ?? options.match(/<option value="([^"]*)"/)?.[1] ?? '');
+    }
+    return { ...body, ...overrides };
+  };
+
+  const clash = await agent.post('/admin/providers').type('form').send(fields(page.text, { slug, base_url: 'http://127.0.0.1:10' })).expect(409);
+  assert.match(clash.text, new RegExp(`The slug <code>${slug}</code> is already used by <a href="/admin/providers/${sourceId}">`));
+  assert.match(clash.text, /name="base_url" value="http:\/\/127\.0\.0\.1:10"/);
+  assert.match(clash.text, /name="copy_api_key"[^>]*checked/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM providers').get().count, providersBefore);
+
+  const saved = await agent.post('/admin/providers').type('form').send(fields(page.text, { base_url: 'http://127.0.0.1:10' })).expect(302);
+  const copy = db.prepare('SELECT * FROM providers WHERE slug = ?').get(`${slug}-copy`);
+  assert.equal(saved.headers.location, `/admin/providers/${copy.id}?copied=${sourceId}`);
+  assert.equal(copy.name, 'Copy of Dup <Source>');
+  assert.equal(copy.base_url, 'http://127.0.0.1:10');
+  assert.equal(copy.api_key, 'source-secret-key');
+  assert.equal(copy.enabled, 0);
+  assert.deepEqual(
+    [copy.keep_warm_interval_minutes, copy.max_concurrent_requests, copy.timeout_ms],
+    [5, 3, 45000]
+  );
+  const copyMapping = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(copy.id);
+  for (const column of [
+    'public_model', 'upstream_model', 'context_limit', 'output_limit', 'supports_text_input', 'supports_image_input',
+    'max_images', 'supports_tools', 'supports_reasoning', 'reasoning_efforts', 'default_reasoning_effort',
+    'reasoning_history_field', 'supports_chat_template_kwargs', 'supports_parallel_tools'
+  ]) {
+    assert.deepEqual(copyMapping[column], mappingBefore[column], column);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE provider_id = ?').get(copy.id).count, 0);
+  assert.deepEqual(sourceMapping(), mappingBefore);
+  assert.equal(db.prepare('SELECT api_key FROM providers WHERE id = ?').get(sourceId).api_key, 'source-secret-key');
+
+  const copyPage = await agent.get(saved.headers.location).expect(200);
+  assert.match(copyPage.text, /Provider created as a copy of Dup &lt;Source&gt;\. It is disabled and not assigned to any group yet\./);
+
+  // The next copy of the same source gets the next free slug, and an unticked key box leaves the placeholder.
+  const second = await agent.get(`/admin/providers/new?from=${sourceId}`).expect(200);
+  assert.match(second.text, new RegExp(`name="slug" value="${slug}-copy-2"`));
+  const withoutKey = fields(second.text);
+  delete withoutKey.copy_api_key;
+  await agent.post('/admin/providers').type('form').send(withoutKey).expect(302);
+  assert.equal(db.prepare('SELECT api_key FROM providers WHERE slug = ?').get(`${slug}-copy-2`).api_key, 'local');
+
+  // Renaming a provider onto a slug in use explains the clash instead of failing.
+  const rename = await agent.post(`/admin/providers/${copy.id}`).type('form').send(fields(copyPage.text.split('<h2>Provider API key</h2>')[0], { slug })).expect(302);
+  assert.equal(rename.headers.location, `/admin/providers/${copy.id}?slug_taken=${slug}`);
+  assert.match((await agent.get(rename.headers.location).expect(200)).text, /is already used by <a href/);
+  assert.equal(db.prepare('SELECT slug FROM providers WHERE id = ?').get(copy.id).slug, `${slug}-copy`);
+});
+
 test('admin user creation and editing roll back when a later database step fails', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
@@ -2195,7 +2295,7 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
     .expect(/Autoconfigure provider/)
     .expect(/data-apply-autoconfigure/);
   assert.match(edit.text, /<form method="post" action="\/admin\/providers\/\d+" class="panel" data-provider-settings-form>\s*<h2>Provider Settings<\/h2>/);
-  const providerActions = edit.text.match(/<div class="actions" style="margin-top:16px">([\s\S]*?)<\/div>/);
+  const providerActions = edit.text.match(/<div class="form-actions">\s*<div class="actions">([\s\S]*?)<\/div>\s*<a class="button secondary" href="\/admin\/providers\/new\?from=\d+">Duplicate provider<\/a>\s*<\/div>/);
   assert.ok(providerActions);
   assert.deepEqual(
     [...providerActions[1].matchAll(/>(Save provider|Delete provider|Autoconfigure|Run mapping request)</g)].map((match) => match[1]),

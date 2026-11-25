@@ -753,7 +753,67 @@ function modelMappingFields(provider = {}, model = activeProviderModel(provider.
   `;
 }
 
-function providerForm(provider = {}, action = '/admin/providers') {
+function findProviderBySlug(db, slug, { exceptId = null } = {}) {
+  return db.prepare('SELECT id, name FROM providers WHERE slug = ? AND id IS NOT ?')
+    .get(slug, exceptId === null ? null : Number(exceptId)) || null;
+}
+
+function slugTakenNotice(slug, owner) {
+  return `
+    <div class="error">
+      The slug <code>${escapeHtml(slug)}</code> is already used by <a href="/admin/providers/${owner.id}">${escapeHtml(owner.name)}</a>.
+      Nothing was saved. Choose a different slug.
+    </div>
+  `;
+}
+
+function copySourceProvider(value) {
+  const id = Number.parseInt(String(value ?? ''), 10);
+  return Number.isSafeInteger(id) && id > 0
+    ? getDb().prepare('SELECT * FROM providers WHERE id = ?').get(id) || null
+    : null;
+}
+
+// First free "<slug>-copy", "<slug>-copy-2", ... for a duplicated provider.
+function copySlug(db, slug) {
+  for (let index = 1; ; index += 1) {
+    const candidate = `${slug}-copy${index > 1 ? `-${index}` : ''}`;
+    if (!findProviderBySlug(db, candidate)) return candidate;
+  }
+}
+
+// Turns parsed form values back into row-shaped objects so a rejected form can be shown again.
+function providerFormState(form, mapping) {
+  return {
+    provider: {
+      slug: form.slug,
+      name: form.name,
+      base_url: form.baseUrl,
+      enabled: form.enabled,
+      keep_warm_interval_minutes: form.keepWarmIntervalMinutes,
+      max_concurrent_requests: form.maxConcurrentRequests,
+      timeout_ms: form.timeoutMs
+    },
+    model: {
+      public_model: mapping.publicModel,
+      upstream_model: mapping.upstreamModel,
+      context_limit: mapping.contextLimit,
+      output_limit: mapping.outputLimit,
+      supports_text_input: mapping.supportsTextInput,
+      supports_image_input: mapping.supportsImageInput,
+      max_images: mapping.maxImages,
+      supports_tools: mapping.supportsTools,
+      supports_reasoning: mapping.supportsReasoning,
+      reasoning_efforts: mapping.reasoningEfforts,
+      default_reasoning_effort: mapping.defaultReasoningEffort,
+      reasoning_history_field: mapping.reasoningHistoryField,
+      supports_chat_template_kwargs: mapping.supportsChatTemplateKwargs,
+      supports_parallel_tools: mapping.supportsParallelTools
+    }
+  };
+}
+
+function providerForm(provider = {}, action = '/admin/providers', { model, copySource = null, copyApiKey = true } = {}) {
   const deleteFormId = provider.id ? `provider-delete-${provider.id}` : '';
   const deleteModalId = provider.id ? `provider-delete-modal-${provider.id}` : '';
   const autoconfigureModalId = provider.id ? `provider-autoconfigure-modal-${provider.id}` : '';
@@ -764,7 +824,7 @@ function providerForm(provider = {}, action = '/admin/providers') {
       <h2>Provider Settings</h2>
       <label>Provider slug</label><input name="slug" value="${escapeHtml(provider.slug)}" required>
       <label>Name</label><input name="name" value="${escapeHtml(provider.name)}" required>
-      <label>Base URL</label><input name="base_url" value="${escapeHtml(provider.base_url)}" placeholder="http://127.0.0.1:8001" required>
+      <label>Base URL${copySource ? ` <span class="muted" style="display:block;font-weight:400">Copied from ${escapeHtml(copySource.name)}. Change it if the copy points at a different server.</span>` : ''}</label><input name="base_url" value="${escapeHtml(provider.base_url)}" placeholder="http://127.0.0.1:8001" required>
       <label>Maximum concurrent requests. Blank or 0 means infinite.</label><input name="max_concurrent_requests" type="number" min="0" value="${escapeHtml(provider.max_concurrent_requests ?? '')}">
       <label>Timeout milliseconds. Blank uses the server default.</label><input name="timeout_ms" type="number" min="0" value="${escapeHtml(provider.timeout_ms ?? '')}">
       <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${provider.enabled === 0 ? '' : 'checked'}> Provider enabled</label>
@@ -773,11 +833,18 @@ function providerForm(provider = {}, action = '/admin/providers') {
         ${[[0, 'Never'], [1, '1 min'], [5, '5 min']].map(([minutes, label]) => `<option value="${minutes}" ${Number(provider.keep_warm_interval_minutes || 0) === minutes ? 'selected' : ''}>${label}</option>`).join('')}
       </select>
       <p class="muted">No calls are sent when set to Never. Other options send a tiny completion at the selected interval when this provider and a model are enabled. May consume billable tokens; does not use student quota.</p>
-      ${modelMappingFields(provider)}
-      <div class="actions" style="margin-top:16px">
-        <button type="submit">Save provider</button>
-        ${provider.id ? `<button type="button" class="danger" data-open-modal="${deleteModalId}">Delete provider</button>` : ''}
-        ${provider.id ? `<button type="button" class="secondary" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json" data-autoconfigure-modal="${autoconfigureModalId}">Autoconfigure</button>` : ''}
+      ${copySource ? `
+        <input type="hidden" name="copy_from" value="${copySource.id}">
+        ${copySource.api_key ? `<label><input name="copy_api_key" type="checkbox" value="1" style="width:auto" ${copyApiKey ? 'checked' : ''}> Use the same API key as ${escapeHtml(copySource.name)}</label>` : ''}
+      ` : ''}
+      ${model ? modelMappingFields(provider, model) : modelMappingFields(provider)}
+      <div class="form-actions">
+        <div class="actions">
+          <button type="submit">Save provider</button>
+          ${provider.id ? `<button type="button" class="danger" data-open-modal="${deleteModalId}">Delete provider</button>` : ''}
+          ${provider.id ? `<button type="button" class="secondary" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json" data-autoconfigure-modal="${autoconfigureModalId}">Autoconfigure</button>` : ''}
+        </div>
+        ${provider.id ? `<a class="button secondary" href="/admin/providers/new?from=${provider.id}">Duplicate provider</a>` : ''}
       </div>
     </form>
     ${provider.id ? `
@@ -1603,18 +1670,49 @@ router.post('/admin/server/cleanup-usage', requireAdmin, (req, res) => {
 });
 
 router.get('/admin/providers/new', requireAdmin, (req, res) => {
+  const source = copySourceProvider(req.query.from);
+  if (req.query.from !== undefined && !source) return res.status(404).send('Provider not found');
+  if (!source) {
+    return render(req, res, 'settings', {
+      title: 'New Provider',
+      content: `
+        ${providerForm({ enabled: 1, api_key: '' })}
+      `
+    });
+  }
+  // A copy starts disabled, and group assignments are not copied, so it serves nobody until it is reviewed.
+  const copy = {
+    slug: copySlug(getDb(), source.slug),
+    name: `Copy of ${source.name}`.slice(0, 160),
+    base_url: source.base_url,
+    enabled: 0,
+    keep_warm_interval_minutes: source.keep_warm_interval_minutes,
+    max_concurrent_requests: source.max_concurrent_requests,
+    timeout_ms: source.timeout_ms
+  };
   render(req, res, 'settings', {
-    title: 'New Provider',
-    content: `
-      ${providerForm({ enabled: 1, api_key: '' })}
-    `
+    title: 'Duplicate Provider',
+    flash: flash(`This is a copy of ${source.name}. Nothing is saved until you press Save provider. The copy starts disabled and is not assigned to any group.`),
+    content: providerForm(copy, '/admin/providers', { model: activeProviderModel(source.id), copySource: source })
   });
 });
 
 router.post('/admin/providers', requireAdmin, (req, res) => {
-  const form = parseProviderForm(req.body);
+  const source = copySourceProvider(req.body.copy_from);
+  const copyApiKey = Boolean(source && req.body.copy_api_key);
+  const form = parseProviderForm(req.body, copyApiKey ? { api_key: source.api_key } : {});
   const mapping = parseModelMappingForm(req.body);
   const db = getDb();
+  const slugOwner = findProviderBySlug(db, form.slug);
+  if (slugOwner) {
+    const state = providerFormState(form, mapping);
+    res.status(409);
+    return render(req, res, 'settings', {
+      title: source ? 'Duplicate Provider' : 'New Provider',
+      flash: slugTakenNotice(form.slug, slugOwner),
+      content: providerForm(state.provider, '/admin/providers', { model: state.model, copySource: source, copyApiKey })
+    });
+  }
   const providerId = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO providers
@@ -1634,15 +1732,22 @@ router.post('/admin/providers', requireAdmin, (req, res) => {
     saveActiveModelMapping(db, result.lastInsertRowid, form.name, mapping);
     return result.lastInsertRowid;
   })();
-  res.redirect(`/admin/providers/${providerId}?saved=1`);
+  res.redirect(`/admin/providers/${providerId}?${source ? `copied=${source.id}` : 'saved=1'}`);
 });
 
 router.get('/admin/providers/:id', requireAdmin, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
+  const copiedFrom = req.query.copied ? copySourceProvider(req.query.copied) : null;
+  const slugOwner = req.query.slug_taken ? findProviderBySlug(getDb(), String(req.query.slug_taken), { exceptId: provider.id }) : null;
+  const copiedMessage = req.query.copied
+    ? `Provider created${copiedFrom ? ` as a copy of ${copiedFrom.name}` : ' as a copy'}. It is ${provider.enabled ? 'enabled' : 'disabled'} and not assigned to any group yet. Run a test request below before enabling it.`
+    : '';
   render(req, res, 'settings', {
     title: 'Edit provider',
-    flash: flash(req.query.saved ? 'Provider saved.' : req.query.test || ''),
+    flash: slugOwner
+      ? slugTakenNotice(String(req.query.slug_taken), slugOwner)
+      : flash(copiedMessage || (req.query.saved ? 'Provider saved.' : req.query.test || '')),
     content: `
       <div class="provider-sections">
         ${providerForm(provider, `/admin/providers/${provider.id}`)}
@@ -1768,6 +1873,9 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
   const form = parseProviderForm(req.body, provider);
   const mapping = parseModelMappingForm(req.body);
   const db = getDb();
+  if (findProviderBySlug(db, form.slug, { exceptId: provider.id })) {
+    return res.redirect(`/admin/providers/${provider.id}?slug_taken=${encodeURIComponent(form.slug)}`);
+  }
   db.transaction(() => {
     db.prepare(`
       UPDATE providers
