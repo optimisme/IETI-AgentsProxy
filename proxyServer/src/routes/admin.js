@@ -1143,16 +1143,36 @@ router.get('/admin/groups/:id', requireAdmin, (req, res) => {
       <td><a href="/admin/users/${user.id}">${escapeHtml(user.name)}</a></td>
       <td>${escapeHtml(user.email)}</td>
       <td>${user.enabled ? 'enabled' : 'disabled'}</td>
+      <td class="actions">
+        <form method="post" action="/admin/groups/${group.id}/members/${user.id}/remove" onsubmit="return confirm(${escapeHtml(JSON.stringify(`Remove ${user.name} from ${group.name}? They will lose API access until they are assigned to another group.`))});">
+          <button type="submit" class="danger">Remove from group</button>
+        </form>
+      </td>
     </tr>
   `).join('');
+  const message = req.query.saved ? flash('Group saved.')
+    : req.query.removed ? flash('User removed from the group.')
+      : req.query.not_member ? flash('That user is no longer in this group. Nothing was changed.', 'error')
+        : '';
   render(req, res, 'user-detail', {
     title: 'Edit Group',
+    flash: message,
     content: `
       ${groupForm(group, `/admin/groups/${group.id}`)}
       <h2>Users</h2>
-      <table><thead><tr><th>Name</th><th>Email</th><th>Status</th></tr></thead><tbody>${userRows || '<tr><td colspan="3" class="muted">No users in this group.</td></tr>'}</tbody></table>
+      <table><thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Actions</th></tr></thead><tbody>${userRows || '<tr><td colspan="4" class="muted">No users in this group.</td></tr>'}</tbody></table>
     `
   });
+});
+
+// Removes one student from this group only. The delete is scoped to the group, so a stale
+// page or a repeated click cannot remove a student who has since been moved elsewhere.
+router.post('/admin/groups/:id/members/:userId/remove', requireAdmin, (req, res) => {
+  const group = getDb().prepare('SELECT id FROM groups WHERE id = ?').get(req.params.id);
+  if (!group) return res.status(404).send('Group not found');
+  const result = getDb().prepare('DELETE FROM user_groups WHERE group_id = ? AND user_id = ?')
+    .run(group.id, req.params.userId);
+  res.redirect(`/admin/groups/${group.id}?${result.changes ? 'removed' : 'not_member'}=1`);
 });
 
 router.post('/admin/groups/:id', requireAdmin, (req, res) => {

@@ -990,6 +990,57 @@ test('admin user creation and editing roll back when a later database step fails
   assert.equal(unchangedGroupId, originalGroupId);
 });
 
+test('admin can remove a student from a group on the group page', async () => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const student = createStudent();
+  const other = createStudent();
+  const groupOf = (userId) => db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(userId)?.group_id;
+  const groupId = groupOf(student.id);
+  const otherGroupId = groupOf(other.id);
+  db.prepare('UPDATE users SET name = ? WHERE id = ?').run(`O'Brien "Quote" <b>${student.id}`, student.id);
+
+  const page = await agent.get(`/admin/groups/${groupId}`).expect(200);
+  assert.match(page.text, new RegExp(`action="/admin/groups/${groupId}/members/${student.id}/remove"`));
+  assert.match(page.text, /Remove from group/);
+  // The name is inside a JS string inside an HTML attribute: no raw quotes or tags may survive.
+  const handler = page.text.match(/onsubmit="(return confirm\([^"]*\);)"/)[1];
+  assert.doesNotMatch(handler, /['<>]/);
+  assert.match(handler, /O&#39;Brien \\&quot;Quote\\&quot; &lt;b&gt;/);
+  assert.match(handler, /lose API access/);
+
+  // A student of another group is not removed through this group's URL.
+  await agent.post(`/admin/groups/${groupId}/members/${other.id}/remove`)
+    .expect(302).expect('Location', `/admin/groups/${groupId}?not_member=1`);
+  assert.equal(groupOf(other.id), otherGroupId);
+  await agent.get(`/admin/groups/${groupId}?not_member=1`).expect(200).expect(/no longer in this group/);
+
+  await agent.post(`/admin/groups/${groupId}/members/${student.id}/remove`)
+    .expect(302).expect('Location', `/admin/groups/${groupId}?removed=1`);
+  assert.equal(groupOf(student.id), undefined);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users WHERE id = ?').get(student.id).count, 1);
+  const after = await agent.get(`/admin/groups/${groupId}?removed=1`).expect(200);
+  assert.match(after.text, /User removed from the group/);
+  assert.match(after.text, /No users in this group/);
+
+  // Repeating the click changes nothing.
+  await agent.post(`/admin/groups/${groupId}/members/${student.id}/remove`)
+    .expect(302).expect('Location', `/admin/groups/${groupId}?not_member=1`);
+
+  await agent.post(`/admin/groups/99999999/members/${other.id}/remove`).expect(404);
+  assert.equal(groupOf(other.id), otherGroupId);
+
+  // The removed student keeps the key but is refused until regrouped.
+  const refused = await request(app).post('/v1/chat/completions')
+    .set('Authorization', `Bearer ${student.key}`)
+    .send({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hi' }] })
+    .expect(403);
+  assert.equal(refused.body.error.code, 'group_required');
+
+  await request(app).post(`/admin/groups/${otherGroupId}/members/${other.id}/remove`).expect(401);
+  assert.equal(groupOf(other.id), otherGroupId);
+});
+
 test('admin form validation rejects invalid writes', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
