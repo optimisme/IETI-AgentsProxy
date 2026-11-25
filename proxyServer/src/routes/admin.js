@@ -1145,7 +1145,7 @@ router.get('/admin/groups/:id', requireAdmin, (req, res) => {
       <td>${user.enabled ? 'enabled' : 'disabled'}</td>
       <td class="actions">
         <form method="post" action="/admin/groups/${group.id}/members/${user.id}/remove" onsubmit="return confirm(${escapeHtml(JSON.stringify(`Remove ${user.name} from ${group.name}? They will lose API access until they are assigned to another group.`))});">
-          <button type="submit" class="danger">Remove from group</button>
+          <button type="submit" class="danger-outline small">Remove</button>
         </form>
       </td>
     </tr>

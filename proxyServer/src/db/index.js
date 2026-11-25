@@ -487,38 +487,35 @@ function seedDefaultProvider(database) {
   );
 }
 
+// Creates the default group only when the database has no groups, and places the approved
+// users of that group-less database in it. Once any group exists, users without a group are
+// left alone: an admin may have removed them from their group on purpose.
 function seedDefaultGroup(database) {
   const groupCount = database.prepare('SELECT COUNT(*) AS count FROM groups').get().count;
+  if (groupCount > 0) return;
   const providerId = database.prepare('SELECT id FROM providers ORDER BY priority DESC, name ASC LIMIT 1').get()?.id ?? null;
-  let groupId = database.prepare('SELECT id FROM groups ORDER BY name ASC LIMIT 1').get()?.id;
+  const group = database.prepare(`
+    INSERT INTO groups
+      (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    'Default Users',
+    providerId,
+    DEFAULT_GROUP_LIMITS.dailyCallLimit,
+    DEFAULT_GROUP_LIMITS.dailyTokenLimit,
+    DEFAULT_GROUP_LIMITS.hourlyCallLimit,
+    DEFAULT_GROUP_LIMITS.hourlyTokenLimit
+  );
 
-  if (groupCount === 0) {
-    const group = database.prepare(`
-      INSERT INTO groups
-        (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      'Default Users',
-      providerId,
-      DEFAULT_GROUP_LIMITS.dailyCallLimit,
-      DEFAULT_GROUP_LIMITS.dailyTokenLimit,
-      DEFAULT_GROUP_LIMITS.hourlyCallLimit,
-      DEFAULT_GROUP_LIMITS.hourlyTokenLimit
-    );
-    groupId = group.lastInsertRowid;
-  }
-
-  if (groupId) {
-    database.prepare(`
-      INSERT OR IGNORE INTO user_groups (user_id, group_id)
-      SELECT users.id, ?
-      FROM users
-      WHERE users.registration_status = 'approved'
-        AND NOT EXISTS (
-        SELECT 1 FROM user_groups WHERE user_groups.user_id = users.id
-      )
-    `).run(groupId);
-  }
+  database.prepare(`
+    INSERT OR IGNORE INTO user_groups (user_id, group_id)
+    SELECT users.id, ?
+    FROM users
+    WHERE users.registration_status = 'approved'
+      AND NOT EXISTS (
+      SELECT 1 FROM user_groups WHERE user_groups.user_id = users.id
+    )
+  `).run(group.lastInsertRowid);
 }
 
 function closeDb() {

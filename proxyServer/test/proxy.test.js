@@ -1002,7 +1002,7 @@ test('admin can remove a student from a group on the group page', async () => {
 
   const page = await agent.get(`/admin/groups/${groupId}`).expect(200);
   assert.match(page.text, new RegExp(`action="/admin/groups/${groupId}/members/${student.id}/remove"`));
-  assert.match(page.text, /Remove from group/);
+  assert.match(page.text, /<button type="submit" class="danger-outline small">Remove<\/button>/);
   // The name is inside a JS string inside an HTML attribute: no raw quotes or tags may survive.
   const handler = page.text.match(/onsubmit="(return confirm\([^"]*\);)"/)[1];
   assert.doesNotMatch(handler, /['<>]/);
@@ -1036,6 +1036,10 @@ test('admin can remove a student from a group on the group page', async () => {
     .send({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hi' }] })
     .expect(403);
   assert.equal(refused.body.error.code, 'group_required');
+
+  // A restart runs the startup seed again; it must not put the removed student back in a group.
+  require('../src/db').seedSettings(db);
+  assert.equal(groupOf(student.id), undefined);
 
   await request(app).post(`/admin/groups/${otherGroupId}/members/${other.id}/remove`).expect(401);
   assert.equal(groupOf(other.id), otherGroupId);
