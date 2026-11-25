@@ -933,6 +933,63 @@ test('admin can create an enabled user with a shareable invitation link and rege
   assert.match(regenerated.text, /ieti_sk_/);
 });
 
+test('admin user forms explain an email that is already taken instead of failing', async (t) => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const groupId = db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id;
+  const email = `taken-${Date.now()}@example.test`;
+  const ownerId = db.prepare('INSERT INTO users (name, email, enabled) VALUES (?, ?, 0)').run('Taken <Owner>', email).lastInsertRowid;
+  const otherId = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Other User', `other-${email}`).lastInsertRowid;
+  const usersBefore = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
+
+  const duplicate = await agent.post('/admin/users').type('form').send({
+    name: 'Second Person',
+    email: email.toUpperCase(),
+    enabled: '1',
+    group_id: String(groupId)
+  }).expect(409);
+  assert.match(duplicate.text, new RegExp(`href="/admin/users/${ownerId}">Taken &lt;Owner&gt;</a> \\(disabled`));
+  assert.match(duplicate.text, /name="name" value="Second Person"/);
+  assert.match(duplicate.text, new RegExp(`option value="${groupId}" selected`));
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users').get().count, usersBefore);
+
+  const edit = await agent.post(`/admin/users/${otherId}`).type('form').send({
+    name: 'Renamed',
+    email,
+    enabled: '1',
+    group_id: String(groupId)
+  }).expect(302);
+  assert.equal(edit.headers.location, `/admin/users/${otherId}?email_taken=${ownerId}`);
+  const editPage = await agent.get(edit.headers.location).expect(200);
+  assert.match(editPage.text, new RegExp(`That email already belongs to <a href="/admin/users/${ownerId}">`));
+  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(otherId).name, 'Other User');
+
+  // Saving a user with their own email, in another letter case, is not a conflict.
+  await agent.post(`/admin/users/${otherId}`).type('form').send({
+    name: 'Renamed',
+    email: `OTHER-${email}`,
+    enabled: '1',
+    group_id: String(groupId)
+  }).expect(302).expect('location', `/admin/users/${otherId}`);
+
+  // Unexpected admin failures are written to the server log.
+  const logged = t.mock.method(console, 'error', () => {});
+  db.exec("CREATE TEMP TRIGGER fail_logged_insert BEFORE INSERT ON users BEGIN SELECT RAISE(ABORT, 'forced insert failure'); END");
+  try {
+    await agent.post('/admin/users').type('form').send({
+      name: 'Logged Failure',
+      email: `logged-${email}`,
+      enabled: '1',
+      group_id: String(groupId)
+    }).expect(500);
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_logged_insert');
+  }
+  assert.equal(logged.mock.callCount(), 1);
+  assert.match(logged.mock.calls[0].arguments[0], /Unhandled error on POST \/admin\/users:/);
+  assert.match(logged.mock.calls[0].arguments[1].message, /forced insert failure/);
+});
+
 test('admin user creation and editing roll back when a later database step fails', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);

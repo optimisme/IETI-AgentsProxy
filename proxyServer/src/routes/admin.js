@@ -402,8 +402,25 @@ function cleanupWarning(status = getUsageCleanupStatus()) {
   `;
 }
 
+// Emails are unique regardless of letter case (idx_users_email_nocase).
+function findUserByEmail(db, email, { exceptId = null } = {}) {
+  return db.prepare(`
+    SELECT id, name, enabled FROM users
+    WHERE lower(email) = lower(?) AND id IS NOT ?
+  `).get(email, exceptId === null ? null : Number(exceptId)) || null;
+}
+
+function emailTakenNotice(owner) {
+  return `
+    <div class="error">
+      That email already belongs to <a href="/admin/users/${owner.id}">${escapeHtml(owner.name)}</a>${owner.enabled ? '' : ' (disabled, so hidden by the default filter on the Users page)'}.
+      Nothing was saved. Open that user to change the group or enable the account.
+    </div>
+  `;
+}
+
 function userForm(user = {}, action = '/admin/users') {
-  const selectedGroupId = user.id ? getUserGroups(user.id)[0]?.id : null;
+  const selectedGroupId = user.id ? getUserGroups(user.id)[0]?.id : (user.groupId ?? null);
   const formId = user.id ? `user-edit-${user.id}` : 'user-new';
   const deleteFormId = user.id ? `user-delete-${user.id}` : '';
   const deleteModalId = user.id ? `user-delete-modal-${user.id}` : '';
@@ -1063,6 +1080,8 @@ router.post('/admin/users', requireAdmin, (req, res) => {
   const form = parseUserForm(req.body);
   const db = getDb();
   const createUser = db.transaction(() => {
+    const owner = findUserByEmail(db, form.email);
+    if (owner) return { owner };
     const result = db.prepare(`
       INSERT INTO users (name, email, api_key_hash, enabled, role)
       VALUES (?, ?, ?, ?, ?)
@@ -1077,7 +1096,11 @@ router.post('/admin/users', requireAdmin, (req, res) => {
     setUserGroups(userId, [form.groupId]);
     return { userId, invite: createInviteForUser(userId) };
   });
-  const { userId, invite } = createUser();
+  const { owner, userId, invite } = createUser();
+  if (owner) {
+    res.status(409);
+    return render(req, res, 'user-detail', { title: 'New User', content: userForm(form), flash: emailTakenNotice(owner) });
+  }
   setPendingSecret(req.sessionID, `invite:${userId}`, invite);
   res.redirect(`/admin/users/${userId}?created=1&invite_created=1`);
 });
@@ -1329,7 +1352,10 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
         : req.query.created
           ? 'User created.'
           : '';
-  render(req, res, 'user-detail', { title: 'Edit User', content, flash: flash(message) });
+  const emailOwner = req.query.email_taken
+    ? getDb().prepare('SELECT id, name, enabled FROM users WHERE id = ? AND id != ?').get(Number.parseInt(String(req.query.email_taken), 10) || 0, user.id)
+    : null;
+  render(req, res, 'user-detail', { title: 'Edit User', content, flash: emailOwner ? emailTakenNotice(emailOwner) : flash(message) });
 });
 
 router.post('/admin/users/:id', requireAdmin, (req, res) => {
@@ -1338,6 +1364,8 @@ router.post('/admin/users/:id', requireAdmin, (req, res) => {
     const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!existing) throw apiError(404, 'user_not_found', 'User not found.');
     const form = parseUserForm(req.body, { defaultRole: existing.role });
+    const owner = findUserByEmail(db, form.email, { exceptId: existing.id });
+    if (owner) return owner;
     const nextStatus = existing.registration_status === 'pending' ? 'approved' : existing.registration_status;
     const invalidateSessions = existing.enabled && !form.enabled ? 1 : 0;
     const result = db.prepare(`
@@ -1366,7 +1394,8 @@ router.post('/admin/users/:id', requireAdmin, (req, res) => {
       });
     }
   });
-  updateUser();
+  const owner = updateUser();
+  if (owner) return res.redirect(`/admin/users/${req.params.id}?email_taken=${owner.id}`);
   res.redirect(`/admin/users/${req.params.id}`);
 });
 

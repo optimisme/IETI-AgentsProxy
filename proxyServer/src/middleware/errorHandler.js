@@ -7,6 +7,10 @@ function notFound(req, res) {
 
 function errorHandler(error, req, res, next) {
   if (res.headersSent) return next(error);
+  // Unexpected failures are otherwise invisible: the response only says "Internal server error".
+  if (!(error instanceof ApiError) && !(error.status >= 400 && error.status < 500)) {
+    console.error(`${new Date().toISOString()} Unhandled error on ${req.method} ${req.path}:`, error);
+  }
   if (req.path.startsWith('/admin') && !(error instanceof ApiError)) {
     return res.status(500).send('Internal server error');
   }
