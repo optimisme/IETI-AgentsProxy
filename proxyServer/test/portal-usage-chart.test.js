@@ -19,7 +19,7 @@ process.env.SESSION_SECRET = 'portal-usage-chart-test-session-secret';
 const { getDb, closeDb } = require('../src/db');
 const { hashPassword } = require('../src/services/studentAuthService');
 const { createApp } = require('../src/app');
-const { withLegacyAccess } = require('./helpers/legacyAccess');
+const { grantProviderPools, publish } = require('./helpers/pools');
 const password = 'portal-chart-student-password';
 const passwordHash = hashPassword(password);
 let db;
@@ -34,16 +34,17 @@ test.before(() => {
     VALUES ('portal-chart-provider', 'Portal chart provider', 'http://127.0.0.1:9', '', 1)
   `).run().lastInsertRowid);
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, 'portal-chart-model', 'fixture-upstream', 'Portal chart model', 1, 8192, 1024)
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, 'fixture-upstream', 'Portal chart model', 1, 8192, 1024)
   `).run(providerId);
-  app = withLegacyAccess(createApp(), () => db);
+  publish(db, 'portal-chart-model', [providerId]);
+  app = createApp();
 });
 test.beforeEach(() => {
   db.exec('DELETE FROM usage_logs; DELETE FROM users; DELETE FROM groups;');
 });
 test.after(() => {
-  app?.unwrapped.locals.sessionStore.close();
+  app?.locals.sessionStore.close();
   closeDb();
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 });
@@ -55,8 +56,9 @@ function student({ status = 'approved', grouped = true } = {}) {
     VALUES ('Chart Student', ?, ?, ?)
   `).run(email, passwordHash, status).lastInsertRowid);
   if (grouped) {
-    const groupId = db.prepare('INSERT INTO groups (name, provider_id) VALUES (?, ?)')
-      .run(`Portal chart group ${sequence}`, providerId).lastInsertRowid;
+    const groupId = db.prepare('INSERT INTO groups (name) VALUES (?)')
+      .run(`Portal chart group ${sequence}`).lastInsertRowid;
+    grantProviderPools(db, groupId, providerId);
     db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(id, groupId);
   }
   return { id, email };

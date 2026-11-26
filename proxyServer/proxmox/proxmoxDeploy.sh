@@ -217,6 +217,10 @@ python3 - "$APP_DIR" "$RUNTIME_BACKUP_DIR" "$DATABASE_RELATIVE" <<'PYTHON'
 import hashlib, json, pathlib, sqlite3, sys
 # Settings keys a release migration deletes on purpose (provider_models.max_images replaced the first).
 RETIRED_SETTINGS = {'max_images_per_request'}
+# Tables and columns a release migration removes on purpose: the access data that pools replaced.
+# They are left out of the comparison; everything else must still match record for record.
+RETIRED_TABLES = {'group_providers'}
+RETIRED_COLUMNS = {'groups': {'provider_id'}, 'provider_models': {'public_model'}}
 app, backup = map(pathlib.Path, sys.argv[1:3])
 protected = [app / 'settings.env', app / 'data', *(app / 'data').rglob('*')]
 assert not any(p.is_symlink() for p in protected), 'Runtime symlinks require independent target backups; deployment cancelled'
@@ -235,12 +239,15 @@ assert db.execute('PRAGMA foreign_key_check').fetchall() == [], 'SQLite foreign 
 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
 states = {}
 for table in tables:
+    if table in RETIRED_TABLES:
+        continue
     quoted = '"' + table.replace('"', '""') + '"'
     cursor = db.execute('SELECT * FROM ' + quoted)
-    columns = [c[0] for c in cursor.description]
+    selected = [c[0] for c in cursor.description]
+    columns = [c for c in selected if c not in RETIRED_COLUMNS.get(table, ())]
     rows = []
     for row in cursor:
-        values = dict(zip(columns, row))
+        values = {column: value for column, value in zip(selected, row) if column in columns}
         # Retired settings are deleted by release migrations; they are not compared.
         if table == 'settings' and values.get('key') in RETIRED_SETTINGS:
             continue
@@ -275,6 +282,10 @@ python3 - "$VALIDATION_DIR/$DATABASE_RELATIVE" "$RUNTIME_BACKUP_DIR/database-bef
 import hashlib, json, pathlib, sqlite3, sys
 # Settings keys a release migration deletes on purpose (provider_models.max_images replaced the first).
 RETIRED_SETTINGS = {'max_images_per_request'}
+# Tables and columns a release migration removes on purpose: the access data that pools replaced.
+# They are left out of the comparison; everything else must still match record for record.
+RETIRED_TABLES = {'group_providers'}
+RETIRED_COLUMNS = {'groups': {'provider_id'}, 'provider_models': {'public_model'}}
 db = sqlite3.connect(pathlib.Path(sys.argv[1]).as_uri() + '?mode=ro', uri=True)
 assert db.execute('PRAGMA integrity_check').fetchall() == [('ok',)], 'Release startup failed SQLite integrity validation'
 assert db.execute('PRAGMA foreign_key_check').fetchall() == [], 'Release startup failed SQLite foreign key validation'
@@ -282,16 +293,19 @@ states = {}
 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
 before = json.loads(pathlib.Path(sys.argv[2]).read_text())
 for table in tables:
+    if table in RETIRED_TABLES:
+        continue
     quoted = '"' + table.replace('"', '""') + '"'
     cursor = db.execute('SELECT * FROM ' + quoted)
-    columns = [c[0] for c in cursor.description]
+    selected = [c[0] for c in cursor.description]
+    columns = [c for c in selected if c not in RETIRED_COLUMNS.get(table, ())]
     # A migration may add columns, but only empty (all NULL) ones: existing data
     # is then compared on the columns that existed before the release.
     kept = before.get(table, {}).get('columns', columns)
     added = [column for column in columns if column not in kept]
     rows = []
     for row in cursor:
-        values = dict(zip(columns, row))
+        values = {column: value for column, value in zip(selected, row) if column in columns}
         assert all(values[column] is None for column in added), f'Release startup filled new column(s) {added} in {table}; deployment cancelled'
         if table == 'settings' and values.get('key') in RETIRED_SETTINGS:
             continue

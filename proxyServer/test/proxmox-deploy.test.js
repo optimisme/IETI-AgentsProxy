@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const Database = require('better-sqlite3');
+const { installOldAccessSchema } = require('./helpers/oldAccess');
 
 const application = path.resolve(__dirname, '..');
 const deploymentPath = path.join(application, 'proxmox', 'proxmoxDeploy.sh');
@@ -38,7 +39,7 @@ if (!fs.existsSync(deploymentPath)) {
     return files;
   }
 
-  function fixture(t, { mutate = false, occupied = false, uncheckpointed = false, beforePools = false, dropTable = false } = {}) {
+  function fixture(t, { mutate = false, occupied = false, uncheckpointed = false, beforePools = false, dropTable = false, dropColumn = false } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-proxmox-deploy-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const home = path.join(root, 'home');
@@ -88,15 +89,28 @@ if (!fs.existsSync(deploymentPath)) {
       UPDATE settings SET updated_at = '2000-01-01' WHERE key = 'public_base_url';
     `);
     if (beforePools) {
-      // A database last started by a release that had no pools: access is still described by
-      // the alias on each provider's mapping and the providers listed for each group.
+      // A database last started by a release from before pools: access is described by the
+      // alias on each provider's mapping and by the providers listed for each group.
+      db.pragma('foreign_keys = OFF');
+      const groups = db.prepare('SELECT * FROM groups').all();
+      const mappings = db.prepare('SELECT * FROM provider_models').all();
+      installOldAccessSchema(db);
+      for (const group of groups) {
+        db.prepare(`INSERT INTO groups (id, name, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit, created_at, updated_at, provider_id)
+          VALUES (@id, @name, @daily_call_limit, @daily_token_limit, @hourly_call_limit, @hourly_token_limit, @created_at, @updated_at, NULL)`).run(group);
+      }
+      for (const mapping of mappings) {
+        db.prepare(`INSERT INTO provider_models (id, provider_id, public_model, upstream_model, name, context_limit, output_limit, created_at, updated_at)
+          VALUES (@id, @provider_id, 'fixture-alias', @upstream_model, @name, @context_limit, @output_limit, @created_at, @updated_at)`).run(mapping);
+      }
       db.exec(`
-        DROP TABLE group_pools; DROP TABLE pool_providers; DROP TABLE pools;
         INSERT INTO providers (id, slug, name, base_url) VALUES (50, 'second', 'Second', 'http://127.0.0.1:9');
-        INSERT INTO provider_models (provider_id, public_model, upstream_model, name)
-          SELECT 50, public_model, 'second-upstream', 'Second' FROM provider_models LIMIT 1;
+        INSERT INTO provider_models (provider_id, public_model, upstream_model, name) VALUES (50, 'fixture-alias', 'second-upstream', 'Second');
         INSERT INTO group_providers (group_id, provider_id) SELECT MIN(id), 50 FROM groups;
+        UPDATE groups SET provider_id = 50;
       `);
+      assert.deepEqual(db.pragma('foreign_key_check'), []);
+      db.pragma('foreign_keys = ON');
     }
     db.close();
     if (uncheckpointed) {
@@ -116,6 +130,16 @@ if (!fs.existsSync(deploymentPath)) {
         module.exports.getDb = () => {
           const database = originalGetDb();
           database.exec('DROP TABLE messages');
+          return database;
+        };
+      `);
+    }
+    if (dropColumn) {
+      fs.appendFileSync(path.join(release, 'src', 'db', 'index.js'), `
+        const originalGetDb = module.exports.getDb;
+        module.exports.getDb = () => {
+          const database = originalGetDb();
+          database.exec('ALTER TABLE conversations DROP COLUMN title');
           return database;
         };
       `);
@@ -212,7 +236,7 @@ if (!fs.existsSync(deploymentPath)) {
     assert.deepEqual(fs.readdirSync(f.temporary), []);
   });
 
-  test('deployment accepts a release that only adds tables and reports them', t => {
+  test('deployment accepts the release that converts the old access data to pools and removes it', t => {
     const f = fixture(t, { beforePools: true });
     const result = f.deploy();
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -220,6 +244,15 @@ if (!fs.existsSync(deploymentPath)) {
     assert.match(result.stdout, /New release startup adds table\(s\): group_pools \(1 rows\), pool_providers \(2 rows\), pools \(1 rows\)/);
     assert.deepEqual(runtimeFiles(f.current), f.before, 'The conversion ran on the validation copy only');
     assert.match(fs.readFileSync(path.join(f.current, 'src', 'server.js'), 'utf8'), /candidate release/);
+  });
+
+  test('deployment rejects a release whose startup removes a column that is not retired', t => {
+    const f = fixture(t, { dropColumn: true });
+    const result = f.deploy();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Release startup removed or reordered columns in conversations/);
+    assert.deepEqual(runtimeFiles(f.current), f.before);
+    assert.match(fs.readFileSync(path.join(f.current, 'src', 'server.js'), 'utf8'), /previous release/);
   });
 
   test('deployment rejects a release whose startup removes a table', t => {

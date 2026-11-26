@@ -182,7 +182,9 @@ test('autoconfigure uses official data first, tests only the selected model and 
   try {
     const providerId = db.prepare("INSERT INTO providers (slug, name, base_url, api_key) VALUES ('probe-test', 'Probe test', ?, 'secret-key')")
       .run(`http://127.0.0.1:${server.address().port}`).lastInsertRowid;
-    db.prepare("INSERT INTO provider_models (provider_id, public_model, upstream_model, name, context_limit, output_limit) VALUES (?, 'my-alias', 'old-model', 'Probe test', 4096, 2048)").run(providerId);
+    db.prepare("INSERT INTO provider_models (provider_id, upstream_model, name, context_limit, output_limit) VALUES (?, 'old-model', 'Probe test', 4096, 2048)").run(providerId);
+    const { publish } = require('./helpers/pools');
+    publish(db, 'my-alias', [providerId]);
     const agent = request.agent(app);
     await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
     const edit = await agent.get(`/admin/providers/${providerId}`).expect(200);
@@ -218,7 +220,7 @@ test('autoconfigure uses official data first, tests only the selected model and 
     const saved = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(providerId);
     assert.equal(saved.context_limit, 32768); assert.equal(saved.output_limit, 2048);
     // The alias students see belongs to pools; autoconfigure only sets the upstream model.
-    assert.equal(saved.public_model, 'my-alias');
+    assert.deepEqual(db.prepare('SELECT alias FROM pools JOIN pool_providers ON pool_id = pools.id WHERE provider_id = ?').all(providerId), [{ alias: 'my-alias' }]);
     assert.equal(saved.upstream_model, 'unsloth/Qwen3.8-27B-NVFP4'); assert.equal(saved.reasoning_history_field, 'reasoning_content');
     assert.equal(saved.supports_tools, 1);
     // The same discovery also seeds the upstream model for providers with no existing mapping.
@@ -227,8 +229,8 @@ test('autoconfigure uses official data first, tests only the selected model and 
     const applied = await agent.post(`/admin/providers/${fresh}/autoconfigure.json`).send({ apply: true }).expect(200);
     assert.equal(applied.body.applied.publicModel, undefined);
     assert.equal(applied.body.applied.upstreamModel, saved.upstream_model);
-    const created = db.prepare('SELECT public_model, upstream_model FROM provider_models WHERE provider_id = ?').get(fresh);
-    assert.deepEqual(created, { public_model: '', upstream_model: saved.upstream_model });
+    const created = db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(fresh);
+    assert.deepEqual(created, { upstream_model: saved.upstream_model });
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM pool_providers WHERE provider_id = ?').get(fresh).count, 0);
     catalog.data[0].supports_tools = false;
     await agent.post(endpoint).send({ apply: true }).expect(200);

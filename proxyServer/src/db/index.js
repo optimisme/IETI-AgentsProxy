@@ -12,6 +12,46 @@ const DEFAULT_GROUP_LIMITS = {
   hourlyTokenLimit: 100000000
 };
 
+// Column definitions of the two tables that once carried access data (see retireLegacyAccess).
+// They are the single description of these tables: new databases are created from them, and
+// an older table is rebuilt from them, keeping its own column order.
+const TIMESTAMP = 'TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP';
+const PROVIDER_MODEL_COLUMNS = {
+  id: 'INTEGER PRIMARY KEY AUTOINCREMENT',
+  provider_id: 'INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE',
+  upstream_model: 'TEXT NOT NULL',
+  name: 'TEXT NOT NULL',
+  enabled: 'INTEGER NOT NULL DEFAULT 1',
+  context_limit: 'INTEGER',
+  output_limit: 'INTEGER',
+  supports_text_input: 'INTEGER NOT NULL DEFAULT 1',
+  supports_image_input: 'INTEGER NOT NULL DEFAULT 1',
+  max_images: 'INTEGER',
+  supports_tools: 'INTEGER NOT NULL DEFAULT 1',
+  supports_reasoning: 'INTEGER NOT NULL DEFAULT 1',
+  reasoning_efforts: 'TEXT',
+  default_reasoning_effort: 'TEXT',
+  reasoning_history_field: 'TEXT',
+  supports_chat_template_kwargs: 'INTEGER NOT NULL DEFAULT 0',
+  supports_parallel_tools: 'INTEGER NOT NULL DEFAULT 1',
+  created_at: TIMESTAMP,
+  updated_at: TIMESTAMP
+};
+const GROUP_COLUMNS = {
+  id: 'INTEGER PRIMARY KEY AUTOINCREMENT',
+  name: 'TEXT NOT NULL UNIQUE',
+  daily_call_limit: 'INTEGER',
+  daily_token_limit: 'INTEGER',
+  hourly_call_limit: 'INTEGER',
+  hourly_token_limit: 'INTEGER',
+  created_at: TIMESTAMP,
+  updated_at: TIMESTAMP
+};
+
+function tableDefinition(definitions, columns = Object.keys(definitions)) {
+  return columns.map((column) => `${column} ${definitions[column]}`).join(',\n      ');
+}
+
 function getDb() {
   if (db) return db;
   fs.mkdirSync(path.dirname(config.databasePath), { recursive: true, mode: 0o700 });
@@ -108,6 +148,19 @@ function initSchema(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor TEXT NOT NULL,
+      action TEXT NOT NULL,
+      path TEXT NOT NULL,
+      status INTEGER NOT NULL,
+      target_type TEXT,
+      target_id INTEGER,
+      target_label TEXT,
+      details TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -164,39 +217,11 @@ function initSchema(database) {
     );
 
     CREATE TABLE IF NOT EXISTS provider_models (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-      public_model TEXT NOT NULL,
-      upstream_model TEXT NOT NULL,
-      name TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      context_limit INTEGER,
-      output_limit INTEGER,
-      supports_text_input INTEGER NOT NULL DEFAULT 1,
-      supports_image_input INTEGER NOT NULL DEFAULT 1,
-      max_images INTEGER,
-      supports_tools INTEGER NOT NULL DEFAULT 1,
-      supports_reasoning INTEGER NOT NULL DEFAULT 1,
-      reasoning_efforts TEXT,
-      default_reasoning_effort TEXT,
-      reasoning_history_field TEXT,
-      supports_chat_template_kwargs INTEGER NOT NULL DEFAULT 0,
-      supports_parallel_tools INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(provider_id, public_model)
+      ${tableDefinition(PROVIDER_MODEL_COLUMNS)}
     );
 
     CREATE TABLE IF NOT EXISTS groups (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
-      daily_call_limit INTEGER,
-      daily_token_limit INTEGER,
-      hourly_call_limit INTEGER,
-      hourly_token_limit INTEGER,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ${tableDefinition(GROUP_COLUMNS)}
     );
 
     CREATE TABLE IF NOT EXISTS user_groups (
@@ -205,21 +230,10 @@ function initSchema(database) {
       PRIMARY KEY (user_id, group_id)
     );
 
-    CREATE TABLE IF NOT EXISTS group_providers (
-      group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-      provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 100,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (group_id, provider_id)
-    );
-
     CREATE INDEX IF NOT EXISTS idx_usage_logs_user_created ON usage_logs(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_logs_status_created ON usage_logs(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_logs_created_id ON usage_logs(created_at, id);
     CREATE INDEX IF NOT EXISTS idx_user_groups_group ON user_groups(group_id);
-    CREATE INDEX IF NOT EXISTS idx_group_providers_provider ON group_providers(provider_id);
     CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id);
     CREATE INDEX IF NOT EXISTS idx_oauth_conflicts_status ON oauth_identity_conflicts(status, requested_at);
     CREATE INDEX IF NOT EXISTS idx_auth_audit_user_created ON auth_audit_logs(user_id, created_at);
@@ -314,7 +328,6 @@ function migrateSchema(database) {
   const addGroupColumn = (name, definition) => {
     if (!groupColumns.includes(name)) database.exec(`ALTER TABLE groups ADD COLUMN ${name} ${definition}`);
   };
-  addGroupColumn('provider_id', 'INTEGER REFERENCES providers(id) ON DELETE SET NULL');
   addGroupColumn('daily_call_limit', 'INTEGER');
   addGroupColumn('daily_token_limit', 'INTEGER');
   addGroupColumn('hourly_call_limit', 'INTEGER');
@@ -358,24 +371,6 @@ function migrateSchema(database) {
       )
   `);
 
-  const groupProviderColumns = database.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
-  const legacyProviderPoolColumn = ['wei', 'ght'].join('');
-  if (groupProviderColumns.includes(legacyProviderPoolColumn)) {
-    database.exec(`ALTER TABLE group_providers DROP COLUMN ${legacyProviderPoolColumn}`);
-  }
-
-  database.exec(`
-    INSERT OR IGNORE INTO group_providers (group_id, provider_id, enabled, priority, updated_at)
-    SELECT id, provider_id, 1, 100, CURRENT_TIMESTAMP
-    FROM groups
-    WHERE provider_id IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM group_providers
-        WHERE group_providers.group_id = groups.id
-      )
-  `);
-
   database.prepare(`
     DELETE FROM settings
     WHERE key IN (
@@ -387,20 +382,6 @@ function migrateSchema(database) {
     )
   `).run();
 
-  const hasLegacyGroupAllowedProviders = database.prepare(`
-    SELECT 1
-    FROM sqlite_master
-    WHERE type = 'table' AND name = 'group_allowed_providers'
-  `).get();
-  if (hasLegacyGroupAllowedProviders) {
-    database.exec(`
-      INSERT OR IGNORE INTO group_providers (group_id, provider_id, enabled, priority, updated_at)
-      SELECT group_id, provider_id, 1, 100, CURRENT_TIMESTAMP
-      FROM group_allowed_providers
-      WHERE EXISTS (SELECT 1 FROM groups WHERE groups.id = group_allowed_providers.group_id)
-        AND EXISTS (SELECT 1 FROM providers WHERE providers.id = group_allowed_providers.provider_id)
-    `);
-  }
   database.exec('DROP TABLE IF EXISTS group_allowed_providers');
   database.exec('DROP TABLE IF EXISTS user_allowed_providers');
 
@@ -418,13 +399,16 @@ function migrateSchema(database) {
 // A pool is a set of load-balanced providers published to students under one model alias.
 // Groups are given pools, and a provider may belong to several pools.
 //
-// The pool tables are created here rather than in initSchema so that the first start of a
-// release that has them can tell an existing database apart and convert it exactly once.
 // Before pools, a provider's alias was provider_models.public_model and a group listed its
-// providers in group_providers (or groups.provider_id). Those are only read here, never
-// changed, so the previous release still works on the same database.
+// providers in group_providers (or groups.provider_id). A database that still has those is
+// converted to pools the first time, and then they are removed: nothing reads them any more.
 function migratePools(database) {
-  const existed = Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pools'").get());
+  const hadPools = tableExists(database, 'pools');
+  const legacy = {
+    publicModel: columnNames(database, 'provider_models').includes('public_model'),
+    groupProviders: tableExists(database, 'group_providers'),
+    groupProviderId: columnNames(database, 'groups').includes('provider_id')
+  };
   database.transaction(() => {
     database.exec(`
       CREATE TABLE IF NOT EXISTS pools (
@@ -448,13 +432,22 @@ function migratePools(database) {
       CREATE INDEX IF NOT EXISTS idx_pool_providers_provider ON pool_providers(provider_id);
       CREATE INDEX IF NOT EXISTS idx_group_pools_pool ON group_pools(pool_id);
     `);
-    if (!existed) convertLegacyAccessToPools(database);
+    if (!hadPools && legacy.publicModel) convertLegacyAccessToPools(database, legacy);
   })();
+  if (legacy.publicModel || legacy.groupProviders || legacy.groupProviderId) retireLegacyAccess(database, legacy);
+}
+
+function tableExists(database, name) {
+  return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+function columnNames(database, table) {
+  return database.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
 }
 
 // One pool per alias in use, holding the providers whose active mapping had that alias.
 // A group gets every pool that contains one of the providers it was assigned.
-function convertLegacyAccessToPools(database) {
+function convertLegacyAccessToPools(database, legacy) {
   const insertPool = database.prepare('INSERT OR IGNORE INTO pools (alias) VALUES (?)');
   const poolId = database.prepare('SELECT id FROM pools WHERE alias = ?');
   const addProvider = database.prepare('INSERT OR IGNORE INTO pool_providers (pool_id, provider_id) VALUES (?, ?)');
@@ -474,18 +467,69 @@ function convertLegacyAccessToPools(database) {
     insertPool.run(alias);
     addProvider.run(poolId.get(alias).id, providerId);
   }
+  // A group's providers: the enabled rows of group_providers, or groups.provider_id for a
+  // group that lists none there.
+  const assigned = [];
+  if (legacy.groupProviders) assigned.push('SELECT group_id, provider_id FROM group_providers WHERE enabled = 1');
+  if (legacy.groupProviderId) {
+    assigned.push(`
+      SELECT id, provider_id FROM groups
+      WHERE provider_id IS NOT NULL
+        ${legacy.groupProviders ? 'AND NOT EXISTS (SELECT 1 FROM group_providers WHERE group_providers.group_id = groups.id)' : ''}
+    `);
+  }
+  if (!assigned.length) return;
   database.exec(`
     INSERT OR IGNORE INTO group_pools (group_id, pool_id)
     SELECT assigned.group_id, pool_providers.pool_id
-    FROM (
-      SELECT group_id, provider_id FROM group_providers WHERE enabled = 1
-      UNION
-      SELECT id, provider_id FROM groups
-      WHERE provider_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM group_providers WHERE group_providers.group_id = groups.id)
-    ) AS assigned
+    FROM (${assigned.join(' UNION ')}) AS assigned
     JOIN pool_providers ON pool_providers.provider_id = assigned.provider_id
   `);
+}
+
+// Removes the access data pools replaced: the group_providers table, groups.provider_id and
+// provider_models.public_model. The two columns take part in a foreign key and a unique
+// constraint, which SQLite cannot drop in place, so their tables are rebuilt without them.
+// Every other column, row and id is carried over unchanged.
+function retireLegacyAccess(database, legacy) {
+  const foreignKeys = database.pragma('foreign_keys', { simple: true });
+  // Rebuilding a referenced table must not cascade into the tables that point at it.
+  database.pragma('foreign_keys = OFF');
+  try {
+    database.transaction(() => {
+      if (legacy.groupProviders) database.exec('DROP TABLE group_providers');
+      if (legacy.groupProviderId) rebuildWithoutColumn(database, 'groups', GROUP_COLUMNS, 'provider_id');
+      if (legacy.publicModel) rebuildWithoutColumn(database, 'provider_models', PROVIDER_MODEL_COLUMNS, 'public_model');
+      const violations = database.pragma('foreign_key_check');
+      if (violations.length) throw new Error(`Removing the old access data would break ${violations.length} reference(s); nothing was changed.`);
+    })();
+  } finally {
+    database.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+  }
+}
+
+function rebuildWithoutColumn(database, table, definitions, removed) {
+  const columns = columnNames(database, table).filter((column) => column !== removed);
+  const unknown = columns.filter((column) => !Object.hasOwn(definitions, column));
+  if (unknown.length) throw new Error(`Cannot rebuild ${table}: unexpected column(s) ${unknown.join(', ')}.`);
+  const rows = database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count;
+  const sequence = database.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table)?.seq;
+  const list = columns.join(', ');
+  database.exec(`
+    CREATE TABLE ${table}_rebuilt (
+      ${tableDefinition(definitions, columns)}
+    );
+    INSERT INTO ${table}_rebuilt (${list}) SELECT ${list} FROM ${table};
+    DROP TABLE ${table};
+    ALTER TABLE ${table}_rebuilt RENAME TO ${table};
+  `);
+  if (database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count !== rows) {
+    throw new Error(`Rebuilding ${table} did not keep every row; nothing was changed.`);
+  }
+  // Ids already handed out must never be reused, even those of rows deleted since.
+  if (sequence !== undefined) {
+    database.prepare('UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?').run(sequence, table);
+  }
 }
 
 function seedSettings(database) {
@@ -550,11 +594,10 @@ function seedDefaultProvider(database) {
 
   database.prepare(`
     INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, ?, ?)
+      (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, ?, ?)
   `).run(
     provider.lastInsertRowid,
-    config.publicModelName,
     config.defaultUpstreamModel,
     config.defaultProviderName,
     contextLimit,
@@ -577,11 +620,10 @@ function seedDefaultGroup(database) {
   const providerId = database.prepare('SELECT id FROM providers ORDER BY priority DESC, name ASC LIMIT 1').get()?.id ?? null;
   const group = database.prepare(`
     INSERT INTO groups
-      (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-    VALUES (?, ?, ?, ?, ?, ?)
+      (name, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, ?, ?, ?, ?)
   `).run(
     'Default Users',
-    providerId,
     DEFAULT_GROUP_LIMITS.dailyCallLimit,
     DEFAULT_GROUP_LIMITS.dailyTokenLimit,
     DEFAULT_GROUP_LIMITS.hourlyCallLimit,
@@ -610,4 +652,4 @@ function closeDb() {
   }
 }
 
-module.exports = { getDb, closeDb, initSchema, migrateSchema, seedSettings, convertLegacyAccessToPools };
+module.exports = { getDb, closeDb, initSchema, migrateSchema, seedSettings };

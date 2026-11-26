@@ -66,10 +66,10 @@ test.before(async () => {
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
   db = getDb();
   const addProvider = db.prepare("INSERT INTO providers (slug,name,base_url,api_key,priority,enabled,max_concurrent_requests) VALUES (?, ?, ?, 'fixture', ?, 1, 3)");
-  const addModel = db.prepare('INSERT INTO provider_models (provider_id,public_model,upstream_model,name,enabled,supports_text_input,supports_image_input,supports_tools) VALUES (?, ?, ?, ?, 1, 1, 1, 1)');
+  const addModel = db.prepare('INSERT INTO provider_models (provider_id,upstream_model,name,enabled,supports_text_input,supports_image_input,supports_tools) VALUES (?, ?, ?, 1, 1, 1, 1)');
   pool.forEach((slug, index) => {
     const id = addProvider.run(slug, slug, `http://127.0.0.1:${upstream.address().port}`, index ? 10 : 100).lastInsertRowid;
-    addModel.run(id, '', `upstream-${index ? 'b' : 'a'}`, slug);
+    addModel.run(id, `upstream-${index ? 'b' : 'a'}`, slug);
   });
   // Both providers are balanced under two aliases; a third pool holds only the first provider.
   const addPool = (alias, slugs) => {
@@ -79,8 +79,8 @@ test.before(async () => {
   };
   poolIds = [addPool('affinity-model', pool), addPool('other-model', pool)];
   soloPoolId = addPool('affinity-solo', [pool[0]]);
-  const group = db.prepare("INSERT INTO groups (name,provider_id,daily_call_limit,daily_token_limit,hourly_call_limit,hourly_token_limit) VALUES ('Affinity fixtures', ?, 1000, 10000000, 1000, 10000000)")
-    .run(db.prepare('SELECT id FROM providers WHERE slug=?').get(pool[0]).id).lastInsertRowid;
+  const group = db.prepare("INSERT INTO groups (name,daily_call_limit,daily_token_limit,hourly_call_limit,hourly_token_limit) VALUES ('Affinity fixtures', 1000, 10000000, 1000, 10000000)")
+    .run().lastInsertRowid;
   poolIds.forEach((poolId) => db.prepare('INSERT INTO group_pools (group_id, pool_id) VALUES (?, ?)').run(group, poolId));
   const key = keys.generateStudentKey();
   student = { key, id: db.prepare("INSERT INTO users (name,email,api_key_hash,api_key_lookup_hash) VALUES ('Synthetic','affinity@example.test', ?, ?)").run(keys.hashApiKey(key), keys.lookupHashApiKey(key)).lastInsertRowid };

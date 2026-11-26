@@ -26,7 +26,7 @@ const { getInFlight } = require('../src/services/providerService');
 const { providerAvailability } = require('../src/services/providerAvailabilityService');
 const { getUsageTotals } = require('../src/services/usageService');
 const { createApp } = require('../src/app');
-const { withLegacyAccess } = require('./helpers/legacyAccess');
+const { grant, publish } = require('./helpers/pools');
 const { HARNESS_TOKENS, estimateConversation, preparePortalChatPayload } = require('../src/utils/portalChat');
 const password = 'portal-chat-student-password';
 const passwordHash = hashPassword(password);
@@ -76,10 +76,11 @@ test.before(async () => {
     INSERT INTO providers (slug, name, base_url, api_key, enabled)
     VALUES ('portal-chat-provider', 'Portal chat provider', ?, 'private-upstream-key', 1)
   `).run(`http://127.0.0.1:${server.address().port}`).lastInsertRowid);
-  const addModel = db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit, supports_image_input)
-    VALUES (?, ?, ?, ?, 1, 32768, 4096, ?)
+  const insertModel = db.prepare(`
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit, supports_image_input)
+    VALUES (?, ?, ?, 1, 32768, 4096, ?)
   `);
+  const addModel = { run: (id, alias, upstream, name, image) => { insertModel.run(id, upstream, name, image); publish(db, alias, [id]); } };
   // One provider serves one upstream model, so the two models are two providers on the same server.
   visionProviderId = Number(db.prepare(`
     INSERT INTO providers (slug, name, base_url, api_key, enabled)
@@ -92,7 +93,7 @@ test.before(async () => {
     VALUES ('portal-chat-other', 'Other provider', 'http://127.0.0.1:9', 'other-secret', 1)
   `).run().lastInsertRowid;
   addModel.run(hiddenProvider, 'unassigned-model', 'unassigned-upstream', 'Unassigned model', 1);
-  app = withLegacyAccess(createApp(), () => db);
+  app = createApp();
 });
 
 test.beforeEach(() => {
@@ -109,7 +110,7 @@ test.beforeEach(() => {
 });
 
 test.after(async () => {
-  app?.unwrapped.locals.sessionStore.close();
+  app?.locals.sessionStore.close();
   closeDb();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
@@ -124,11 +125,9 @@ function student({ status = 'approved', grouped = true } = {}) {
   `).run(email, passwordHash, status).lastInsertRowid);
   let groupId;
   if (grouped) {
-    groupId = Number(db.prepare('INSERT INTO groups (name, provider_id) VALUES (?, ?)')
-      .run(`Portal chat group ${sequence}`, providerId).lastInsertRowid);
-    for (const assigned of [providerId, visionProviderId]) {
-      db.prepare('INSERT INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, assigned);
-    }
+    groupId = Number(db.prepare('INSERT INTO groups (name) VALUES (?)')
+      .run(`Portal chat group ${sequence}`).lastInsertRowid);
+    grant(db, groupId, ['portal-chat-text', 'portal-chat-vision']);
     db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(id, groupId);
   }
   return { id, email, groupId };
@@ -337,7 +336,7 @@ test('forced compaction keeps the harness and summaries in context, consumes quo
 
 test('compaction reserves room for reasoning and uses the lowest advertised effort while preserving assistant history', async () => {
   db.prepare(`UPDATE provider_models SET supports_reasoning = 1, reasoning_efforts = ?, default_reasoning_effort = 'high'
-    WHERE provider_id = ? AND public_model = 'portal-chat-text'`).run(JSON.stringify(['none', 'low', 'high']), providerId);
+    WHERE provider_id = ?`).run(JSON.stringify(['none', 'low', 'high']), providerId);
   const { agent, config } = await chatSession();
   const history = [
     { role: 'user', content: 'Help me write a Markdown explanation.' },

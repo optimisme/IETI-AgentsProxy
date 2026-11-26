@@ -7,7 +7,8 @@ const path = require('node:path');
 const test = require('node:test');
 const Database = require('better-sqlite3');
 const request = require('supertest');
-const { publishLegacyAccess, withLegacyAccess } = require('./helpers/legacyAccess');
+const { grant, grantProviderPools, publish } = require('./helpers/pools');
+const { closeServer, loopbackServer } = require('./helpers/server');
 
 let app;
 let mockServer;
@@ -142,11 +143,12 @@ test.before(async () => {
   keyService = require('../src/services/keyService');
   studentAuthService = require('../src/services/studentAuthService');
   db = getDb();
-  app = withLegacyAccess(createApp(), () => db);
+  app = await loopbackServer(createApp());
 });
 
 test.after(async () => {
   const { closeDb } = require('../src/db');
+  await closeServer(app);
   closeDb();
   await new Promise((resolve) => mockServer.close(resolve));
 });
@@ -158,9 +160,11 @@ function createStudent({ enabled = 1, dailyLimit = 1000000000, models = [], pass
   const providerSlug = models[0] || 'deepseek';
   const provider = db.prepare('SELECT id FROM providers WHERE slug = ?').get(providerSlug);
   const group = db.prepare(`
-    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-    VALUES (?, ?, NULL, ?, NULL, NULL)
-  `).run(`Group ${Date.now()} ${Math.random()}`, provider?.id || null, dailyLimit);
+    INSERT INTO groups (name, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, NULL, ?, NULL, NULL)
+  `).run(`Group ${Date.now()} ${Math.random()}`, dailyLimit);
+  // The group uses that provider: it gets every pool the provider is in.
+  if (provider) grantProviderPools(db, group.lastInsertRowid, provider.id);
   const name = `Student ${Date.now()} ${Math.random()}`;
   const result = db.prepare(`
     INSERT INTO users (name, email, api_key_hash, api_key_lookup_hash, api_key_prefix, api_key_suffix, enabled, role, password_hash)
@@ -176,7 +180,6 @@ function createStudent({ enabled = 1, dailyLimit = 1000000000, models = [], pass
     password ? studentAuthService.hashPassword(password) : null
   );
   db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(result.lastInsertRowid, group.lastInsertRowid);
-  publishLegacyAccess(db);
   return { id: result.lastInsertRowid, key, name, email, password };
 }
 
@@ -612,14 +615,14 @@ test('multimodal validation applies the model image cap and rejects video', asyn
   const image = { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('image').toString('base64')}` } };
   const fiveImages = { model: 'active-model', messages: [{ role: 'user', content: [{ type: 'text', text: 'Images' }, image, image, image, image, image] }] };
 
-  assert.equal(db.prepare("SELECT max_images FROM provider_models WHERE public_model = 'active-model'").get().max_images, null);
+  assert.equal(db.prepare("SELECT max_images FROM provider_models WHERE provider_id IN (SELECT provider_id FROM pool_providers JOIN pools ON pools.id = pool_providers.pool_id WHERE pools.alias = 'active-model')").get().max_images, null);
   await request(app)
     .post('/v1/chat/completions')
     .set('Authorization', `Bearer ${student.key}`)
     .send(fiveImages)
     .expect(200);
 
-  db.prepare("UPDATE provider_models SET max_images = 4 WHERE public_model = 'active-model'").run();
+  db.prepare("UPDATE provider_models SET max_images = 4 WHERE provider_id IN (SELECT provider_id FROM pool_providers JOIN pools ON pools.id = pool_providers.pool_id WHERE pools.alias = 'active-model')").run();
   try {
     const tooMany = await request(app)
       .post('/v1/chat/completions')
@@ -629,7 +632,7 @@ test('multimodal validation applies the model image cap and rejects video', asyn
     assert.equal(tooMany.body.error.code, 'too_many_images');
     assert.match(tooMany.body.error.message, /at most 4 images/);
   } finally {
-    db.prepare("UPDATE provider_models SET max_images = NULL WHERE public_model = 'active-model'").run();
+    db.prepare("UPDATE provider_models SET max_images = NULL WHERE provider_id IN (SELECT provider_id FROM pool_providers JOIN pools ON pools.id = pool_providers.pool_id WHERE pools.alias = 'active-model')").run();
   }
 
   const video = await request(app)
@@ -1002,11 +1005,10 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   `).run(slug, 'Dup <Source>', 'http://127.0.0.1:9', 'source-secret-key').lastInsertRowid;
   db.prepare(`
     INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-       supports_text_input, supports_image_input, max_images, supports_tools, supports_reasoning,
-       reasoning_efforts, default_reasoning_effort, supports_parallel_tools)
-    VALUES (?, 'dup-alias', 'dup-upstream', 'Dup', 1, 64000, 2048, 1, 1, 4, 1, 1, ?, 'high', 0)
+      (provider_id, upstream_model, name, enabled, context_limit, output_limit, supports_text_input, supports_image_input, max_images, supports_tools, supports_reasoning, reasoning_efforts, default_reasoning_effort, supports_parallel_tools)
+    VALUES (?, 'dup-upstream', 'Dup', 1, 64000, 2048, 1, 1, 4, 1, 1, ?, 'high', 0)
   `).run(sourceId, JSON.stringify(['low', 'high']));
+  publish(db, 'dup-alias', [sourceId]);
   const groupId = db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id;
   const poolId = db.prepare('INSERT INTO pools (alias) VALUES (?)').run(`dup-pool-${slug}`).lastInsertRowid;
   db.prepare('INSERT INTO pool_providers (pool_id, provider_id) VALUES (?, ?)').run(poolId, sourceId);
@@ -1076,7 +1078,6 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   ]) {
     assert.deepEqual(copyMapping[column], mappingBefore[column], column);
   }
-  assert.equal(copyMapping.public_model, '');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM pool_providers WHERE provider_id = ?').get(copy.id).count, 0);
   assert.deepEqual(db.prepare('SELECT provider_id FROM pool_providers WHERE pool_id = ?').all(poolId), [{ provider_id: sourceId }]);
   assert.deepEqual(sourceMapping(), mappingBefore);
@@ -1136,8 +1137,8 @@ test('admin user creation and editing roll back when a later database step fails
   const originalUser = db.prepare('SELECT name, email, enabled FROM users WHERE id = ?').get(student.id);
   const originalGroupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
   const replacementGroup = db.prepare(`
-    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-    VALUES (?, NULL, NULL, NULL, NULL, NULL)
+    INSERT INTO groups (name, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+    VALUES (?, NULL, NULL, NULL, NULL)
   `).run(`Atomic Replacement Group ${Date.now()} ${Math.random()}`);
 
   db.exec(`
@@ -1369,40 +1370,21 @@ test('database startup preserves configured provider pools, aliases, limits, and
   const { initSchema, migrateSchema, seedSettings } = require('../src/db');
   database.pragma('foreign_keys = ON');
   initSchema(database);
-  const legacyProviderPoolColumn = ['wei', 'ght'].join('');
-  database.exec(`ALTER TABLE group_providers ADD COLUMN ${legacyProviderPoolColumn} INTEGER NOT NULL DEFAULT 100`);
   migrateSchema(database);
   seedSettings(database);
-  const groupProviderColumns = database.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
-  assert.equal(groupProviderColumns.includes(legacyProviderPoolColumn), false);
 
   const activeSlug = `active-model-${Date.now()}`;
   const activeProvider = database.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
     VALUES (?, ?, ?, ?, ?, 1, 100)
   `).run(activeSlug, 'Spark 25 vLLM', 'openai-compatible', mockBaseUrl, 'local');
-  const group = database.prepare(`
-    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-    VALUES (?, ?, NULL, NULL, NULL, NULL)
-  `).run(`Curs Agents ${Date.now()}`, activeProvider.lastInsertRowid);
-
+  const group = database.prepare('INSERT INTO groups (name) VALUES (?)').run(`Curs Agents ${Date.now()}`);
   database.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, 100)
-  `).run(group.lastInsertRowid, activeProvider.lastInsertRowid);
-  database.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 65536, 8192)
-  `).run(activeProvider.lastInsertRowid, 'custom-public-alias', 'custom-upstream', 'Custom Model');
-  database.prepare(`
-    UPDATE provider_models
-    SET context_limit = 32768
-    WHERE provider_id = ?
-  `).run(activeProvider.lastInsertRowid);
-  database.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 8192, 2048)
-  `).run(activeProvider.lastInsertRowid, 'custom-secondary-alias', 'custom-secondary-upstream', 'Custom Secondary Model');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32768, 8192)
+  `).run(activeProvider.lastInsertRowid, 'custom-upstream', 'Custom Model');
+  publish(database, 'custom-public-alias', [activeProvider.lastInsertRowid]);
+  grant(database, group.lastInsertRowid, 'custom-public-alias');
   const updateSetting = database.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?');
   updateSetting.run('16384', 'default_model_context_limit');
   updateSetting.run('8192', 'default_model_output_limit');
@@ -1417,26 +1399,24 @@ test('database startup preserves configured provider pools, aliases, limits, and
         hourly_token_limit = 100000000
     WHERE name = 'Default Users'
   `).run();
+  const access = () => database.prepare(`
+    SELECT groups.name AS group_name, pools.alias, providers.slug
+    FROM group_pools
+    JOIN groups ON groups.id = group_pools.group_id
+    JOIN pools ON pools.id = group_pools.pool_id
+    JOIN pool_providers ON pool_providers.pool_id = pools.id
+    JOIN providers ON providers.id = pool_providers.provider_id
+    ORDER BY groups.name, pools.alias, providers.slug
+  `).all();
+  const before = access();
+  assert.equal(before.filter((row) => row.alias === 'custom-public-alias' && row.slug === activeSlug).length, 1);
 
   migrateSchema(database);
   seedSettings(database);
 
-  const providerSlugs = database.prepare(`
-    SELECT providers.slug
-    FROM group_providers
-    JOIN providers ON providers.id = group_providers.provider_id
-    WHERE group_providers.group_id = ?
-    ORDER BY providers.slug ASC
-  `).all(group.lastInsertRowid).map((row) => row.slug);
-
-  assert.deepEqual(providerSlugs, [activeSlug]);
-  const model = database.prepare('SELECT public_model, context_limit FROM provider_models WHERE provider_id = ?').get(activeProvider.lastInsertRowid);
-  assert.equal(model.public_model, 'custom-public-alias');
-  assert.equal(model.context_limit, 32768);
-  assert.deepEqual(
-    database.prepare('SELECT public_model FROM provider_models WHERE provider_id = ? ORDER BY id').all(activeProvider.lastInsertRowid).map((row) => row.public_model),
-    ['custom-public-alias', 'custom-secondary-alias']
-  );
+  assert.deepEqual(access(), before);
+  const model = database.prepare('SELECT upstream_model, context_limit FROM provider_models WHERE provider_id = ?').get(activeProvider.lastInsertRowid);
+  assert.deepEqual(model, { upstream_model: 'custom-upstream', context_limit: 32768 });
   const settings = Object.fromEntries(database.prepare(`
     SELECT key, value
     FROM settings
@@ -1633,8 +1613,9 @@ test('admin groups do not expose description and usage section is removed', asyn
   assert.equal(providerModelColumns.includes('reasoning_efforts'), true);
   assert.equal(providerModelColumns.includes('default_reasoning_effort'), true);
   assert.equal(providerModelColumns.includes('supports_chat_template_kwargs'), true);
-  const groupProviderColumns = db.prepare('PRAGMA table_info(group_providers)').all().map((column) => column.name);
-  assert.equal(groupProviderColumns.includes(['wei', 'ght'].join('')), false);
+  assert.equal(providerModelColumns.includes('public_model'), false);
+  assert.equal(db.prepare('PRAGMA table_info(groups)').all().some((column) => column.name === 'provider_id'), false);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'group_providers'").get().count, 0);
   const legacyAccessTables = db.prepare(`
     SELECT name FROM sqlite_master
     WHERE type = 'table' AND name IN ('user_allowed_providers', 'group_allowed_providers')
@@ -1801,7 +1782,6 @@ test('admin provider keep-warm dropdown defaults to Never and saves both interva
     base_url: mockBaseUrl,
     api_key: 'local-key',
     enabled: '1',
-    public_model: 'keep-warm-alias',
     upstream_model: 'keep-warm-upstream',
     context_limit: '8192',
     output_limit: '1024'
@@ -1862,7 +1842,6 @@ test('admin model mapping stores a per-model image cap only while image input is
     base_url: mockBaseUrl,
     api_key: 'local-key',
     enabled: '1',
-    public_model: 'max-images-alias',
     upstream_model: 'max-images-upstream',
     context_limit: '8192',
     output_limit: '1024',
@@ -1910,7 +1889,6 @@ test('admin provider keep-warm rejects unsupported intervals before writing prov
     api_key: 'local-key',
     enabled: '1',
     keep_warm_interval_minutes: '5',
-    public_model: 'keep-warm-validation-alias',
     upstream_model: 'keep-warm-validation-upstream'
   };
   await agent.post('/admin/providers').type('form').send(form).expect(302);
@@ -1959,17 +1937,12 @@ test('admin deletes a provider through an explicit modal without deleting usage 
     VALUES (?, ?, ?, ?, ?, 1)
   `).run('delete-provider-test', 'Delete Provider Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(provider.lastInsertRowid, 'delete-provider-alias', 'delete-provider-upstream', 'Delete Provider Test');
-  const group = db.prepare(`
-    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-    VALUES (?, ?, NULL, NULL, NULL, NULL)
-  `).run(`Delete Provider Group ${Date.now()}`, provider.lastInsertRowid);
-  db.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, 100)
-  `).run(group.lastInsertRowid, provider.lastInsertRowid);
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32000, 4096)
+  `).run(provider.lastInsertRowid, 'delete-provider-upstream', 'Delete Provider Test');
+  publish(db, 'delete-provider-alias', [provider.lastInsertRowid]);
+  const group = db.prepare('INSERT INTO groups (name) VALUES (?)').run(`Delete Provider Group ${Date.now()}`);
+  grant(db, group.lastInsertRowid, 'delete-provider-alias');
   db.prepare(`
     INSERT INTO usage_logs (user_id, model, provider_slug, input_tokens, output_tokens, total_tokens, was_streaming, status)
     VALUES (NULL, ?, ?, 1, 1, 2, 0, 'success')
@@ -1986,8 +1959,9 @@ test('admin deletes a provider through an explicit modal without deleting usage 
     .expect('Location', '/admin/providers?deleted=1');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM providers WHERE id = ?').get(provider.lastInsertRowid).count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
-  assert.equal(db.prepare('SELECT provider_id FROM groups WHERE id = ?').get(group.lastInsertRowid).provider_id, null);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM pool_providers WHERE provider_id = ?').get(provider.lastInsertRowid).count, 0);
+  // The pool and the group's access to it stay; the pool just has no provider left.
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM group_pools JOIN pools ON pools.id = pool_id WHERE group_id = ? AND alias = 'delete-provider-alias'").get(group.lastInsertRowid).count, 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM usage_logs WHERE provider_slug = ?').get('delete-provider-test').count, 1);
   await agent.get('/admin/providers?deleted=1').expect(200).expect(/Provider deleted/);
 });
@@ -1996,7 +1970,7 @@ test('admin can edit provider slug and sees edit title', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const provider = db.prepare('SELECT * FROM providers WHERE slug = ?').get('deepseek');
-  const originalModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ? AND public_model = ?').get(provider.id, 'active-model');
+  const originalModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.id);
   const replacementSlug = `deepseek-renamed-${Date.now()}`;
 
   const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200);
@@ -2023,7 +1997,6 @@ test('admin can edit provider slug and sees edit title', async () => {
     enabled: '1',
     max_concurrent_requests: provider.max_concurrent_requests || '',
     timeout_ms: provider.timeout_ms || '',
-    public_model: replacementModel,
     upstream_model: 'deepseek-chat-renamed',
     context_limit: '65536',
     output_limit: '8192'
@@ -2031,16 +2004,16 @@ test('admin can edit provider slug and sees edit title', async () => {
 
   const updated = db.prepare('SELECT slug FROM providers WHERE id = ?').get(provider.id);
   assert.equal(updated.slug, replacementSlug);
-  const model = db.prepare('SELECT public_model, upstream_model FROM provider_models WHERE provider_id = ?').get(provider.id);
-  // The alias belongs to pools now: a submitted public_model is ignored.
-  assert.equal(model.public_model, originalModel.public_model);
+  const model = db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(provider.id);
   assert.equal(model.upstream_model, 'deepseek-chat-renamed');
+  // Renaming a provider's slug or upstream model does not touch its pools.
+  assert.deepEqual(db.prepare('SELECT alias FROM pools JOIN pool_providers ON pool_id = pools.id WHERE provider_id = ?').all(provider.id), [{ alias: 'active-model' }]);
   db.prepare('UPDATE providers SET slug = ? WHERE id = ?').run(provider.slug, provider.id);
   db.prepare(`
     UPDATE provider_models
-    SET public_model = ?, upstream_model = ?, context_limit = ?, output_limit = ?
+    SET upstream_model = ?, context_limit = ?, output_limit = ?
     WHERE provider_id = ?
-  `).run(originalModel.public_model, originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id);
+  `).run(originalModel.upstream_model, originalModel.context_limit, originalModel.output_limit, provider.id);
 });
 
 test('provider active mapping can be saved and both provider tests return modal-ready results', async () => {
@@ -2050,7 +2023,6 @@ test('provider active mapping can be saved and both provider tests return modal-
   const originalModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.id);
 
   await agent.post(`/admin/providers/${provider.id}/mapping`).type('form').send({
-    public_model: 'saved-alias',
     upstream_model: 'deepseek-chat',
     context_limit: '65536',
     output_limit: '8192',
@@ -2063,7 +2035,6 @@ test('provider active mapping can be saved and both provider tests return modal-
 
   const models = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').all(provider.id);
   assert.equal(models.length, 1);
-  assert.equal(models[0].public_model, originalModel.public_model);
   assert.equal(models[0].upstream_model, 'deepseek-chat');
   assert.deepEqual(JSON.parse(models[0].reasoning_efforts), ['low', 'medium', 'xhigh']);
   assert.equal(models[0].default_reasoning_effort, 'low');
@@ -2093,12 +2064,11 @@ test('provider active mapping can be saved and both provider tests return modal-
   for (const script of renderedScripts) assert.doesNotThrow(() => new Function(script));
   db.prepare(`
     UPDATE provider_models
-    SET public_model = ?, upstream_model = ?, context_limit = ?, output_limit = ?,
+    SET upstream_model = ?, context_limit = ?, output_limit = ?,
         supports_text_input = ?, supports_image_input = ?, supports_tools = ?, supports_reasoning = ?,
         reasoning_efforts = ?, default_reasoning_effort = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?
     WHERE provider_id = ?
   `).run(
-    originalModel.public_model,
     originalModel.upstream_model,
     originalModel.context_limit,
     originalModel.output_limit,
@@ -2124,7 +2094,6 @@ test('repository-qualified public model IDs survive form saving, discovery, clie
   const form = { upstream_model: identity, context_limit: '32000', output_limit: '4096' };
   await agent.post(`/admin/providers/${provider.lastInsertRowid}/mapping`).type('form').send(form).expect(302);
   const mapping = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
-  assert.equal(mapping.public_model, '');
   assert.equal(mapping.upstream_model, identity);
   for (const invalid of ['bad model', 'bad\tmodel', 'bad\nmodel', '']) {
     await agent.post('/admin/pools').type('form').send({ alias: invalid, provider_ids: String(provider.lastInsertRowid) }).expect(400);
@@ -2154,10 +2123,10 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
   `).run('autoconfigure-vllm', 'Autoconfigure vLLM', 'openai-compatible', `${mockBaseUrl}/v1`, 'local');
   db.prepare(`
     INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-       supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
-    VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 1, 1, 0)
-  `).run(provider.lastInsertRowid, 'autoconfigure-alias', 'stale-model', 'Autoconfigure vLLM', 32000, 4096);
+      (provider_id, upstream_model, name, enabled, context_limit, output_limit, supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+    VALUES (?, ?, ?, 1, ?, ?, 1, 0, 1, 1, 0)
+  `).run(provider.lastInsertRowid, 'stale-model', 'Autoconfigure vLLM', 32000, 4096);
+  publish(db, 'autoconfigure-alias', [provider.lastInsertRowid]);
 
   const edit = await agent.get(`/admin/providers/${provider.lastInsertRowid}`)
     .expect(200)
@@ -2200,7 +2169,6 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
   assert.equal(response.body.applied.contextLimit, 65536);
 
   const updated = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
-  assert.equal(updated.public_model, 'autoconfigure-alias');
   assert.equal(updated.upstream_model, 'active-model');
   assert.equal(updated.context_limit, 65536);
   assert.equal(updated.output_limit, 4096);
@@ -2219,10 +2187,10 @@ test('provider autoconfigure remains generic for official OpenAI-compatible APIs
   `).run('autoconfigure-official', 'Autoconfigure Official', 'openai-compatible', `${mockBaseUrl}/official/v1`, 'official-key');
   db.prepare(`
     INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-       supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
-    VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 1, 0, 0)
-  `).run(provider.lastInsertRowid, 'official-alias', 'official-model-b', 'Autoconfigure Official', 32768, 2048);
+      (provider_id, upstream_model, name, enabled, context_limit, output_limit, supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+    VALUES (?, ?, ?, 1, ?, ?, 1, 0, 1, 0, 0)
+  `).run(provider.lastInsertRowid, 'official-model-b', 'Autoconfigure Official', 32768, 2048);
+  publish(db, 'official-alias', [provider.lastInsertRowid]);
 
   const response = await agent
     .post(`/admin/providers/${provider.lastInsertRowid}/autoconfigure.json`)
@@ -2255,9 +2223,10 @@ test('provider concurrency cap blocks the requested provider', async () => {
     VALUES (?, ?, ?, ?, ?, 1, 1)
   `).run('local-vllm-test', 'Local vLLM Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(provider.lastInsertRowid, 'local-vllm-test', 'slow-local-upstream', 'Slow Local');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32000, 4096)
+  `).run(provider.lastInsertRowid, 'slow-local-upstream', 'Slow Local');
+  publish(db, 'local-vllm-test', [provider.lastInsertRowid]);
 
   const student = createStudent({ models: ['local-vllm-test'] });
   const release = require('../src/services/providerService').reserveProviderForTest('local-vllm-test');
@@ -2288,21 +2257,16 @@ test('group provider pool routes to the least busy provider', async (t) => {
     VALUES (?, ?, ?, ?, ?, 1, NULL)
   `).run('pool-vllm-test', 'Pool vLLM Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(provider.lastInsertRowid, 'active-model', 'pool-upstream', 'Pool Local');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32000, 4096)
+  `).run(provider.lastInsertRowid, 'pool-upstream', 'Pool Local');
+  publish(db, 'active-model', [provider.lastInsertRowid]);
 
   const student = createStudent();
   const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
   const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
-  db.prepare(`
-    INSERT OR REPLACE INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, ?)
-  `).run(groupId, deepseek.id, 100);
-  db.prepare(`
-    INSERT OR REPLACE INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, ?)
-  `).run(groupId, provider.lastInsertRowid, 100);
+  grantProviderPools(db, groupId, deepseek.id);
+  grantProviderPools(db, groupId, provider.lastInsertRowid);
 
   const release = require('../src/services/providerService').reserveProviderForTest('deepseek');
   try {
@@ -2325,19 +2289,16 @@ test('provider pool filters endpoints by required tool capability', async (t) =>
   `).run('tool-capable-pool-test', 'Tool Capable Pool Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
     INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-       supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
-    VALUES (?, 'active-model', 'tool-capable-upstream', 'Tool Capable', 1, 32000, 4096, 1, 1, 1, 1, 1)
+      (provider_id, upstream_model, name, enabled, context_limit, output_limit, supports_text_input, supports_image_input, supports_tools, supports_reasoning, supports_parallel_tools)
+    VALUES (?, 'tool-capable-upstream', 'Tool Capable', 1, 32000, 4096, 1, 1, 1, 1, 1)
   `).run(toolProvider.lastInsertRowid);
+  publish(db, 'active-model', [toolProvider.lastInsertRowid]);
 
   const student = createStudent();
   const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
   const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
   db.prepare('UPDATE provider_models SET supports_tools = 0 WHERE provider_id = ?').run(deepseek.id);
-  db.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, 100)
-  `).run(groupId, toolProvider.lastInsertRowid);
+  grantProviderPools(db, groupId, toolProvider.lastInsertRowid);
 
   try {
     const res = await request(app)
@@ -2378,13 +2339,12 @@ test('group provider pool randomizes equally loaded providers', () => {
     VALUES (?, ?, ?, ?, ?, 1, 100)
   `).run('random-pool-b', 'Random Pool B', 'openai-compatible', mockBaseUrl, 'local');
   const insertModel = db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32000, 4096)
   `);
-  insertModel.run(firstProvider.lastInsertRowid, 'random-pool-model', 'random-upstream-a', 'Random A');
-  insertModel.run(secondProvider.lastInsertRowid, 'random-pool-model', 'random-upstream-b', 'Random B');
-  publishLegacyAccess(db);
-  const poolIds = [db.prepare("SELECT id FROM pools WHERE alias = 'random-pool-model'").get().id];
+  insertModel.run(firstProvider.lastInsertRowid, 'random-upstream-a', 'Random A');
+  insertModel.run(secondProvider.lastInsertRowid, 'random-upstream-b', 'Random B');
+  const poolIds = [publish(db, 'random-pool-model', [firstProvider.lastInsertRowid, secondProvider.lastInsertRowid])];
 
   const { chooseProviderModel } = require('../src/services/providerService');
   const originalRandom = Math.random;
@@ -2407,9 +2367,10 @@ test('user provider access controls api models and opencode download', async () 
     VALUES (?, ?, ?, ?, ?, 1, NULL)
   `).run('group-vllm-test', 'Group vLLM Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(provider.lastInsertRowid, 'group-internal', 'group-upstream', 'Group Internal');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32000, 4096)
+  `).run(provider.lastInsertRowid, 'group-upstream', 'Group Internal');
+  publish(db, 'group-internal', [provider.lastInsertRowid]);
 
   const student = createStudent({ models: ['group-vllm-test'] });
 
@@ -2454,43 +2415,37 @@ test('opencode config lists every public model pool assigned to the user group',
     VALUES (?, ?, ?, ?, ?, 1, NULL)
   `).run('multi-fast-test', 'Multi Fast Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(fastProvider.lastInsertRowid, 'fast-model', 'fast-upstream', 'Fast Model');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 32000, 4096)
+  `).run(fastProvider.lastInsertRowid, 'fast-upstream', 'Fast Model');
+  publish(db, 'fast-model', [fastProvider.lastInsertRowid]);
 
   const secondFastProvider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
     VALUES (?, ?, ?, ?, ?, 1, NULL)
   `).run('multi-fast-backup-test', 'Multi Fast Backup Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 64000, 8192)
-  `).run(secondFastProvider.lastInsertRowid, 'fast-model', 'fast-backup-upstream', 'Fast Backup Model');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 64000, 8192)
+  `).run(secondFastProvider.lastInsertRowid, 'fast-backup-upstream', 'Fast Backup Model');
+  publish(db, 'fast-model', [secondFastProvider.lastInsertRowid]);
 
   const visionProvider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
     VALUES (?, ?, ?, ?, ?, 1, NULL)
   `).run('multi-vision-test', 'Multi Vision Test', 'openai-compatible', mockBaseUrl, 'local');
   db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 64000, 2048)
-  `).run(visionProvider.lastInsertRowid, 'vision-model', 'vision-upstream', 'Vision Model');
+    INSERT INTO provider_models (provider_id, upstream_model, name, enabled, context_limit, output_limit)
+    VALUES (?, ?, ?, 1, 64000, 2048)
+  `).run(visionProvider.lastInsertRowid, 'vision-upstream', 'Vision Model');
+  publish(db, 'vision-model', [visionProvider.lastInsertRowid]);
 
   const student = createStudent({ models: ['multi-fast-test'] });
   const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
-  db.prepare('DELETE FROM group_providers WHERE group_id = ?').run(groupId);
-  db.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, ?)
-  `).run(groupId, fastProvider.lastInsertRowid, 100);
-  db.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, ?)
-  `).run(groupId, secondFastProvider.lastInsertRowid, 99);
-  db.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, ?)
-  `).run(groupId, visionProvider.lastInsertRowid, 98);
+  db.prepare('DELETE FROM group_pools WHERE group_id = ?').run(groupId);
+  grantProviderPools(db, groupId, fastProvider.lastInsertRowid);
+  grantProviderPools(db, groupId, secondFastProvider.lastInsertRowid);
+  grantProviderPools(db, groupId, visionProvider.lastInsertRowid);
 
   const modelsRes = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
   assert.deepEqual(modelsRes.body.data.map((model) => model.id).sort(), ['fast-model', 'vision-model']);
@@ -2672,7 +2627,7 @@ test('student portal shows setup commands and serves configuration scripts', asy
   db.prepare(`
     UPDATE provider_models
     SET context_limit = 131072, output_limit = 16384
-    WHERE public_model = 'active-model'
+    WHERE provider_id IN (SELECT provider_id FROM pool_providers JOIN pools ON pools.id = pool_providers.pool_id WHERE pools.alias = 'active-model')
   `).run();
 
   await agent.get('/').expect(200).expect(/<h1>Login<\/h1>/);
@@ -3025,7 +2980,8 @@ test('admin can regenerate password invite links for lost passwords', async () =
 
 test('chat streaming normalizes split UTF-8 reasoning and forwards configured assistant history', async () => {
   const provider = db.prepare("INSERT INTO providers (slug, name, base_url, api_key) VALUES ('history-stream', 'History stream', ?, 'local')").run(mockBaseUrl);
-  db.prepare("INSERT INTO provider_models (provider_id, public_model, upstream_model, name, reasoning_history_field) VALUES (?, 'history-stream', 'active-model', 'History', 'reasoning_content')").run(provider.lastInsertRowid);
+  db.prepare("INSERT INTO provider_models (provider_id, upstream_model, name, reasoning_history_field) VALUES (?, 'active-model', 'History', 'reasoning_content')").run(provider.lastInsertRowid);
+  publish(db, 'history-stream', [provider.lastInsertRowid]);
   const student = createStudent({ models: ['history-stream'] });
   const response = await request(app).post('/v1/chat/completions').set('Authorization', `Bearer ${student.key}`).send({
     model: 'history-stream', stream: true, messages: [
@@ -3048,13 +3004,12 @@ test('a shared group alias advertises common capabilities instead of impossible 
   ]) {
     const provider = db.prepare('INSERT INTO providers (slug, name, base_url, api_key) VALUES (?, ?, ?, ?)').run(slug, slug, mockBaseUrl, 'local');
     providerIds.push(provider.lastInsertRowid);
-    db.prepare(`INSERT INTO provider_models (provider_id, public_model, upstream_model, name, supports_image_input,
-      supports_tools, supports_parallel_tools, reasoning_efforts) VALUES (?, 'shared-common', 'active-model', ?, ?, ?, 0, ?)`)
-      .run(provider.lastInsertRowid, slug, image, tools, efforts);
+    db.prepare(`INSERT INTO provider_models (provider_id, upstream_model, name, supports_image_input, supports_tools, supports_parallel_tools, reasoning_efforts) VALUES (?, 'active-model', ?, ?, ?, 0, ?)`).run(provider.lastInsertRowid, slug, image, tools, efforts);
+    publish(db, 'shared-common', [provider.lastInsertRowid]);
   }
   const student = createStudent({ models: ['common-image'] });
   const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
-  for (const providerId of providerIds) db.prepare('INSERT OR IGNORE INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, providerId);
+  for (const providerId of providerIds) grantProviderPools(db, groupId, providerId);
   const response = await request(app).get('/v1/model-capabilities').set('Authorization', `Bearer ${student.key}`).expect(200);
   const model = response.body.data.find((item) => item.id === 'shared-common');
   assert.equal(model.capabilities.image, false);

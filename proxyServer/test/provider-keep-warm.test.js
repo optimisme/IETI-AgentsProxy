@@ -29,7 +29,6 @@ test.after(() => {
 
 function addModel(providerId, overrides = {}) {
   const model = {
-    public_model: `alias-${providerId}`,
     upstream_model: `upstream-${providerId}`,
     enabled: 1,
     supports_text_input: 1,
@@ -39,9 +38,9 @@ function addModel(providerId, overrides = {}) {
   };
   return db.prepare(`
     INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, supports_text_input, output_limit, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(providerId, model.public_model, model.upstream_model, 'Test Model', model.enabled,
+      (provider_id, upstream_model, name, enabled, supports_text_input, output_limit, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(providerId, model.upstream_model, 'Test Model', model.enabled,
     model.supports_text_input, model.output_limit, model.updated_at).lastInsertRowid;
 }
 
@@ -84,8 +83,8 @@ function makeService(t, fetchImpl) {
 
 test('keep-warm calls only eligible providers with one current upstream model and does not write usage or quotas', async (t) => {
   const first = addProvider('eligible', {}, { upstream_model: 'old-model', updated_at: '2025-01-01 00:00:00' });
-  addModel(first.id, { public_model: 'current-alias', upstream_model: 'current-model', updated_at: '2026-02-01 00:00:00' });
-  addModel(first.id, { public_model: 'disabled-alias', upstream_model: 'disabled-model', enabled: 0, updated_at: '2026-03-01 00:00:00' });
+  addModel(first.id, { upstream_model: 'current-model', updated_at: '2026-02-01 00:00:00' });
+  addModel(first.id, { upstream_model: 'disabled-model', enabled: 0, updated_at: '2026-03-01 00:00:00' });
   const second = addProvider('eligible-v1', { base_url: 'http://eligible-v1.example.test/v1/' }, { output_limit: 2 });
   addProvider('unselected', { keep_warm_interval_minutes: 0 });
   addProvider('disabled', { enabled: 0 });

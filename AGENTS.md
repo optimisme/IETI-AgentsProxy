@@ -21,7 +21,7 @@
 | `db/` | SQLite connection (`index.js`), schema init/migrations, seed (`init.js`) |
 | `services/` | Business logic (see below) |
 | `middleware/` | Express middleware (auth student, auth admin, rate limit, error handler) |
-| `routes/` | Route handlers (admin, health, me, openai, studentPortal) |
+| `routes/` | Route handlers (health, openai, studentPortal, googleAuth) and `routes/admin/`, the backoffice split by area |
 | `utils/` | Error classes (`errors.js`), token estimation (`tokens.js`) |
 | `views/` | Server-rendered HTML templates for admin/portal UI |
 
@@ -29,6 +29,7 @@
 
 - **`accessService.js`** — Group membership, and each group's pools with the providers behind them
 - **`poolService.js`** — Pools (alias + balanced providers), pool membership, and the pools of a group
+- **`adminAuditService.js`** — Records every form an admin submits (`admin_audit_logs`) and lists them for the Activity page
 - **`keyService.js`** — API key generation (`ieti_sk_...`), bcrypt hashing/verification
 - **`providerService.js`** — Provider selection within a pool, capacity tracking, upstream HTTP proxying
 - **`quotaService.js`** — Validates daily/hourly call & token limits per group
@@ -50,7 +51,7 @@
 | `routes/health.js` | `GET /health` | Health check |
 | `routes/openai.js` | `GET /v1/models`, `POST /v1/chat/completions` | OpenAI-compatible API proxy (with streaming SSE support) |
 | `routes/studentPortal.js` | `/`, `/login`, `/logout`, `/portal/*` | Student self-service web UI |
-| `routes/admin.js` | `/admin/*` | Admin backoffice (users, groups, pools, providers, settings) |
+| `routes/admin/` | `/admin/*` | Admin backoffice. `index.js` mounts one router per area: `dashboard`, `users`, `groups`, `pools`, `providers`, `server`, `activity`; `shared.js` holds what several areas use |
 
 ## Database
 
@@ -64,6 +65,7 @@ SQLite via `better-sqlite3`. Schema lives in `src/db/index.js`. Key tables:
 - `user_groups` — Many-to-many (enforced one-group-per-user)
 - `usage_logs` — Per-request token usage, provider, status
 - `settings` — Key-value server settings
+- `admin_audit_logs` — One row per submitted admin form: admin, action, record, result and the submitted values without secrets
 - `conversations` / `messages` — Reserved for future conversation tracking
 
 ## Scripts
@@ -77,14 +79,18 @@ SQLite via `better-sqlite3`. Schema lives in `src/db/index.js`. Key tables:
 
 ## Testing
 
+Tests that send requests should use a server bound to 127.0.0.1 (`test/helpers/server.js`): when supertest is given the app it opens a wildcard-address server per request, which on macOS can share a port number with another local listener and receive that listener's answer.
+
 Test suite at `test/` uses a local mock DeepSeek server. Run with `npm test`. Existing tests cover: health, auth, `/v1/models`, quotas, admin CRUD, provider routing, streaming.
 
 ## Key Design Decisions
 
 - Proxy is **stateless per request** (no conversation memory) — OpenCode sends full context each time
 - One **group per user** — group defines the pools its students can use and their quotas
-- **Pools** own the model alias and the balancing: a request for an alias is served by the least busy enabled provider of that pool, with each provider's own active mapping. A group gets whole pools, never single providers of one. Providers in a pool should be aligned (same limits and declared features); the Pools pages show the check and can copy the main provider's values. A provider's concurrency limit is shared by every pool it is in
-- **Legacy access tables** — `provider_models.public_model`, `group_providers` and `groups.provider_id` described access before pools. The first start with pools converts them once (`migratePools` in `src/db/index.js`) and never writes them again, so the previous release still runs on the same database. New mappings store an empty `public_model`. Most test suites still describe access through these tables and mirror it with `test/helpers/legacyAccess.js`
+- **Pools** own the model alias and the balancing: a request for an alias is served by the least busy enabled provider of that pool, with each provider's own active mapping. A group gets whole pools, never single providers of one. A provider's concurrency limit is shared by every pool it is in
+- **Capabilities** (limits, images, tools, reasoning) are defined only on providers. What students see under an alias is computed: the smallest limits and the capabilities every serving provider of the pool has. The pool page shows that result and flags a provider as not aligned when it offers less than another one in the pool; nothing copies capabilities between providers
+- **Admin changes are traced**: `adminAuditService.auditAdminChanges` is mounted on the admin router and records every POST an admin makes, with the record's name looked up before the handler runs. Checks that change nothing (provider tests, autoconfigure previews) are skipped, and secret fields are stored as `[provided]`. A new admin route needs a label in `ACTION_LABELS` to read well on the Activity page
+- **Old access data is gone**: `provider_models.public_model`, `group_providers` and `groups.provider_id` described access before pools. `migratePools` in `src/db/index.js` converts a database that still has them, once, and then removes them by rebuilding the two tables. Tests build such a database with `test/helpers/oldAccess.js`; other tests set up access with `test/helpers/pools.js`
 - **Rate limiting** is in-memory (not persisted), resets on server restart. Failed logins are also limited in memory per address and per address+login
 - **Quota reservations** for in-flight requests and the per-user concurrency limit (`MAX_CONCURRENT_REQUESTS_PER_USER`) are in-memory and assume a single server process
 - **Token estimation** is character-based (`Math.ceil(text.length / 4)`) — not a real tokenizer. It feeds quota reservations, so a request whose real input exceeds the estimate can overshoot the quota by that difference
@@ -115,7 +121,7 @@ cd proxyServer/proxmox
 ```
 
 Default port is `3000`. The script:
-- Backs up `data/` and `settings.env`, then runs the release's migrations on a copy and cancels if any existing record would change. Allowed exceptions: new tables (reported in the output), new columns that stay NULL, and settings keys listed in `RETIRED_SETTINGS`
+- Backs up `data/` and `settings.env`, then runs the release's migrations on a copy and cancels if any existing record would change. Allowed exceptions: new tables (reported in the output), new columns that stay NULL, and what the script lists as retired on purpose (`RETIRED_SETTINGS`, `RETIRED_TABLES`, `RETIRED_COLUMNS`)
 - Archives the committed `proxyServer/` subtree without a directory wrapper (excluding deployment tooling, private settings, `node_modules/`, and `data/`); sibling `docker/` is outside its scope
 - SCPs the zip to the remote host
 - Stops the existing pm2 process
