@@ -2,7 +2,7 @@ const config = require('../config');
 const { apiError } = require('../utils/errors');
 const { getUsageTotals } = require('./usageService');
 const { getUserGroup } = require('./accessService');
-const { getPublicModelAliasesForProviderSlugs } = require('./providerService');
+const { getPublicModelAliasesForPools } = require('./providerService');
 const { getSetting } = require('./settingsService');
 
 // Requests in flight are not in usage_logs until they finish, so their calls and token
@@ -37,9 +37,9 @@ function checkQuota({ user, model, estimatedInputTokens = 0, requestedMaxTokens 
     throw apiError(403, 'group_required', 'This user is not assigned to a group.');
   }
   if (!group.provider_slug) {
-    throw apiError(403, 'provider_required', 'This user group has no assigned provider.');
+    throw apiError(403, 'provider_required', 'This user group has no assigned provider pool.');
   }
-  const allowedModels = getPublicModelAliasesForProviderSlugs(group.provider_slugs);
+  const allowedModels = getPublicModelAliasesForPools(group.pool_ids);
   if (!allowedModels.includes(model)) {
     const hint = allowedModels.length ? allowedModels.join(', ') : config.publicModelName;
     throw apiError(403, 'model_not_allowed', `Use ${hint} for this user.`);

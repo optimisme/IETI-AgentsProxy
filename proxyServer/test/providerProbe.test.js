@@ -217,17 +217,19 @@ test('autoconfigure uses official data first, tests only the selected model and 
     await agent.post(endpoint).send({ apply: true }).expect(200);
     const saved = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(providerId);
     assert.equal(saved.context_limit, 32768); assert.equal(saved.output_limit, 2048);
-    assert.equal(saved.public_model, 'unsloth/Qwen3.8-27B-NVFP4');
-    assert.equal(saved.upstream_model, saved.public_model); assert.equal(saved.reasoning_history_field, 'reasoning_content');
+    // The alias students see belongs to pools; autoconfigure only sets the upstream model.
+    assert.equal(saved.public_model, 'my-alias');
+    assert.equal(saved.upstream_model, 'unsloth/Qwen3.8-27B-NVFP4'); assert.equal(saved.reasoning_history_field, 'reasoning_content');
     assert.equal(saved.supports_tools, 1);
-    // The same discovery also seeds both names for providers with no existing mapping.
+    // The same discovery also seeds the upstream model for providers with no existing mapping.
     const fresh = db.prepare("INSERT INTO providers (slug, name, base_url, api_key) VALUES ('probe-new', 'New probe', ?, 'secret-key')")
       .run(`http://127.0.0.1:${server.address().port}`).lastInsertRowid;
     const applied = await agent.post(`/admin/providers/${fresh}/autoconfigure.json`).send({ apply: true }).expect(200);
-    assert.equal(applied.body.applied.publicModel, saved.public_model);
-    assert.equal(applied.body.applied.upstreamModel, saved.public_model);
+    assert.equal(applied.body.applied.publicModel, undefined);
+    assert.equal(applied.body.applied.upstreamModel, saved.upstream_model);
     const created = db.prepare('SELECT public_model, upstream_model FROM provider_models WHERE provider_id = ?').get(fresh);
-    assert.deepEqual(created, { public_model: saved.public_model, upstream_model: saved.public_model });
+    assert.deepEqual(created, { public_model: '', upstream_model: saved.upstream_model });
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM pool_providers WHERE provider_id = ?').get(fresh).count, 0);
     catalog.data[0].supports_tools = false;
     await agent.post(endpoint).send({ apply: true }).expect(200);
     assert.equal(db.prepare('SELECT supports_tools FROM provider_models WHERE provider_id = ?').get(providerId).supports_tools, 0,

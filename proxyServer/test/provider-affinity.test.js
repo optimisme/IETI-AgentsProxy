@@ -24,6 +24,8 @@ const { getUsageTotals } = require('../src/services/usageService');
 const keys = require('../src/services/keyService');
 const { createApp } = require('../src/app');
 const pool = ['affinity-a', 'affinity-b'];
+let poolIds;
+let soloPoolId;
 const firstMessages = [{ role: 'system', content: 'Shared instructions' }, { role: 'user', content: 'Shared first template' }];
 const answer = { role: 'assistant', content: 'Distinct actual answer' };
 let db;
@@ -67,12 +69,19 @@ test.before(async () => {
   const addModel = db.prepare('INSERT INTO provider_models (provider_id,public_model,upstream_model,name,enabled,supports_text_input,supports_image_input,supports_tools) VALUES (?, ?, ?, ?, 1, 1, 1, 1)');
   pool.forEach((slug, index) => {
     const id = addProvider.run(slug, slug, `http://127.0.0.1:${upstream.address().port}`, index ? 10 : 100).lastInsertRowid;
-    addModel.run(id, 'affinity-model', `upstream-${index ? 'b' : 'a'}`, slug);
-    addModel.run(id, 'other-model', `upstream-${index ? 'b' : 'a'}`, slug);
+    addModel.run(id, '', `upstream-${index ? 'b' : 'a'}`, slug);
   });
+  // Both providers are balanced under two aliases; a third pool holds only the first provider.
+  const addPool = (alias, slugs) => {
+    const id = db.prepare('INSERT INTO pools (alias) VALUES (?)').run(alias).lastInsertRowid;
+    for (const slug of slugs) db.prepare('INSERT INTO pool_providers (pool_id, provider_id) SELECT ?, id FROM providers WHERE slug = ?').run(id, slug);
+    return Number(id);
+  };
+  poolIds = [addPool('affinity-model', pool), addPool('other-model', pool)];
+  soloPoolId = addPool('affinity-solo', [pool[0]]);
   const group = db.prepare("INSERT INTO groups (name,provider_id,daily_call_limit,daily_token_limit,hourly_call_limit,hourly_token_limit) VALUES ('Affinity fixtures', ?, 1000, 10000000, 1000, 10000000)")
     .run(db.prepare('SELECT id FROM providers WHERE slug=?').get(pool[0]).id).lastInsertRowid;
-  pool.forEach((slug) => db.prepare('INSERT INTO group_providers (group_id,provider_id,enabled,priority) VALUES (?, ?, 1, 100)').run(group, db.prepare('SELECT id FROM providers WHERE slug=?').get(slug).id));
+  poolIds.forEach((poolId) => db.prepare('INSERT INTO group_pools (group_id, pool_id) VALUES (?, ?)').run(group, poolId));
   const key = keys.generateStudentKey();
   student = { key, id: db.prepare("INSERT INTO users (name,email,api_key_hash,api_key_lookup_hash) VALUES ('Synthetic','affinity@example.test', ?, ?)").run(keys.hashApiKey(key), keys.lookupHashApiKey(key)).lastInsertRowid };
   db.prepare('INSERT INTO user_groups (user_id,group_id) VALUES (?,?)').run(student.id, group);
@@ -136,7 +145,9 @@ test('disabled, incompatible, unauthorized and full previous providers cannot be
   assert.equal((await chat({ ...body, messages: [image] }).expect(200)).body.model, 'upstream-b');
   const affinity = createAffinityStore().request({ userId: 1, model: 'affinity-model', conversationId: 'assigned' });
   affinity.setPool(pool); affinity.complete(pool[1]);
-  assert.equal(chooseProviderModel('affinity-model', [pool[0]], {}, { affinity }).slug, pool[0]);
+  assert.equal(chooseProviderModel('affinity-solo', [soloPoolId], {}, { affinity }).slug, pool[0]);
+  assert.throws(() => chooseProviderModel('affinity-solo', poolIds), { code: 'model_not_found' }, 'A pool outside the caller\'s pools is not reachable');
+  assert.throws(() => chooseProviderModel('affinity-model', []), { code: 'model_not_found' }, 'No pools means no access');
   db.prepare('UPDATE providers SET max_concurrent_requests=1 WHERE slug=?').run(pool[1]);
   const full = reserveProviderForTest(pool[1]);
   try { assert.equal((await chat(body).expect(200)).body.model, 'upstream-a'); } finally { full(); }
@@ -214,7 +225,7 @@ test('connection refusal falls back without charging unknown usage; aborted requ
   assert.equal((await chat(payload()).expect(200)).body.model, 'upstream-b');
   assert.equal(calls.length, 1);
   assert.equal(getUsageTotals(student.id).todayTokens, 7);
-  await assert.rejects(callChatCompletions(payload(), { signal: AbortSignal.abort(), providerSlugs: pool }), { name: 'AbortError' });
+  await assert.rejects(callChatCompletions(payload(), { signal: AbortSignal.abort(), poolIds }), { name: 'AbortError' });
   assert.equal(getInFlight(pool[0]), 0); assert.equal(getInFlight(pool[1]), 0);
   db.prepare('UPDATE providers SET base_url=? WHERE slug=?').run(`http://127.0.0.1:${upstream.address().port}`, pool[0]);
   pool.forEach((slug) => providerAvailability.succeeded(slug));

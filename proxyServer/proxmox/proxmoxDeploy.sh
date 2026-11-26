@@ -304,8 +304,15 @@ db.close()
 for table, state in states.items():
     if table in before and state['columns'] != before[table]['columns']:
         raise AssertionError(f'Release startup removed or reordered columns in {table}; deployment cancelled')
-assert {t: {k: v for k, v in s.items() if k != 'columns'} for t, s in states.items()} == {t: {k: v for k, v in s.items() if k != 'columns'} for t, s in before.items()}, 'Release startup would change production records; deployment cancelled'
+removed = sorted(table for table in before if table not in states)
+assert not removed, f'Release startup removed table(s) {removed}; deployment cancelled'
+# A migration may create tables: they hold no production records yet, so nothing can be lost.
+# Every table that existed before the release must still match record for record.
+created = sorted(table for table in states if table not in before)
+assert {t: {k: v for k, v in s.items() if k != 'columns'} for t, s in states.items() if t in before} == {t: {k: v for k, v in s.items() if k != 'columns'} for t, s in before.items()}, 'Release startup would change production records; deployment cancelled'
 print('New release startup preserves every database table and record on the isolated backup.')
+if created:
+    print('New release startup adds table(s): ' + ', '.join(f"{table} ({states[table]['count']} rows)" for table in created))
 PYTHON
 rm -rf "$VALIDATION_DIR"
 VALIDATION_DIR=""

@@ -411,6 +411,81 @@ function migrateSchema(database) {
       AND base_url LIKE 'https://api.deepseek.com%'
       AND EXISTS (SELECT 1 FROM providers WHERE slug = 'deepseek' AND enabled = 1)
   `).run();
+
+  migratePools(database);
+}
+
+// A pool is a set of load-balanced providers published to students under one model alias.
+// Groups are given pools, and a provider may belong to several pools.
+//
+// The pool tables are created here rather than in initSchema so that the first start of a
+// release that has them can tell an existing database apart and convert it exactly once.
+// Before pools, a provider's alias was provider_models.public_model and a group listed its
+// providers in group_providers (or groups.provider_id). Those are only read here, never
+// changed, so the previous release still works on the same database.
+function migratePools(database) {
+  const existed = Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pools'").get());
+  database.transaction(() => {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS pools (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alias TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS pool_providers (
+        pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+        provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (pool_id, provider_id)
+      );
+      CREATE TABLE IF NOT EXISTS group_pools (
+        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (group_id, pool_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pool_providers_provider ON pool_providers(provider_id);
+      CREATE INDEX IF NOT EXISTS idx_group_pools_pool ON group_pools(pool_id);
+    `);
+    if (!existed) convertLegacyAccessToPools(database);
+  })();
+}
+
+// One pool per alias in use, holding the providers whose active mapping had that alias.
+// A group gets every pool that contains one of the providers it was assigned.
+function convertLegacyAccessToPools(database) {
+  const insertPool = database.prepare('INSERT OR IGNORE INTO pools (alias) VALUES (?)');
+  const poolId = database.prepare('SELECT id FROM pools WHERE alias = ?');
+  const addProvider = database.prepare('INSERT OR IGNORE INTO pool_providers (pool_id, provider_id) VALUES (?, ?)');
+  const providerAliases = database.prepare(`
+    SELECT providers.id AS provider_id, (
+      SELECT public_model
+      FROM provider_models
+      WHERE provider_models.provider_id = providers.id
+      ORDER BY provider_models.enabled DESC, provider_models.updated_at DESC, provider_models.id DESC
+      LIMIT 1
+    ) AS alias
+    FROM providers
+    ORDER BY providers.id ASC
+  `).all();
+  for (const { provider_id: providerId, alias } of providerAliases) {
+    if (!alias || !String(alias).trim()) continue;
+    insertPool.run(alias);
+    addProvider.run(poolId.get(alias).id, providerId);
+  }
+  database.exec(`
+    INSERT OR IGNORE INTO group_pools (group_id, pool_id)
+    SELECT assigned.group_id, pool_providers.pool_id
+    FROM (
+      SELECT group_id, provider_id FROM group_providers WHERE enabled = 1
+      UNION
+      SELECT id, provider_id FROM groups
+      WHERE provider_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM group_providers WHERE group_providers.group_id = groups.id)
+    ) AS assigned
+    JOIN pool_providers ON pool_providers.provider_id = assigned.provider_id
+  `);
 }
 
 function seedSettings(database) {
@@ -485,6 +560,12 @@ function seedDefaultProvider(database) {
     contextLimit,
     8192
   );
+
+  database.prepare('INSERT OR IGNORE INTO pools (alias) VALUES (?)').run(config.publicModelName);
+  database.prepare(`
+    INSERT OR IGNORE INTO pool_providers (pool_id, provider_id)
+    SELECT id, ? FROM pools WHERE alias = ?
+  `).run(provider.lastInsertRowid, config.publicModelName);
 }
 
 // Creates the default group only when the database has no groups, and places the approved
@@ -506,6 +587,10 @@ function seedDefaultGroup(database) {
     DEFAULT_GROUP_LIMITS.hourlyCallLimit,
     DEFAULT_GROUP_LIMITS.hourlyTokenLimit
   );
+  database.prepare(`
+    INSERT OR IGNORE INTO group_pools (group_id, pool_id)
+    SELECT ?, pool_id FROM pool_providers WHERE provider_id = ?
+  `).run(group.lastInsertRowid, providerId);
 
   database.prepare(`
     INSERT OR IGNORE INTO user_groups (user_id, group_id)
@@ -525,4 +610,4 @@ function closeDb() {
   }
 }
 
-module.exports = { getDb, closeDb, initSchema, migrateSchema, seedSettings };
+module.exports = { getDb, closeDb, initSchema, migrateSchema, seedSettings, convertLegacyAccessToPools };

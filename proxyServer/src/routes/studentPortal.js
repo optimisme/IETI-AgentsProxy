@@ -194,8 +194,8 @@ function getModelEntries(models, major = 2) {
 
 function getActiveModelsForUser(user) {
   const group = getUserGroup(user.id);
-  const providerSlugs = group?.provider_slugs || [];
-  const enabled = getEnabledModelEntries().filter((entry) => providerSlugs.includes(entry.id));
+  const poolIds = group?.pool_ids || [];
+  const enabled = getEnabledModelEntries().filter((entry) => poolIds.includes(entry.poolId));
   const defaults = {
     context: Number(getSetting('default_model_context_limit', config.defaultModelContextLimit)),
     output: Number(getSetting('default_model_output_limit', OPENCODE_DEFAULT_OUTPUT_LIMIT))

@@ -38,7 +38,7 @@ if (!fs.existsSync(deploymentPath)) {
     return files;
   }
 
-  function fixture(t, { mutate = false, occupied = false, uncheckpointed = false } = {}) {
+  function fixture(t, { mutate = false, occupied = false, uncheckpointed = false, beforePools = false, dropTable = false } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ieti-proxmox-deploy-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const home = path.join(root, 'home');
@@ -87,6 +87,17 @@ if (!fs.existsSync(deploymentPath)) {
         VALUES (1, 'fixture-model', 3, 4, 7, 'success');
       UPDATE settings SET updated_at = '2000-01-01' WHERE key = 'public_base_url';
     `);
+    if (beforePools) {
+      // A database last started by a release that had no pools: access is still described by
+      // the alias on each provider's mapping and the providers listed for each group.
+      db.exec(`
+        DROP TABLE group_pools; DROP TABLE pool_providers; DROP TABLE pools;
+        INSERT INTO providers (id, slug, name, base_url) VALUES (50, 'second', 'Second', 'http://127.0.0.1:9');
+        INSERT INTO provider_models (provider_id, public_model, upstream_model, name)
+          SELECT 50, public_model, 'second-upstream', 'Second' FROM provider_models LIMIT 1;
+        INSERT INTO group_providers (group_id, provider_id) SELECT MIN(id), 50 FROM groups;
+      `);
+    }
     db.close();
     if (uncheckpointed) {
       const interrupted = run(process.execPath, ['-e', `
@@ -99,6 +110,16 @@ if (!fs.existsSync(deploymentPath)) {
       assert.ok(fs.statSync(`${database}-wal`).size > 0, 'Committed records remain in the WAL before deployment.');
     }
     fs.writeFileSync(path.join(current, 'data', 'attachment.bin'), Buffer.from([0, 1, 255, 2]));
+    if (dropTable) {
+      fs.appendFileSync(path.join(release, 'src', 'db', 'index.js'), `
+        const originalGetDb = module.exports.getDb;
+        module.exports.getDb = () => {
+          const database = originalGetDb();
+          database.exec('DROP TABLE messages');
+          return database;
+        };
+      `);
+    }
     if (mutate) {
       fs.appendFileSync(path.join(release, 'src', 'db', 'index.js'), `
         const originalGetDb = module.exports.getDb;
@@ -189,6 +210,25 @@ if (!fs.existsSync(deploymentPath)) {
     assert.match(fs.readFileSync(f.commands, 'utf8'), /start src\/server.js --name app/);
     assert.equal(fs.existsSync(path.join(f.root, 'unexpected.sqlite')), false);
     assert.deepEqual(fs.readdirSync(f.temporary), []);
+  });
+
+  test('deployment accepts a release that only adds tables and reports them', t => {
+    const f = fixture(t, { beforePools: true });
+    const result = f.deploy();
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /New release startup preserves every database table and record/);
+    assert.match(result.stdout, /New release startup adds table\(s\): group_pools \(1 rows\), pool_providers \(2 rows\), pools \(1 rows\)/);
+    assert.deepEqual(runtimeFiles(f.current), f.before, 'The conversion ran on the validation copy only');
+    assert.match(fs.readFileSync(path.join(f.current, 'src', 'server.js'), 'utf8'), /candidate release/);
+  });
+
+  test('deployment rejects a release whose startup removes a table', t => {
+    const f = fixture(t, { dropTable: true });
+    const result = f.deploy();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Release startup removed table\(s\) \['messages'\]/);
+    assert.deepEqual(runtimeFiles(f.current), f.before);
+    assert.match(fs.readFileSync(path.join(f.current, 'src', 'server.js'), 'utf8'), /previous release/);
   });
 
   test('deployment rejects a port that remains occupied after the bounded shutdown wait', t => {

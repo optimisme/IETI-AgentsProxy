@@ -25,10 +25,10 @@ const {
 
 const router = express.Router();
 
-function getPublishedModels(providerSlugs) {
-  const allowed = new Set(providerSlugs || []);
+function getPublishedModels(poolIds) {
+  const allowed = new Set(poolIds || []);
   const grouped = new Map();
-  for (const entry of getEnabledModelEntries().filter((model) => allowed.has(model.id))) {
+  for (const entry of getEnabledModelEntries().filter((model) => allowed.has(model.poolId))) {
     if (!entry.publicModel) continue;
     const current = grouped.get(entry.publicModel);
     const contextWindow = Number(entry.limit?.context || config.defaultModelContextLimit);
@@ -46,7 +46,7 @@ function getPublishedModels(providerSlugs) {
 
 router.get('/v1/models', authStudent, studentRateLimit, (req, res) => {
   const group = getUserGroup(req.student.id);
-  const models = getPublishedModels(group?.provider_slugs || []);
+  const models = getPublishedModels(group?.pool_ids || []);
   if (req.query.client_version) {
     return res.json({
       models: models.map((model) => codexModelMetadata({ ...model, model: model.id }))
@@ -66,7 +66,7 @@ router.get('/v1/models', authStudent, studentRateLimit, (req, res) => {
 
 router.get('/v1/model-capabilities', authStudent, studentRateLimit, (req, res) => {
   const group = getUserGroup(req.student.id);
-  const models = getPublishedModels(group?.provider_slugs || []);
+  const models = getPublishedModels(group?.pool_ids || []);
   return res.json({
     object: 'ieti.model_capabilities.list',
     schema_version: 1,
@@ -149,7 +149,7 @@ router.post('/v1/responses', authStudent, studentRateLimit, largeJsonBody, async
     providerRequestStarted = true;
     const providerResponse = await callChatCompletions(chatPayload, {
       signal: controller.signal,
-      providerSlugs: group.provider_slugs,
+      poolIds: group.pool_ids,
       conversation: affinityContextFromRequest(req, responsesPayload),
       onAttemptFailure: (error) => recordFailedAttempt({ userId: user.id, model, wasStreaming }, error),
       requiredCapabilities: {

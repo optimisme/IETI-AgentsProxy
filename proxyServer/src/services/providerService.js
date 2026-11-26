@@ -158,12 +158,15 @@ function maxImagesValue(model) {
   return model.max_images !== null && model.max_images !== undefined && Number.isInteger(value) && value > 0 ? value : null;
 }
 
+// One entry per enabled provider in each pool, published under the pool's alias. A provider
+// serves its active model mapping, whichever pools it belongs to.
 function getEnabledModelEntries() {
   const rows = getDb().prepare(`
     SELECT
+      pools.id AS pool_id,
+      pools.alias AS public_model,
       providers.slug,
       providers.name AS provider_name,
-      provider_models.public_model,
       provider_models.name AS model_name,
       provider_models.context_limit,
       provider_models.output_limit,
@@ -178,13 +181,22 @@ function getEnabledModelEntries() {
       provider_models.supports_chat_template_kwargs,
       provider_models.supports_parallel_tools,
       providers.priority
-    FROM providers
-    JOIN provider_models ON providers.id = provider_models.provider_id
+    FROM pools
+    JOIN pool_providers ON pool_providers.pool_id = pools.id
+    JOIN providers ON providers.id = pool_providers.provider_id
+    JOIN provider_models ON provider_models.id = (
+      SELECT active.id
+      FROM provider_models AS active
+      WHERE active.provider_id = providers.id
+      ORDER BY active.enabled DESC, active.updated_at DESC, active.id DESC
+      LIMIT 1
+    )
     WHERE providers.enabled = 1 AND provider_models.enabled = 1
-    ORDER BY providers.priority DESC, providers.name ASC, provider_models.id ASC
+    ORDER BY providers.priority DESC, providers.name ASC, providers.id ASC, pools.alias ASC
   `).all();
   return rows.map((row) => ({
       id: row.slug,
+      poolId: row.pool_id,
       publicModel: row.public_model,
       name: row.provider_name || row.slug,
       limit: {
@@ -206,11 +218,17 @@ function getEnabledModelEntries() {
   }));
 }
 
-function getPublicModelAliasesForProviderSlugs(slugs) {
-  const allowedSlugs = new Set(normalizeProviderSlugs(slugs));
-  if (!allowedSlugs.size) return [];
+function normalizePoolIds(poolIds) {
+  const values = Array.isArray(poolIds) ? poolIds : [poolIds];
+  return [...new Set(values.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+}
+
+// Aliases of the given pools that currently have an enabled provider behind them.
+function getPublicModelAliasesForPools(poolIds) {
+  const allowed = new Set(normalizePoolIds(poolIds));
+  if (!allowed.size) return [];
   return [...new Set(getEnabledModelEntries()
-    .filter((model) => allowedSlugs.has(model.id))
+    .filter((model) => allowed.has(model.poolId))
     .map((model) => model.publicModel)
     .filter(Boolean))];
 }
@@ -247,27 +265,25 @@ function reserveProviderForTest(slug) {
   return reserveProvider(provider);
 }
 
-function normalizeProviderSlugs(slugs) {
-  if (!slugs) return [];
-  const values = Array.isArray(slugs) ? slugs : [slugs];
-  return [...new Set(values.map((slug) => String(slug || '').trim()).filter(Boolean))];
-}
-
-function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, requiredCapabilities = {}, { affinity, excludedProviderSlugs = [] } = {}) {
-  const slugs = normalizeProviderSlugs(assignedProviderSlugs);
+// Picks a provider from the pool published as publicModelAlias. assignedPoolIds limits the
+// choice to the caller's pools: null means any pool, an empty list means none.
+function chooseProviderModel(publicModelAlias, assignedPoolIds = null, requiredCapabilities = {}, { affinity, excludedProviderSlugs = [] } = {}) {
   const params = { publicModelAlias };
-  const providerFilter = slugs.length
-    ? `AND providers.slug IN (${slugs.map((_, index) => `@slug${index}`).join(', ')})
-       AND provider_models.public_model = @publicModelAlias`
-    : 'AND provider_models.public_model = @publicModelAlias';
-  slugs.forEach((slug, index) => {
-    params[`slug${index}`] = slug;
-  });
+  let poolFilter = '';
+  if (assignedPoolIds !== null && assignedPoolIds !== undefined) {
+    const poolIds = normalizePoolIds(assignedPoolIds);
+    poolFilter = poolIds.length
+      ? `AND pools.id IN (${poolIds.map((_, index) => `@pool${index}`).join(', ')})`
+      : 'AND 0';
+    poolIds.forEach((poolId, index) => {
+      params[`pool${index}`] = poolId;
+    });
+  }
 
   const candidates = getDb().prepare(`
     SELECT
       providers.*,
-      provider_models.public_model AS public_model_alias,
+      pools.alias AS public_model_alias,
       provider_models.upstream_model,
       provider_models.context_limit,
       provider_models.output_limit,
@@ -281,11 +297,20 @@ function chooseProviderModel(publicModelAlias, assignedProviderSlugs = null, req
       provider_models.reasoning_history_field,
       provider_models.supports_chat_template_kwargs,
       provider_models.supports_parallel_tools
-    FROM provider_models
-    JOIN providers ON providers.id = provider_models.provider_id
-    WHERE providers.enabled = 1
+    FROM pools
+    JOIN pool_providers ON pool_providers.pool_id = pools.id
+    JOIN providers ON providers.id = pool_providers.provider_id
+    JOIN provider_models ON provider_models.id = (
+      SELECT active.id
+      FROM provider_models AS active
+      WHERE active.provider_id = providers.id
+      ORDER BY active.enabled DESC, active.updated_at DESC, active.id DESC
+      LIMIT 1
+    )
+    WHERE pools.alias = @publicModelAlias
+      AND providers.enabled = 1
       AND provider_models.enabled = 1
-      ${providerFilter}
+      ${poolFilter}
     ORDER BY providers.priority DESC, providers.name ASC, providers.id ASC
   `).all(params);
 
@@ -378,7 +403,7 @@ function inferRequiredCapabilities(payload) {
   };
 }
 
-async function callChatCompletions(payload, { signal, providerSlug = null, providerSlugs = null, requiredCapabilities = {}, conversation = {}, onAttemptFailure } = {}) {
+async function callChatCompletions(payload, { signal, poolIds = null, requiredCapabilities = {}, conversation = {}, onAttemptFailure } = {}) {
   const inferred = inferRequiredCapabilities(payload);
   const requirements = {
     text: Boolean(inferred.text || requiredCapabilities.text),
@@ -399,7 +424,7 @@ async function callChatCompletions(payload, { signal, providerSlug = null, provi
     signal?.throwIfAborted();
     let provider;
     try {
-      provider = chooseProviderModel(payload.model, providerSlugs || providerSlug, requirements, { affinity, excludedProviderSlugs: attemptedSlugs });
+      provider = chooseProviderModel(payload.model, poolIds, requirements, { affinity, excludedProviderSlugs: attemptedSlugs });
     } catch (error) {
       throw lastError || error;
     }
@@ -485,7 +510,7 @@ async function testProvider({ slug, apiKey, baseUrl, model }) {
     SELECT upstream_model
     FROM provider_models
     WHERE provider_id = ?
-    ORDER BY public_model ASC
+    ORDER BY enabled DESC, updated_at DESC, id DESC
     LIMIT 1
   `).get(provider?.id)?.upstream_model;
 
@@ -660,7 +685,7 @@ module.exports = {
   chooseProviderModel,
   discoverProviderMetadata,
   getEnabledModelEntries,
-  getPublicModelAliasesForProviderSlugs,
+  getPublicModelAliasesForPools,
   getInFlight,
   getProviderBySlug,
   inferRequiredCapabilities,

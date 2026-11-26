@@ -26,6 +26,7 @@ const { getInFlight } = require('../src/services/providerService');
 const { providerAvailability } = require('../src/services/providerAvailabilityService');
 const { getUsageTotals } = require('../src/services/usageService');
 const { createApp } = require('../src/app');
+const { withLegacyAccess } = require('./helpers/legacyAccess');
 const { HARNESS_TOKENS, estimateConversation, preparePortalChatPayload } = require('../src/utils/portalChat');
 const password = 'portal-chat-student-password';
 const passwordHash = hashPassword(password);
@@ -34,6 +35,7 @@ let db;
 let app;
 let server;
 let providerId;
+let visionProviderId;
 let sequence = 0;
 let upstreamCalls = [];
 let upstreamMode = 'success';
@@ -78,14 +80,19 @@ test.before(async () => {
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit, supports_image_input)
     VALUES (?, ?, ?, ?, 1, 32768, 4096, ?)
   `);
+  // One provider serves one upstream model, so the two models are two providers on the same server.
+  visionProviderId = Number(db.prepare(`
+    INSERT INTO providers (slug, name, base_url, api_key, enabled)
+    VALUES ('portal-chat-vision-provider', 'Portal chat vision provider', ?, 'private-upstream-key', 1)
+  `).run(`http://127.0.0.1:${server.address().port}`).lastInsertRowid);
   addModel.run(providerId, 'portal-chat-text', 'fixture-text', 'Text model', 0);
-  addModel.run(providerId, 'portal-chat-vision', 'fixture-vision', 'Vision model', 1);
+  addModel.run(visionProviderId, 'portal-chat-vision', 'fixture-vision', 'Vision model', 1);
   const hiddenProvider = db.prepare(`
     INSERT INTO providers (slug, name, base_url, api_key, enabled)
     VALUES ('portal-chat-other', 'Other provider', 'http://127.0.0.1:9', 'other-secret', 1)
   `).run().lastInsertRowid;
   addModel.run(hiddenProvider, 'unassigned-model', 'unassigned-upstream', 'Unassigned model', 1);
-  app = createApp();
+  app = withLegacyAccess(createApp(), () => db);
 });
 
 test.beforeEach(() => {
@@ -102,7 +109,7 @@ test.beforeEach(() => {
 });
 
 test.after(async () => {
-  app?.locals.sessionStore.close();
+  app?.unwrapped.locals.sessionStore.close();
   closeDb();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
@@ -119,6 +126,9 @@ function student({ status = 'approved', grouped = true } = {}) {
   if (grouped) {
     groupId = Number(db.prepare('INSERT INTO groups (name, provider_id) VALUES (?, ?)')
       .run(`Portal chat group ${sequence}`, providerId).lastInsertRowid);
+    for (const assigned of [providerId, visionProviderId]) {
+      db.prepare('INSERT INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, assigned);
+    }
     db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(id, groupId);
   }
   return { id, email, groupId };
@@ -472,7 +482,7 @@ test('Chat bounds an unavailable provider and returns a recorded timeout', async
 
 test('aborting Chat cancels generation, releases provider capacity and records no conversation', async () => {
   const user = student();
-  const applicationServer = app.listen(0, '127.0.0.1');
+  const applicationServer = http.createServer(app).listen(0, '127.0.0.1');
   await new Promise((resolve) => applicationServer.once('listening', resolve));
   let client;
   let requestTimer;

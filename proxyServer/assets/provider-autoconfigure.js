@@ -1,6 +1,5 @@
 (() => {
   const labels = {
-    public_model: 'OpenCode model alias',
     upstream_model: 'Upstream model', context_limit: 'Context limit', output_limit: 'Output limit',
     supports_text_input: 'Text input', supports_image_input: 'Image input', supports_tools: 'Tool calling',
     supports_reasoning: 'Reasoning', supports_parallel_tools: 'Parallel tools',
@@ -92,7 +91,7 @@
     }
     function renderSettings(model) {
       settingsTable.replaceChildren();
-      for (const [field, value] of Object.entries({ ...model.settings, public_model: model.id, upstream_model: model.id })) {
+      for (const [field, value] of Object.entries({ ...model.settings, upstream_model: model.id })) {
         if (!Object.hasOwn(labels, field)) continue;
         const row = document.createElement('tr');
         for (const text of [labels[field], displayValue(field, currentValue(field)), displayValue(field, value)]) {
@@ -229,7 +228,7 @@
     modelSelect.addEventListener('change', () => start(modelSelect.value));
     apply.addEventListener('click', () => {
       if (controller || !selected) return;
-      const values = { ...selected.settings, public_model: selected.id, upstream_model: selected.id };
+      const values = { ...selected.settings, upstream_model: selected.id };
       for (const [field, value] of Object.entries(values)) {
         if (!Object.hasOwn(labels, field)) continue;
         if (field === 'reasoning_efforts') {

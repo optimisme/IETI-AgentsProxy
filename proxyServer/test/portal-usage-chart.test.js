@@ -19,6 +19,7 @@ process.env.SESSION_SECRET = 'portal-usage-chart-test-session-secret';
 const { getDb, closeDb } = require('../src/db');
 const { hashPassword } = require('../src/services/studentAuthService');
 const { createApp } = require('../src/app');
+const { withLegacyAccess } = require('./helpers/legacyAccess');
 const password = 'portal-chart-student-password';
 const passwordHash = hashPassword(password);
 let db;
@@ -36,13 +37,13 @@ test.before(() => {
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
     VALUES (?, 'portal-chart-model', 'fixture-upstream', 'Portal chart model', 1, 8192, 1024)
   `).run(providerId);
-  app = createApp();
+  app = withLegacyAccess(createApp(), () => db);
 });
 test.beforeEach(() => {
   db.exec('DELETE FROM usage_logs; DELETE FROM users; DELETE FROM groups;');
 });
 test.after(() => {
-  app?.locals.sessionStore.close();
+  app?.unwrapped.locals.sessionStore.close();
   closeDb();
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 });

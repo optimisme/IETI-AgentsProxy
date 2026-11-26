@@ -39,9 +39,21 @@ const {
   getAllGroups,
   getUserGroup,
   getUserGroups,
-  setGroupProviders,
+  setGroupPools,
   setUserGroups
 } = require('../services/accessService');
+const {
+  createPool,
+  deletePool,
+  findPoolByAlias,
+  getPool,
+  groupsForPool,
+  listPools,
+  poolsForProvider,
+  positiveIds,
+  updatePool,
+  validatePoolAlias
+} = require('../services/poolService');
 const { renderTemplate } = require('../utils/templates');
 const { dailyUsageCard, formatUsageNumber } = require('../utils/usageCards');
 const { apiError } = require('../utils/errors');
@@ -86,6 +98,7 @@ function render(req, res, view, { title, content = '', flash = '' } = {}) {
       { href: '/admin/users?status=pending', label: `Pending${pendingUsers ? ` (${pendingUsers})` : ''}` },
       { href: '/admin/oauth-conflicts', label: `OAuth reviews${pendingConflicts ? ` (${pendingConflicts})` : ''}` },
       { href: '/admin/groups', label: 'Groups' },
+      { href: '/admin/pools', label: 'Pools' },
       { href: '/admin/providers', label: 'Providers' },
       { href: '/admin/server', label: 'Server' }
     ],
@@ -147,15 +160,6 @@ function requireGroupId(value) {
   return id;
 }
 
-function validProviderId(value) {
-  if (value === undefined || value === null || String(value).trim() === '') return null;
-  const id = Number(value);
-  if (!Number.isInteger(id) || id <= 0) throw apiError(400, 'invalid_form', 'Provider must be valid.');
-  const provider = getDb().prepare('SELECT id FROM providers WHERE id = ?').get(id);
-  if (!provider) throw apiError(400, 'invalid_form', 'Provider must be valid.');
-  return id;
-}
-
 function validProviderIds(value) {
   const values = Array.isArray(value)
     ? value
@@ -188,11 +192,9 @@ function parseUserForm(body, { defaultRole = 'student' } = {}) {
 }
 
 function parseGroupForm(body) {
-  const providerIds = validProviderIds(body.provider_ids ?? body.provider_id);
   return {
     name: requiredText(body.name, 'Name', { max: 160 }),
-    providerId: providerIds[0] || validProviderId(body.provider_id),
-    providerIds,
+    poolIds: positiveIds(body.pool_ids),
     dailyCallLimit: nonNegativeIntegerOrNull(body.daily_call_limit, 'Calls per day'),
     dailyTokenLimit: nonNegativeIntegerOrNull(body.daily_token_limit, 'Tokens per day'),
     hourlyCallLimit: nonNegativeIntegerOrNull(body.hourly_call_limit, 'Calls per hour'),
@@ -253,7 +255,6 @@ function parseModelMappingForm(body) {
     throw apiError(400, 'invalid_form', 'Default reasoning effort must also be selected as a supported level.');
   }
   return {
-    publicModel: validatePublicModelAlias(body.public_model),
     upstreamModel: requiredText(body.upstream_model, 'Upstream model name', { max: 255 }),
     contextLimit: nonNegativeIntegerOrNull(body.context_limit, 'Context limit'),
     outputLimit: nonNegativeIntegerOrNull(body.output_limit, 'Output limit'),
@@ -270,13 +271,9 @@ function parseModelMappingForm(body) {
   };
 }
 
-function validatePublicModelAlias(value) {
-  const alias = requiredText(value, 'OpenCode model alias', { max: 255 });
-  if (/\s/.test(alias)) {
-    throw apiError(400, 'invalid_form', 'OpenCode model alias cannot contain whitespace.');
-  }
-  return alias;
-}
+// provider_models.public_model predates pools, where the alias now lives. The column is
+// still required, so new mappings leave it empty and nothing reads it.
+const LEGACY_PUBLIC_MODEL = '';
 
 function saveActiveModelMapping(db, providerId, providerName, form) {
   const existing = db.prepare(`
@@ -292,13 +289,12 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
   if (existing) {
     db.prepare(`
       UPDATE provider_models
-      SET public_model = ?, upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
+      SET upstream_model = ?, name = ?, enabled = 1, context_limit = ?, output_limit = ?,
           supports_text_input = ?, supports_image_input = ?, max_images = ?, supports_tools = ?, supports_reasoning = ?,
           reasoning_efforts = ?, default_reasoning_effort = ?, reasoning_history_field = ?, supports_chat_template_kwargs = ?, supports_parallel_tools = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
-      form.publicModel,
       form.upstreamModel,
       providerName,
       form.contextLimit,
@@ -324,7 +320,7 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       providerId,
-      form.publicModel,
+      LEGACY_PUBLIC_MODEL,
       form.upstreamModel,
       providerName,
       form.contextLimit,
@@ -489,33 +485,20 @@ function userForm(user = {}, action = '/admin/users') {
 }
 
 function groupForm(group = {}, action = '/admin/groups') {
-  const providers = listProviders().map((provider) => ({
-    ...provider,
-    model: activeProviderModel(provider.id)
-  }));
-  const providerPools = Map.groupBy(providers, (provider) => provider.model.public_model || 'Unconfigured');
-  const selectedProviderIds = new Set((group.providers || [])
-    .map((provider) => Number(provider.id))
-    .filter((id) => Number.isInteger(id) && id > 0));
-  if (!selectedProviderIds.size && group.provider_id) selectedProviderIds.add(Number(group.provider_id));
+  const pools = listPools();
+  const selectedPoolIds = new Set(group.pool_ids || []);
   return `
     <form method="post" action="${action}" class="panel">
       <label>Name</label><input name="name" value="${escapeHtml(group.name)}" required>
-      <label>Balanced model pools</label>
+      <label>Pools <span class="muted" style="display:block;font-weight:400">Students in this group can use the model alias of each ticked pool. Pools are managed on the <a href="/admin/pools">Pools</a> page.</span></label>
       <div class="checkbox-list">
-        ${providers.length ? [...providerPools.entries()].map(([publicModel, poolProviders]) => `
-          <fieldset style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:0 0 12px">
-            <legend>${escapeHtml(publicModel)}</legend>
-            ${poolProviders.map((provider) => `
-              <label>
-                <input name="provider_ids" type="checkbox" value="${provider.id}" style="width:auto" ${selectedProviderIds.has(Number(provider.id)) ? 'checked' : ''}>
-                ${escapeHtml(provider.name)} (${escapeHtml(provider.slug)})
-                ${provider.model.upstream_model ? `<span class="muted">${escapeHtml(provider.model.upstream_model)}</span>` : '<span class="muted">No active mapping</span>'}
-                ${provider.enabled ? '' : '<span class="muted">disabled</span>'}
-              </label>
-            `).join('')}
-          </fieldset>
-        `).join('') : '<p class="muted">No providers configured.</p>'}
+        ${pools.length ? pools.map((pool) => `
+          <label>
+            <input name="pool_ids" type="checkbox" value="${pool.id}" style="width:auto" ${selectedPoolIds.has(pool.id) ? 'checked' : ''}>
+            <code>${escapeHtml(pool.alias)}</code>
+            <span class="muted">${pool.providers.length ? pool.providers.map((provider) => `${escapeHtml(provider.name)}${provider.enabled ? '' : ' (disabled)'}`).join(', ') : 'no providers'}</span>
+          </label>
+        `).join('') : '<p class="muted">No pools configured.</p>'}
       </div>
       <label>Calls per day</label><input name="daily_call_limit" type="number" min="0" value="${limitValue(group.daily_call_limit)}" placeholder="Unlimited">
       <label>Tokens per day</label><input name="daily_token_limit" type="number" min="0" value="${limitValue(group.daily_token_limit)}" placeholder="Unlimited">
@@ -622,9 +605,9 @@ function modelCapabilitySummary(model) {
     : '<span class="muted">No capabilities declared</span>';
 }
 
-function providerAlignmentStatus(provider, referenceProvider) {
-  if (!provider.model.public_model) {
-    return '<span class="alignment-status alignment-warning" title="This provider has no exposed model mapping"><span aria-hidden="true">⚠</span> No active mapping</span>';
+function providerAlignmentStatus(provider, referenceProvider, poolId) {
+  if (!provider.model.id) {
+    return '<span class="alignment-status alignment-warning" title="This provider has no upstream model mapping"><span aria-hidden="true">⚠</span> No active mapping</span>';
   }
   if (Number(provider.id) === Number(referenceProvider.id)) {
     return '<span class="alignment-status alignment-reference">★ Main/reference</span>';
@@ -644,7 +627,7 @@ function providerAlignmentStatus(provider, referenceProvider) {
           <li><strong>${escapeHtml(difference.label)}:</strong> ${escapeHtml(difference.candidate)}; reference: ${escapeHtml(difference.reference)}</li>
         `).join('')}</ul>
         <p class="muted">Copies limits and declared features. The upstream model and provider connection settings stay unchanged.</p>
-        <form method="post" action="/admin/providers/${provider.id}/align">
+        <form method="post" action="/admin/pools/${poolId}/align/${provider.id}">
           <button type="submit">Align with main provider</button>
         </form>
       </div>
@@ -659,21 +642,36 @@ function orderedProviderPool(providerViews) {
   });
 }
 
-function providerPool(providerViews, publicModel) {
-  const configured = Boolean(publicModel);
-  const orderedProviders = orderedProviderPool(providerViews);
-  const referenceProvider = orderedProviders[0];
-  const mismatchCount = configured
-    ? orderedProviders.slice(1).filter((provider) => modelAlignmentDifferences(referenceProvider.model, provider.model).length).length
-    : orderedProviders.length;
-  const enabledCount = orderedProviders.filter((provider) => provider.enabled).length;
-  const poolStatus = !configured
-    ? `<span class="pool-status pool-warning"><span aria-hidden="true">⚠</span> ${orderedProviders.length} unconfigured</span>`
-    : mismatchCount
-      ? `<span class="pool-status pool-warning"><span aria-hidden="true">⚠</span> ${mismatchCount} not aligned</span>`
-      : `<span class="pool-status pool-ok"><span aria-hidden="true">✓</span> All aligned</span>`;
-  const rows = orderedProviders.map((provider) => {
-    const contract = configured ? providerModelContract(provider.model) : null;
+// A pool's providers with their active mapping, main/reference provider first.
+function poolProviderViews(pool) {
+  return orderedProviderPool(pool.providers.map((provider) => ({ ...provider, model: activeProviderModel(provider.id) })));
+}
+
+// Providers in one pool are published as a single model, so their limits and declared
+// features should match the pool's main/reference provider (the first enabled one).
+function poolAlignment(providerViews) {
+  const referenceProvider = providerViews[0] || null;
+  const unmapped = providerViews.filter((provider) => !provider.model.id).length;
+  const mismatched = referenceProvider
+    ? providerViews.slice(1).filter((provider) => provider.model.id && modelAlignmentDifferences(referenceProvider.model, provider.model).length).length
+    : 0;
+  return { referenceProvider, unmapped, mismatched, enabled: providerViews.filter((provider) => provider.enabled).length };
+}
+
+function poolStatus(providerViews) {
+  const { unmapped, mismatched, enabled } = poolAlignment(providerViews);
+  const warning = (text) => `<span class="pool-status pool-warning"><span aria-hidden="true">⚠</span> ${text}</span>`;
+  if (!providerViews.length) return warning('No providers');
+  if (!enabled) return warning('No enabled provider');
+  if (unmapped) return warning(`${unmapped} without a mapping`);
+  if (mismatched) return warning(`${mismatched} not aligned`);
+  return '<span class="pool-status pool-ok"><span aria-hidden="true">✓</span> All aligned</span>';
+}
+
+function poolProvidersTable(pool, providerViews) {
+  const { referenceProvider } = poolAlignment(providerViews);
+  const rows = providerViews.map((provider) => {
+    const contract = provider.model.id ? providerModelContract(provider.model) : null;
     return `
       <tr>
         <td>
@@ -682,29 +680,63 @@ function providerPool(providerViews, publicModel) {
         </td>
         <td>${provider.model.upstream_model ? `<code>${escapeHtml(provider.model.upstream_model)}</code>` : '<span class="muted">none</span>'}</td>
         <td>${contract ? `${escapeHtml(alignmentValue(contract.contextLimit, 'contextLimit'))} / ${escapeHtml(alignmentValue(contract.outputLimit, 'outputLimit'))}` : '<span class="muted">—</span>'}</td>
-        <td><div class="feature-chips">${configured ? modelCapabilitySummary(provider.model) : '<span class="muted">—</span>'}</div></td>
-        <td>
-          <span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span><br>
-          <span class="muted">API key ${provider.api_key ? 'configured' : 'missing'} · ${provider.groupCount} group${provider.groupCount === 1 ? '' : 's'}</span>
-        </td>
-        <td>${providerAlignmentStatus(provider, referenceProvider)}</td>
-        <td><a class="button secondary" href="/admin/providers/${provider.id}">Edit</a></td>
+        <td><div class="feature-chips">${contract ? modelCapabilitySummary(provider.model) : '<span class="muted">—</span>'}</div></td>
+        <td><span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span></td>
+        <td>${providerAlignmentStatus(provider, referenceProvider, pool.id)}</td>
       </tr>
     `;
   }).join('');
   return `
-    <details class="provider-pool" open>
-      <summary>
-        <span class="provider-pool-title">${configured ? `<code>${escapeHtml(publicModel)}</code>` : 'Unconfigured providers'} <span>${orderedProviders.length} provider${orderedProviders.length === 1 ? '' : 's'} · ${enabledCount} enabled</span></span>
-        ${poolStatus}
-      </summary>
-      <div class="provider-pool-table">
-        <table>
-          <thead><tr><th>Provider</th><th>Upstream model</th><th>Context / output</th><th>Features</th><th>Status</th><th>Alignment</th><th>Actions</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+    <div class="provider-pool-table">
+      <table>
+        <thead><tr><th>Provider</th><th>Upstream model</th><th>Context / output</th><th>Features</th><th>Status</th><th>Alignment</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="muted">No providers in this pool.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function poolAliasTakenNotice(alias, owner) {
+  return `
+    <div class="error">
+      The alias <code>${escapeHtml(alias)}</code> is already used by <a href="/admin/pools/${owner.id}">another pool</a>.
+      Nothing was saved. Choose a different alias.
+    </div>
+  `;
+}
+
+function poolForm(pool = {}, action = '/admin/pools') {
+  const selected = new Set((pool.providers || []).map((provider) => Number(provider.id)));
+  const providers = listProviders().map((provider) => ({
+    ...provider,
+    model: activeProviderModel(provider.id),
+    otherPools: poolsForProvider(provider.id).filter((other) => Number(other.id) !== Number(pool.id))
+  }));
+  return `
+    <form method="post" action="${action}" class="panel">
+      <h2>Pool settings</h2>
+      <label>OpenCode model alias <span class="muted" style="display:block;font-weight:400">The model name students see. Requests for it are balanced across the providers ticked below.</span></label>
+      <input name="alias" value="${escapeHtml(pool.alias)}" required>
+      <label>Balanced providers <span class="muted" style="display:block;font-weight:400">A provider can be in several pools. Its concurrency limit is shared between them.</span></label>
+      <div class="checkbox-list">
+        ${providers.length ? providers.map((provider) => `
+          <label>
+            <input name="provider_ids" type="checkbox" value="${provider.id}" style="width:auto" ${selected.has(Number(provider.id)) ? 'checked' : ''}>
+            ${escapeHtml(provider.name)} (${escapeHtml(provider.slug)})
+            ${provider.model.upstream_model ? `<span class="muted">${escapeHtml(provider.model.upstream_model)}</span>` : '<span class="muted">No active mapping</span>'}
+            ${provider.enabled ? '' : '<span class="muted">disabled</span>'}
+            ${provider.otherPools.length ? `<span class="muted">· also in ${provider.otherPools.map((other) => escapeHtml(other.alias)).join(', ')}</span>` : ''}
+          </label>
+        `).join('') : '<p class="muted">No providers configured.</p>'}
       </div>
-    </details>
+      <div class="form-actions">
+        <div class="actions">
+          <button type="submit">Save pool</button>
+          <a class="button secondary" href="/admin/pools">Cancel</a>
+        </div>
+        ${pool.id ? `<button type="submit" form="pool-delete-${pool.id}" class="danger">Delete pool</button>` : ''}
+      </div>
+    </form>
   `;
 }
 
@@ -714,7 +746,6 @@ function modelMappingFields(provider = {}, model = activeProviderModel(provider.
   const defaultReasoningEffort = normalizeReasoningEffort(model.default_reasoning_effort) || '';
   return `
     <h2>Active Model Mapping</h2>
-    <label>OpenCode model alias <span class="muted" style="display:block;font-weight:400">Providers with the same alias are load-balanced together and shown as one model in OpenCode.</span></label><input name="public_model" value="${escapeHtml(model.public_model || config.publicModelName)}" required>
     <label>Upstream model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
     <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
     <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
@@ -795,7 +826,6 @@ function providerFormState(form, mapping) {
       timeout_ms: form.timeoutMs
     },
     model: {
-      public_model: mapping.publicModel,
       upstream_model: mapping.upstreamModel,
       context_limit: mapping.contextLimit,
       output_limit: mapping.outputLimit,
@@ -1172,25 +1202,20 @@ router.post('/admin/users', requireAdmin, (req, res) => {
   res.redirect(`/admin/users/${userId}?created=1&invite_created=1`);
 });
 
-// Lists a group's providers under the model name each one exposes to students, since
-// providers sharing an exposed name are one load-balanced model.
-function groupProvidersByExposedModel(providers) {
-  if (!providers.length) return '<span class="muted">none</span>';
-  const enabledById = new Map(listProviders().map((provider) => [Number(provider.id), Boolean(provider.enabled)]));
-  const byModel = Map.groupBy(providers, (provider) => activeProviderModel(provider.id).public_model || '');
-  return [...byModel.entries()]
-    .sort(([left], [right]) => (!left) - (!right) || left.localeCompare(right))
-    .map(([publicModel, modelProviders]) => `
-      <div class="group-provider-model">
-        ${publicModel ? `<code>${escapeHtml(publicModel)}</code>` : '<span class="muted">No exposed model</span>'}
-        <ul>
-          ${modelProviders
-            .toSorted((left, right) => String(left.name || left.slug).localeCompare(String(right.name || right.slug)))
-            .map((provider) => `<li><a href="/admin/providers/${provider.id}">${escapeHtml(provider.name || provider.slug)}</a>${enabledById.get(Number(provider.id)) === false ? ' <span class="muted">(disabled)</span>' : ''}</li>`)
-            .join('')}
-        </ul>
-      </div>
-    `).join('');
+// Lists a group's pools by alias, each with the providers that serve it.
+function groupPoolsSummary(pools) {
+  if (!pools.length) return '<span class="muted">none</span>';
+  return pools.map((pool) => `
+    <div class="group-provider-model">
+      <a href="/admin/pools/${pool.id}"><code>${escapeHtml(pool.alias)}</code></a>
+      ${pool.providers.length ? `<ul>
+        ${pool.providers
+          .toSorted((left, right) => String(left.name || left.slug).localeCompare(String(right.name || right.slug)))
+          .map((provider) => `<li><a href="/admin/providers/${provider.id}">${escapeHtml(provider.name || provider.slug)}</a>${provider.enabled ? '' : ' <span class="muted">(disabled)</span>'}</li>`)
+          .join('')}
+      </ul>` : '<span class="muted">no providers</span>'}
+    </div>
+  `).join('');
 }
 
 router.get('/admin/groups', requireAdmin, (req, res) => {
@@ -1200,7 +1225,7 @@ router.get('/admin/groups', requireAdmin, (req, res) => {
     return `
       <tr>
         <td><a href="/admin/groups/${group.id}">${escapeHtml(group.name)}</a></td>
-        <td>${groupProvidersByExposedModel(group.providers)}</td>
+        <td>${groupPoolsSummary(group.pools)}</td>
         <td>${group.daily_call_limit ?? '<span class="muted">unlimited</span>'} / ${group.hourly_call_limit ?? '<span class="muted">unlimited</span>'}</td>
         <td>${group.daily_token_limit ?? '<span class="muted">unlimited</span>'} / ${group.hourly_token_limit ?? '<span class="muted">unlimited</span>'}</td>
         <td>${userCount}</td>
@@ -1212,7 +1237,7 @@ router.get('/admin/groups', requireAdmin, (req, res) => {
     title: 'Groups',
     content: `
       <p><a class="button" href="/admin/groups/new">Create group</a></p>
-      <table><thead><tr><th>Name</th><th>Providers by exposed model</th><th>Calls day/hour</th><th>Tokens day/hour</th><th>Users</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No groups.</td></tr>'}</tbody></table>
+      <table><thead><tr><th>Name</th><th>Pools</th><th>Calls day/hour</th><th>Tokens day/hour</th><th>Users</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No groups.</td></tr>'}</tbody></table>
     `,
     flash: flash(req.query.saved ? 'Group saved.' : '')
   });
@@ -1225,17 +1250,16 @@ router.get('/admin/groups/new', requireAdmin, (req, res) => {
 router.post('/admin/groups', requireAdmin, (req, res) => {
   const form = parseGroupForm(req.body);
   const result = getDb().prepare(`
-      INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO groups (name, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
+      VALUES (?, ?, ?, ?, ?)
     `).run(
       form.name,
-      form.providerId,
       form.dailyCallLimit,
       form.dailyTokenLimit,
       form.hourlyCallLimit,
       form.hourlyTokenLimit
     );
-  setGroupProviders(result.lastInsertRowid, form.providerIds);
+  setGroupPools(result.lastInsertRowid, form.poolIds);
   res.redirect('/admin/groups?saved=1');
 });
 
@@ -1292,19 +1316,18 @@ router.post('/admin/groups/:id', requireAdmin, (req, res) => {
   const form = parseGroupForm(req.body);
   getDb().prepare(`
     UPDATE groups
-    SET name = ?, provider_id = ?, daily_call_limit = ?, daily_token_limit = ?,
+    SET name = ?, daily_call_limit = ?, daily_token_limit = ?,
         hourly_call_limit = ?, hourly_token_limit = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     form.name,
-    form.providerId,
     form.dailyCallLimit,
     form.dailyTokenLimit,
     form.hourlyCallLimit,
     form.hourlyTokenLimit,
     group.id
   );
-  setGroupProviders(group.id, form.providerIds);
+  setGroupPools(group.id, form.poolIds);
   res.redirect(`/admin/groups/${group.id}?saved=1`);
 });
 
@@ -1407,7 +1430,7 @@ router.get('/admin/users/:id', requireAdmin, (req, res) => {
         <h2>Stats</h2>
         <div class="grid">
           <div class="metric">Last used<strong>${user.last_used_at ? escapeHtml(user.last_used_at) : 'never'}</strong></div>
-          <div class="metric">Group provider<strong>${group?.provider_names ? escapeHtml(group.provider_names) : 'none'}</strong>${group?.provider_slugs?.length ? `<span class="muted">${escapeHtml(group.provider_slugs.join(', '))}</span>` : ''}</div>
+          <div class="metric">Group pools<strong>${group?.pool_aliases?.length ? escapeHtml(group.pool_aliases.join(', ')) : 'none'}</strong>${group?.provider_names ? `<span class="muted">${escapeHtml(group.provider_names)}</span>` : ''}</div>
         </div>
         <div style="margin-top:16px">${usageStatus(user, group, usage)}</div>
         <div class="dashboard-section">${dailyUsageCard(usageByDay)}</div>
@@ -1569,43 +1592,188 @@ router.post('/admin/users/:id/delete', requireAdmin, (req, res) => {
 });
 
 router.get('/admin/providers', requireAdmin, (req, res) => {
-  const providers = listProviders().map((provider) => {
+  const rows = listProviders().map((provider) => {
     const model = activeProviderModel(provider.id);
-    const groupCount = getDb().prepare(`
-      SELECT COUNT(DISTINCT groups.id) AS count
-      FROM groups
-      LEFT JOIN group_providers ON group_providers.group_id = groups.id
-      WHERE groups.provider_id = ? OR group_providers.provider_id = ?
-    `).get(provider.id, provider.id).count;
-    return { ...provider, model, groupCount };
-  });
-  const pools = Map.groupBy(providers, (provider) => provider.model.public_model || '');
-  const orderedPools = [...pools.entries()].sort(([left], [right]) => {
-    if (!left) return 1;
-    if (!right) return -1;
-    return left.localeCompare(right);
-  });
+    const contract = model.id ? providerModelContract(model) : null;
+    const pools = poolsForProvider(provider.id);
+    return `
+      <tr>
+        <td>
+          <a href="/admin/providers/${provider.id}"><strong>${escapeHtml(provider.name)}</strong></a><br>
+          <span class="muted">${escapeHtml(provider.slug)}</span>
+        </td>
+        <td>${model.upstream_model ? `<code>${escapeHtml(model.upstream_model)}</code>` : '<span class="muted">none</span>'}</td>
+        <td>${contract ? `${escapeHtml(alignmentValue(contract.contextLimit, 'contextLimit'))} / ${escapeHtml(alignmentValue(contract.outputLimit, 'outputLimit'))}` : '<span class="muted">—</span>'}</td>
+        <td><div class="feature-chips">${contract ? modelCapabilitySummary(model) : '<span class="muted">—</span>'}</div></td>
+        <td>
+          <span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span><br>
+          <span class="muted">API key ${provider.api_key ? 'configured' : 'missing'}</span>
+        </td>
+        <td>${pools.length
+          ? pools.map((pool) => `<a href="/admin/pools/${pool.id}"><code>${escapeHtml(pool.alias)}</code></a>`).join('<br>')
+          : '<span class="alignment-status alignment-warning" title="Students cannot reach a provider that is in no pool"><span aria-hidden="true">⚠</span> Not in a pool</span>'}</td>
+        <td><a class="button secondary" href="/admin/providers/${provider.id}">Edit</a></td>
+      </tr>
+    `;
+  }).join('');
   const content = `
     <div class="provider-list-heading">
       <div>
-        <p class="muted">Providers are grouped by exposed model alias. Within each group, the first enabled provider created is the main/reference configuration.</p>
-        <p class="muted">Alignment compares effective limits and declared features. It does not prove that different upstream model implementations behave identically.</p>
+        <p class="muted">A provider is one upstream server and the model it serves. Students reach providers through <a href="/admin/pools">pools</a>, which set the model alias and balance requests.</p>
       </div>
       <a class="button" href="/admin/providers/new">Add provider</a>
     </div>
-    <div class="provider-pools">
-      ${orderedPools.length ? orderedPools.map(([publicModel, poolProviders]) => providerPool(poolProviders, publicModel)).join('') : '<div class="panel"><p class="muted">No providers.</p></div>'}
+    <div class="provider-pool-table">
+      <table>
+        <thead><tr><th>Provider</th><th>Upstream model</th><th>Context / output</th><th>Features</th><th>Status</th><th>Pools</th><th>Actions</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="muted">No providers.</td></tr>'}</tbody>
+      </table>
     </div>
   `;
   render(req, res, 'settings', {
     title: 'Providers',
     content,
-    flash: flash(req.query.deleted
-      ? 'Provider deleted.'
-      : req.query.aligned
-        ? 'Provider configuration aligned with the main provider.'
-        : (req.query.saved ? 'Provider saved.' : req.query.test || ''))
+    flash: flash(req.query.deleted ? 'Provider deleted.' : (req.query.saved ? 'Provider saved.' : req.query.test || ''))
   });
+});
+
+// ---- Pools: balanced sets of providers published under one model alias ----
+
+function parsePoolForm(body) {
+  return { alias: validatePoolAlias(body.alias), providerIds: validProviderIds(body.provider_ids) };
+}
+
+function poolPage(req, res, pool, { status = 200, notice = '' } = {}) {
+  const saved = pool.id ? getPool(pool.id) : null;
+  const providerViews = saved ? poolProviderViews(saved) : [];
+  const groups = saved ? groupsForPool(saved.id) : [];
+  const message = req.query.saved ? 'Pool saved.'
+    : req.query.aligned ? 'Provider configuration aligned with the main provider.'
+      : '';
+  res.status(status);
+  render(req, res, 'settings', {
+    title: saved ? 'Edit pool' : 'New pool',
+    flash: notice || flash(message),
+    content: `
+      <div class="provider-sections">
+        ${poolForm(pool, saved ? `/admin/pools/${saved.id}` : '/admin/pools')}
+        ${saved ? `
+          <form id="pool-delete-${saved.id}" method="post" action="/admin/pools/${saved.id}/delete" onsubmit="return confirm(${escapeHtml(JSON.stringify(`Delete the pool ${saved.alias}? ${groups.length ? `Students in ${groups.map((group) => group.name).join(', ')} will lose this model. ` : ''}Its providers are not deleted.`))});"></form>
+          <div class="panel">
+            <h2>Alignment ${poolStatus(providerViews)}</h2>
+            <p class="muted">Providers in a pool are published as one model, so their limits and declared features should match the main/reference provider: the first enabled provider created. Alignment does not prove that different upstream models behave identically.</p>
+            ${poolProvidersTable(saved, providerViews)}
+          </div>
+          <div class="panel">
+            <h2>Groups using this pool</h2>
+            ${groups.length
+              ? `<ul>${groups.map((group) => `<li><a href="/admin/groups/${group.id}">${escapeHtml(group.name)}</a></li>`).join('')}</ul>`
+              : '<p class="muted">No group can use this pool yet. Tick it on a group\'s page.</p>'}
+          </div>
+        ` : ''}
+      </div>
+    `
+  });
+}
+
+router.get('/admin/pools', requireAdmin, (req, res) => {
+  const rows = listPools().map((pool) => {
+    const providerViews = poolProviderViews(pool);
+    return `
+      <tr>
+        <td><a href="/admin/pools/${pool.id}"><code>${escapeHtml(pool.alias)}</code></a></td>
+        <td>${providerViews.length
+          ? providerViews.map((provider) => `<a href="/admin/providers/${provider.id}">${escapeHtml(provider.name)}</a>${provider.enabled ? '' : ' <span class="muted">(disabled)</span>'}`).join('<br>')
+          : '<span class="muted">none</span>'}</td>
+        <td>${poolStatus(providerViews)}</td>
+        <td>${pool.group_count}</td>
+        <td><a class="button secondary" href="/admin/pools/${pool.id}">Edit</a></td>
+      </tr>
+    `;
+  }).join('');
+  render(req, res, 'settings', {
+    title: 'Pools',
+    flash: flash(req.query.deleted ? 'Pool deleted.' : ''),
+    content: `
+      <div class="provider-list-heading">
+        <div>
+          <p class="muted">A pool publishes a set of providers to students under one model alias and balances requests between them. Groups choose which pools their students can use.</p>
+        </div>
+        <a class="button" href="/admin/pools/new">Add pool</a>
+      </div>
+      <div class="provider-pool-table">
+        <table>
+          <thead><tr><th>OpenCode model alias</th><th>Balanced providers</th><th>Alignment</th><th>Groups</th><th>Actions</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="5" class="muted">No pools.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `
+  });
+});
+
+router.get('/admin/pools/new', requireAdmin, (req, res) => {
+  poolPage(req, res, {});
+});
+
+router.post('/admin/pools', requireAdmin, (req, res) => {
+  const form = parsePoolForm(req.body);
+  const owner = findPoolByAlias(form.alias);
+  if (owner) {
+    return poolPage(req, res, { alias: form.alias, providers: form.providerIds.map((id) => ({ id })) }, { status: 409, notice: poolAliasTakenNotice(form.alias, owner) });
+  }
+  res.redirect(`/admin/pools/${createPool(form)}?saved=1`);
+});
+
+router.get('/admin/pools/:id', requireAdmin, (req, res) => {
+  const pool = getPool(req.params.id);
+  if (!pool) return res.status(404).send('Pool not found');
+  poolPage(req, res, pool);
+});
+
+router.post('/admin/pools/:id', requireAdmin, (req, res) => {
+  const pool = getPool(req.params.id);
+  if (!pool) return res.status(404).send('Pool not found');
+  const form = parsePoolForm(req.body);
+  const owner = findPoolByAlias(form.alias, { exceptId: pool.id });
+  if (owner) {
+    return poolPage(req, res, { id: pool.id, alias: form.alias, providers: form.providerIds.map((id) => ({ id })) }, { status: 409, notice: poolAliasTakenNotice(form.alias, owner) });
+  }
+  updatePool(pool.id, form);
+  res.redirect(`/admin/pools/${pool.id}?saved=1`);
+});
+
+router.post('/admin/pools/:id/delete', requireAdmin, (req, res) => {
+  if (!deletePool(Number(req.params.id) || 0)) return res.status(404).send('Pool not found');
+  res.redirect('/admin/pools?deleted=1');
+});
+
+// Copies the main/reference provider's limits and declared features onto another provider
+// of the same pool. The provider's upstream model and connection settings stay unchanged.
+router.post('/admin/pools/:id/align/:providerId', requireAdmin, (req, res) => {
+  const pool = getPool(req.params.id);
+  if (!pool) return res.status(404).send('Pool not found');
+  const providerViews = poolProviderViews(pool);
+  const provider = providerViews.find((candidate) => Number(candidate.id) === Number(req.params.providerId));
+  if (!provider) return res.status(404).send('Provider not found in this pool');
+  if (!provider.model.id) {
+    throw apiError(409, 'provider_mapping_unconfigured', 'This provider has no active model mapping to align.');
+  }
+  const referenceProvider = providerViews[0];
+  if (!referenceProvider.model.id) {
+    throw apiError(409, 'provider_pool_missing', 'The main provider configuration could not be found.');
+  }
+  if (Number(referenceProvider.id) !== Number(provider.id)) {
+    getDb().prepare(`
+      UPDATE provider_models
+      SET ${MODEL_ALIGNMENT_COLUMNS.map((column) => `${column} = ?`).join(', ')},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      ...MODEL_ALIGNMENT_COLUMNS.map((column) => referenceProvider.model[column]),
+      provider.model.id
+    );
+  }
+  res.redirect(`/admin/pools/${pool.id}?aligned=1`);
 });
 
 router.get('/admin/server', requireAdmin, (req, res) => {
@@ -1701,7 +1869,7 @@ router.get('/admin/providers/new', requireAdmin, (req, res) => {
       `
     });
   }
-  // Group assignments are not copied, so the copy serves nobody until it is added to a group.
+  // Pool memberships are not copied, so the copy serves nobody until it is added to a pool.
   const copy = {
     slug: copySlug(getDb(), source.slug),
     name: `Copy of ${source.name}`.slice(0, 160),
@@ -1713,7 +1881,7 @@ router.get('/admin/providers/new', requireAdmin, (req, res) => {
   };
   render(req, res, 'settings', {
     title: 'Duplicate Provider',
-    flash: flash(`This is a copy of ${source.name}. Nothing is saved until you press Save provider. The copy is ${source.enabled ? 'enabled' : 'disabled'} like the original and is not assigned to any group.`),
+    flash: flash(`This is a copy of ${source.name}. Nothing is saved until you press Save provider. The copy is ${source.enabled ? 'enabled' : 'disabled'} like the original and is not in any pool.`),
     content: providerForm(copy, '/admin/providers', { model: activeProviderModel(source.id), copySource: source })
   });
 });
@@ -1759,10 +1927,11 @@ router.post('/admin/providers', requireAdmin, (req, res) => {
 router.get('/admin/providers/:id', requireAdmin, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
+  const providerPools = poolsForProvider(provider.id);
   const copiedFrom = req.query.copied ? copySourceProvider(req.query.copied) : null;
   const slugOwner = req.query.slug_taken ? findProviderBySlug(getDb(), String(req.query.slug_taken), { exceptId: provider.id }) : null;
   const copiedMessage = req.query.copied
-    ? `Provider created${copiedFrom ? ` as a copy of ${copiedFrom.name}` : ' as a copy'}. It is ${provider.enabled ? 'enabled' : 'disabled'} and not assigned to any group yet. Run a test request below before adding it to a group.`
+    ? `Provider created${copiedFrom ? ` as a copy of ${copiedFrom.name}` : ' as a copy'}. It is ${provider.enabled ? 'enabled' : 'disabled'} and not in any pool yet. Run a test request below, then add it to a pool.`
     : '';
   render(req, res, 'settings', {
     title: 'Edit provider',
@@ -1771,6 +1940,12 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
       : flash(copiedMessage || (req.query.saved ? 'Provider saved.' : req.query.test || '')),
     content: `
       <div class="provider-sections">
+        <div class="panel">
+          <h2>Pools</h2>
+          ${providerPools.length
+            ? `<p>Published to students as ${providerPools.map((pool) => `<a href="/admin/pools/${pool.id}"><code>${escapeHtml(pool.alias)}</code></a>`).join(', ')}.</p>`
+            : '<p><span class="alignment-status alignment-warning"><span aria-hidden="true">⚠</span> Not in a pool</span> Students cannot reach this provider until it is added to a <a href="/admin/pools">pool</a>.</p>'}
+        </div>
         ${providerForm(provider, `/admin/providers/${provider.id}`)}
         <div class="panel">
           <h2>Provider API key</h2>
@@ -1918,34 +2093,6 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
     saveActiveModelMapping(db, provider.id, form.name, mapping);
   })();
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
-});
-
-router.post('/admin/providers/:id/align', requireAdmin, (req, res) => {
-  const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
-  if (!provider) return res.status(404).send('Provider not found');
-  const model = activeProviderModel(provider.id);
-  if (!model.id || !model.public_model) {
-    throw apiError(409, 'provider_mapping_unconfigured', 'This provider has no active exposed model mapping to align.');
-  }
-  const poolProviders = listProviders()
-    .map((poolProvider) => ({ ...poolProvider, model: activeProviderModel(poolProvider.id) }))
-    .filter((poolProvider) => poolProvider.model.public_model === model.public_model);
-  const referenceProvider = orderedProviderPool(poolProviders)[0];
-  if (!referenceProvider?.model?.id) {
-    throw apiError(409, 'provider_pool_missing', 'The main provider configuration could not be found.');
-  }
-  if (Number(referenceProvider.id) !== Number(provider.id)) {
-    getDb().prepare(`
-      UPDATE provider_models
-      SET ${MODEL_ALIGNMENT_COLUMNS.map((column) => `${column} = ?`).join(', ')},
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
-      ...MODEL_ALIGNMENT_COLUMNS.map((column) => referenceProvider.model[column]),
-      model.id
-    );
-  }
-  res.redirect('/admin/providers?aligned=1');
 });
 
 router.post('/admin/providers/:id/clear-key', requireAdmin, (req, res) => {
@@ -2117,13 +2264,13 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       });
     }
 
-    const modelIdentity = validatePublicModelAlias(selected.id);
+    const modelIdentity = requiredText(selected.id, 'Upstream model name', { max: 255 });
     const db = getDb();
     db.transaction(() => {
       if (current.id) {
         db.prepare(`
-          UPDATE provider_models SET public_model = ?, upstream_model = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(modelIdentity, modelIdentity, current.id);
+          UPDATE provider_models SET upstream_model = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).run(modelIdentity, current.id);
       } else {
         db.prepare(`
           INSERT INTO provider_models
@@ -2132,7 +2279,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
           VALUES (?, ?, ?, ?, 1, ?, ?, 1, 0, 0, 0, 0)
         `).run(
           provider.id,
-          modelIdentity,
+          LEGACY_PUBLIC_MODEL,
           modelIdentity,
           provider.name,
           Number(getSetting('default_model_context_limit')),
@@ -2159,7 +2306,6 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
       models: discovery.models,
       selectedModel: selected.id,
       applied: {
-        publicModel: updated.public_model,
         upstreamModel: updated.upstream_model,
         contextLimit: updated.context_limit,
         outputLimit: updated.output_limit

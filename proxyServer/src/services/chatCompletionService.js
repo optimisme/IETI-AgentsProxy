@@ -99,7 +99,7 @@ async function handleChatCompletion(req, res, next) {
     providerRequestStarted = true;
     const { upstream, provider, release, complete, fail } = await callChatCompletions(upstreamPayload, {
       signal: controller.signal,
-      providerSlugs: group.provider_slugs,
+      poolIds: group.pool_ids,
       conversation: affinityContextFromRequest(req),
       onAttemptFailure: (error) => recordFailedAttempt({ userId: user.id, model, wasStreaming }, error)
     });

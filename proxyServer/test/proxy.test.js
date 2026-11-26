@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const Database = require('better-sqlite3');
 const request = require('supertest');
+const { publishLegacyAccess, withLegacyAccess } = require('./helpers/legacyAccess');
 
 let app;
 let mockServer;
@@ -140,8 +141,8 @@ test.before(async () => {
   const { getDb } = require('../src/db');
   keyService = require('../src/services/keyService');
   studentAuthService = require('../src/services/studentAuthService');
-  app = createApp();
   db = getDb();
+  app = withLegacyAccess(createApp(), () => db);
 });
 
 test.after(async () => {
@@ -175,6 +176,7 @@ function createStudent({ enabled = 1, dailyLimit = 1000000000, models = [], pass
     password ? studentAuthService.hashPassword(password) : null
   );
   db.prepare('INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)').run(result.lastInsertRowid, group.lastInsertRowid);
+  publishLegacyAccess(db);
   return { id: result.lastInsertRowid, key, name, email, password };
 }
 
@@ -1006,8 +1008,13 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
     VALUES (?, 'dup-alias', 'dup-upstream', 'Dup', 1, 64000, 2048, 1, 1, 4, 1, 1, ?, 'high', 0)
   `).run(sourceId, JSON.stringify(['low', 'high']));
   const groupId = db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id;
-  db.prepare('INSERT INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, sourceId);
-  t.after(() => db.prepare('DELETE FROM providers WHERE slug LIKE ?').run(`${slug}%`));
+  const poolId = db.prepare('INSERT INTO pools (alias) VALUES (?)').run(`dup-pool-${slug}`).lastInsertRowid;
+  db.prepare('INSERT INTO pool_providers (pool_id, provider_id) VALUES (?, ?)').run(poolId, sourceId);
+  db.prepare('INSERT INTO group_pools (group_id, pool_id) VALUES (?, ?)').run(groupId, poolId);
+  t.after(() => {
+    db.prepare('DELETE FROM providers WHERE slug LIKE ?').run(`${slug}%`);
+    db.prepare('DELETE FROM pools WHERE id = ?').run(poolId);
+  });
   const sourceMapping = () => db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(sourceId);
   const mappingBefore = sourceMapping();
 
@@ -1020,7 +1027,7 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   assert.match(page.text, /name="name" value="Copy of Dup &lt;Source&gt;"/);
   assert.match(page.text, /name="base_url" value="http:\/\/127\.0\.0\.1:9"/);
   assert.match(page.text, /name="enabled" type="checkbox" value="1" style="width:auto" checked>/);
-  assert.match(page.text, /The copy is enabled like the original and is not assigned to any group\./);
+  assert.match(page.text, /The copy is enabled like the original and is not in any pool\./);
   assert.match(page.text, /name="upstream_model" value="dup-upstream"/);
   assert.match(page.text, /name="max_images" type="number" min="0" value="4"/);
   assert.match(page.text, /name="copy_api_key" type="checkbox" value="1" style="width:auto" checked> Use the same API key as Dup &lt;Source&gt;/);
@@ -1063,24 +1070,27 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   );
   const copyMapping = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(copy.id);
   for (const column of [
-    'public_model', 'upstream_model', 'context_limit', 'output_limit', 'supports_text_input', 'supports_image_input',
+    'upstream_model', 'context_limit', 'output_limit', 'supports_text_input', 'supports_image_input',
     'max_images', 'supports_tools', 'supports_reasoning', 'reasoning_efforts', 'default_reasoning_effort',
     'reasoning_history_field', 'supports_chat_template_kwargs', 'supports_parallel_tools'
   ]) {
     assert.deepEqual(copyMapping[column], mappingBefore[column], column);
   }
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE provider_id = ?').get(copy.id).count, 0);
+  assert.equal(copyMapping.public_model, '');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM pool_providers WHERE provider_id = ?').get(copy.id).count, 0);
+  assert.deepEqual(db.prepare('SELECT provider_id FROM pool_providers WHERE pool_id = ?').all(poolId), [{ provider_id: sourceId }]);
   assert.deepEqual(sourceMapping(), mappingBefore);
   assert.equal(db.prepare('SELECT api_key FROM providers WHERE id = ?').get(sourceId).api_key, 'source-secret-key');
 
   const copyPage = await agent.get(saved.headers.location).expect(200);
-  assert.match(copyPage.text, /Provider created as a copy of Dup &lt;Source&gt;\. It is enabled and not assigned to any group yet\./);
+  assert.match(copyPage.text, /Provider created as a copy of Dup &lt;Source&gt;\. It is enabled and not in any pool yet\./);
 
   // The next copy of the same source gets the next free slug, and an unticked key box leaves the placeholder.
   db.prepare('UPDATE providers SET enabled = 0 WHERE id = ?').run(sourceId);
   const second = await agent.get(`/admin/providers/new?from=${sourceId}`).expect(200);
   assert.match(second.text, /name="enabled" type="checkbox" value="1" style="width:auto" >/);
   assert.match(second.text, /The copy is disabled like the original/);
+  assert.doesNotMatch(second.text, /name="public_model"/);
   assert.match(second.text, new RegExp(`name="slug" value="${slug}-copy-2"`));
   const withoutKey = fields(second.text);
   delete withoutKey.copy_api_key;
@@ -1095,44 +1105,6 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   assert.equal(rename.headers.location, `/admin/providers/${copy.id}?slug_taken=${slug}`);
   assert.match((await agent.get(rename.headers.location).expect(200)).text, /is already used by <a href/);
   assert.equal(db.prepare('SELECT slug FROM providers WHERE id = ?').get(copy.id).slug, `${slug}-copy`);
-});
-
-test('admin groups list shows each group\'s providers under their exposed model name', async (t) => {
-  const agent = request.agent(app);
-  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
-  const stamp = Date.now();
-  const groupId = db.prepare('INSERT INTO groups (name) VALUES (?)').run(`Exposed Group ${stamp}`).lastInsertRowid;
-  const addProvider = (name, publicModel, enabled = 1) => {
-    const id = db.prepare('INSERT INTO providers (slug, name, base_url, enabled) VALUES (?, ?, ?, ?)')
-      .run(`exposed-${stamp}-${name.toLowerCase()}`, name, 'http://127.0.0.1:9', enabled).lastInsertRowid;
-    if (publicModel) {
-      db.prepare('INSERT INTO provider_models (provider_id, public_model, upstream_model, name) VALUES (?, ?, ?, ?)')
-        .run(id, publicModel, 'upstream', name);
-    }
-    db.prepare('INSERT INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, id);
-    return id;
-  };
-  const zulu = addProvider('Zulu', `beta-${stamp}`);
-  const unmapped = addProvider('Unmapped', '');
-  const bravo = addProvider('Bravo', `alpha-<${stamp}>`, 0);
-  const alpha = addProvider('Alpha', `alpha-<${stamp}>`);
-  t.after(() => {
-    db.prepare('DELETE FROM providers WHERE slug LIKE ?').run(`exposed-${stamp}-%`);
-    db.prepare('DELETE FROM groups WHERE id = ?').run(groupId);
-  });
-
-  const page = await agent.get('/admin/groups').expect(200);
-  assert.match(page.text, /<th>Providers by exposed model<\/th>/);
-  const row = page.text.match(new RegExp(`<tr>\\s*<td><a href="/admin/groups/${groupId}">[\\s\\S]*?</tr>`))[0];
-  assert.deepEqual(
-    [...row.matchAll(/<code>([^<]*)<\/code>|(No exposed model)|<li><a href="\/admin\/providers\/(\d+)">([^<]*)<\/a>( <span class="muted">\(disabled\)<\/span>)?/g)]
-      .map((match) => match[1] ?? match[2] ?? `${match[3]}:${match[4]}${match[5] ? ':disabled' : ''}`),
-    [
-      `alpha-&lt;${stamp}&gt;`, `${alpha}:Alpha`, `${bravo}:Bravo:disabled`,
-      `beta-${stamp}`, `${zulu}:Zulu`,
-      'No exposed model', `${unmapped}:Unmapped`
-    ]
-  );
 });
 
 test('admin user creation and editing roll back when a later database step fails', async () => {
@@ -1293,75 +1265,6 @@ test('admin form validation rejects invalid writes', async () => {
   }).expect(400);
   assert.equal(badGroup.body.error.code, 'invalid_form');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM groups WHERE name = ?').get('Bad Group').count, 0);
-});
-
-test('admin can assign multiple providers to a group', async () => {
-  const agent = request.agent(app);
-  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
-  const secondProvider = db.prepare(`
-    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
-    VALUES (?, ?, ?, ?, ?, 1)
-  `).run(`admin-pool-${Date.now()}`, 'Admin Pool Provider', 'openai-compatible', mockBaseUrl, 'local');
-  db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 32000, 4096)
-  `).run(secondProvider.lastInsertRowid, 'admin-fast-model', 'admin-fast-upstream', 'Admin Fast');
-  const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
-  const groupName = `Admin Pool Group ${Date.now()}`;
-
-  await agent.post('/admin/groups').type('form').send({
-    name: groupName,
-    provider_ids: [String(deepseek.id), String(secondProvider.lastInsertRowid)],
-    daily_call_limit: '',
-    daily_token_limit: '',
-    hourly_call_limit: '',
-    hourly_token_limit: ''
-  }).expect(302);
-
-  const group = db.prepare('SELECT id, provider_id FROM groups WHERE name = ?').get(groupName);
-  assert.equal(group.provider_id, deepseek.id);
-  const providerIds = db.prepare(`
-    SELECT provider_id
-    FROM group_providers
-    WHERE group_id = ?
-    ORDER BY priority DESC, provider_id ASC
-  `).all(group.id).map((row) => row.provider_id);
-  assert.deepEqual(providerIds, [deepseek.id, secondProvider.lastInsertRowid]);
-
-  const edit = await agent.get(`/admin/groups/${group.id}`).expect(200);
-  assert.match(edit.text, /Balanced model pools/);
-  assert.match(edit.text, /active-model/);
-  assert.match(edit.text, /admin-fast-model/);
-  assert.match(edit.text, /Admin Pool Provider/);
-  assert.match(edit.text, /admin-fast-upstream/);
-});
-
-test('admin can clear all providers from a group', async () => {
-  const agent = request.agent(app);
-  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
-  const deepseek = db.prepare('SELECT id FROM providers WHERE slug = ?').get('deepseek');
-  const groupName = `No Provider Group ${Date.now()}`;
-  const group = db.prepare(`
-    INSERT INTO groups (name, provider_id, daily_call_limit, daily_token_limit, hourly_call_limit, hourly_token_limit)
-    VALUES (?, ?, NULL, NULL, NULL, NULL)
-  `).run(groupName, deepseek.id);
-  db.prepare(`
-    INSERT INTO group_providers (group_id, provider_id, enabled, priority)
-    VALUES (?, ?, 1, 100)
-  `).run(group.lastInsertRowid, deepseek.id);
-
-  await agent.post(`/admin/groups/${group.lastInsertRowid}`).type('form').send({
-    name: groupName,
-    daily_call_limit: '',
-    daily_token_limit: '',
-    hourly_call_limit: '',
-    hourly_token_limit: ''
-  }).expect(302);
-
-  const updated = db.prepare('SELECT provider_id FROM groups WHERE id = ?').get(group.lastInsertRowid);
-  const providerCount = db.prepare('SELECT COUNT(*) AS count FROM group_providers WHERE group_id = ?').get(group.lastInsertRowid).count;
-  assert.equal(updated.provider_id, null);
-  assert.equal(providerCount, 0);
 });
 
 test('provider keep-warm interval migration defaults existing providers to Never and preserves saved intervals', () => {
@@ -1620,7 +1523,7 @@ test('admin user edit page separates management and stats', async () => {
     .expect(/Tokens this hour/)
     .expect(/Recent usage\/errors/)
     .expect(/Last used/)
-    .expect(/Group provider/)
+    .expect(/Group pools/)
     .expect(new RegExp(`data-open-user-delete-modal="user-delete-modal-${student.id}"`))
     .expect(new RegExp(`<dialog id="user-delete-modal-${student.id}" class="modal"`))
     .expect(/<h2[^>]*>Delete user\?<\/h2>/)
@@ -1849,11 +1752,11 @@ test('admin can see and delete provider api key', async () => {
 
   await agent.get('/admin/settings').expect(404);
   const list = await agent.get('/admin/providers').expect(200).expect(/API key configured/);
-  assert.match(list.text, /Providers are grouped by exposed model alias/);
-  assert.match(list.text, /active-model/);
+  assert.match(list.text, /Students reach providers through <a href="\/admin\/pools">pools<\/a>/);
+  assert.match(list.text, /<th>Pools<\/th>/);
+  assert.match(list.text, /<a href="\/admin\/pools\/\d+"><code>active-model<\/code><\/a>/);
   assert.match(list.text, /Upstream model/);
-  assert.match(list.text, /Main\/reference/);
-  assert.match(list.text, /group/);
+  assert.doesNotMatch(list.text, /★ Main\/reference|class=\"provider-pool\"/);
   assert.doesNotMatch(list.text, /<th>Models<\/th>/);
   assert.doesNotMatch(list.text, /In progress/);
   const edit = await agent.get(`/admin/providers/${provider.id}`).expect(200).expect(/API key: configured/).expect(/Delete API key/);
@@ -1867,86 +1770,6 @@ test('admin can see and delete provider api key', async () => {
   assert.equal(updated.api_key, '');
   await agent.get(`/admin/providers/${provider.id}`).expect(200).expect(/API key: not configured/);
   db.prepare('UPDATE providers SET api_key = ? WHERE id = ?').run(provider.api_key, provider.id);
-});
-
-test('provider list groups exposed aliases and highlights mapping configuration differences', async (t) => {
-  const alias = `alignment-pool-${Date.now()}`;
-  const providerIds = [];
-  const insertProvider = db.prepare(`
-    INSERT INTO providers (slug, name, kind, base_url, api_key, enabled)
-    VALUES (?, ?, 'openai-compatible', ?, 'local', 1)
-  `);
-  const insertModel = db.prepare(`
-    INSERT INTO provider_models
-      (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit,
-       supports_text_input, supports_image_input, supports_tools, supports_reasoning,
-       reasoning_efforts, default_reasoning_effort, supports_chat_template_kwargs, supports_parallel_tools)
-    VALUES (?, ?, ?, ?, 1, ?, 8192, 1, ?, ?, 1, ?, 'low', 1, 1)
-  `);
-  const addProvider = (slug, name, contextLimit, image, tools, reasoningEfforts) => {
-    const provider = insertProvider.run(slug, name, mockBaseUrl);
-    const providerId = Number(provider.lastInsertRowid);
-    providerIds.push(providerId);
-    insertModel.run(
-      providerId,
-      alias,
-      `${slug}-upstream`,
-      name,
-      contextLimit,
-      image,
-      tools,
-      JSON.stringify(reasoningEfforts)
-    );
-    return providerId;
-  };
-  addProvider(`${alias}-main`, 'Alignment Main', 64000, 0, 1, ['low', 'high']);
-  addProvider(`${alias}-aligned`, 'Alignment Aligned', 64000, 0, 1, ['low', 'high']);
-  const mismatchProviderId = addProvider(`${alias}-mismatch`, 'Alignment Mismatch', 32000, 1, 0, ['low']);
-  t.after(() => {
-    const placeholders = providerIds.map(() => '?').join(',');
-    db.prepare(`DELETE FROM providers WHERE id IN (${placeholders})`).run(...providerIds);
-  });
-
-  const agent = request.agent(app);
-  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
-  const list = await agent.get('/admin/providers').expect(200);
-  assert.match(list.text, new RegExp(alias));
-  assert.match(list.text, /3 providers · 3 enabled/);
-  assert.match(list.text, /★ Main\/reference/);
-  assert.match(list.text, /✓<\/span> Aligned/);
-  assert.match(list.text, /⚠<\/span> 1 not aligned/);
-  assert.match(list.text, /Not aligned \(4\)/);
-  assert.match(list.text, /Context limit:/);
-  assert.match(list.text, /Image input:/);
-  assert.match(list.text, /Tool calling:/);
-  assert.match(list.text, /Reasoning efforts:/);
-  assert.match(list.text, new RegExp(`action="/admin/providers/${mismatchProviderId}/align"`));
-  assert.match(list.text, />Align with main provider<\/button>/);
-
-  const upstreamBefore = db.prepare('SELECT upstream_model FROM provider_models WHERE provider_id = ?').get(mismatchProviderId).upstream_model;
-  await agent.post(`/admin/providers/${mismatchProviderId}/align`)
-    .expect(302)
-    .expect('Location', '/admin/providers?aligned=1');
-  const referenceModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(providerIds[0]);
-  const alignedModel = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(mismatchProviderId);
-  for (const column of [
-    'context_limit',
-    'output_limit',
-    'supports_text_input',
-    'supports_image_input',
-    'supports_tools',
-    'supports_reasoning',
-    'reasoning_efforts',
-    'default_reasoning_effort',
-    'supports_chat_template_kwargs',
-    'supports_parallel_tools'
-  ]) {
-    assert.equal(alignedModel[column], referenceModel[column], `${column} should be copied from the main provider`);
-  }
-  assert.equal(alignedModel.upstream_model, upstreamBefore);
-  const alignedList = await agent.get('/admin/providers?aligned=1').expect(200);
-  assert.match(alignedList.text, /Provider configuration aligned with the main provider/);
-  assert.match(alignedList.text, /✓<\/span> All aligned/);
 });
 
 test('admin provider keep-warm dropdown defaults to Never and saves both intervals or disables calls', async (t) => {
@@ -2184,10 +2007,8 @@ test('admin can edit provider slug and sees edit title', async () => {
   assert.match(edit.text, /name="slug"/);
   assert.doesNotMatch(edit.text, /name="slug"[^>]*readonly/);
   assert.match(edit.text, /Active Model Mapping/);
-  assert.match(edit.text, /OpenCode model alias/);
-  assert.match(edit.text, /Providers with the same alias are load-balanced together and shown as one model in OpenCode/);
-  assert.match(edit.text, /name="public_model"/);
-  assert.doesNotMatch(edit.text, /name="public_model"[^>]*readonly/);
+  assert.doesNotMatch(edit.text, /OpenCode model alias|name="public_model"/);
+  assert.match(edit.text, /<h2>Pools<\/h2>\s*<p>Published to students as <a href="\/admin\/pools\/\d+"><code>active-model<\/code><\/a>\.<\/p>/);
   assert.match(edit.text, /Upstream model name/);
   assert.doesNotMatch(edit.text, /Save mapping/);
   assert.doesNotMatch(edit.text, /<h2>Models<\/h2>/);
@@ -2211,7 +2032,8 @@ test('admin can edit provider slug and sees edit title', async () => {
   const updated = db.prepare('SELECT slug FROM providers WHERE id = ?').get(provider.id);
   assert.equal(updated.slug, replacementSlug);
   const model = db.prepare('SELECT public_model, upstream_model FROM provider_models WHERE provider_id = ?').get(provider.id);
-  assert.equal(model.public_model, replacementModel);
+  // The alias belongs to pools now: a submitted public_model is ignored.
+  assert.equal(model.public_model, originalModel.public_model);
   assert.equal(model.upstream_model, 'deepseek-chat-renamed');
   db.prepare('UPDATE providers SET slug = ? WHERE id = ?').run(provider.slug, provider.id);
   db.prepare(`
@@ -2241,7 +2063,7 @@ test('provider active mapping can be saved and both provider tests return modal-
 
   const models = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').all(provider.id);
   assert.equal(models.length, 1);
-  assert.equal(models[0].public_model, 'saved-alias');
+  assert.equal(models[0].public_model, originalModel.public_model);
   assert.equal(models[0].upstream_model, 'deepseek-chat');
   assert.deepEqual(JSON.parse(models[0].reasoning_efforts), ['low', 'medium', 'xhigh']);
   assert.equal(models[0].default_reasoning_effort, 'low');
@@ -2299,16 +2121,18 @@ test('repository-qualified public model IDs survive form saving, discovery, clie
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const provider = db.prepare(`INSERT INTO providers (slug, name, base_url, api_key, enabled)
     VALUES (?, 'Qualified model', ?, 'test-key', 1)`).run(slug, mockBaseUrl);
-  const form = { public_model: identity, upstream_model: identity, context_limit: '32000', output_limit: '4096' };
+  const form = { upstream_model: identity, context_limit: '32000', output_limit: '4096' };
   await agent.post(`/admin/providers/${provider.lastInsertRowid}/mapping`).type('form').send(form).expect(302);
-  for (const invalid of ['bad model', 'bad\tmodel', 'bad\nmodel']) {
-    await agent.post(`/admin/providers/${provider.lastInsertRowid}/mapping`).type('form')
-      .send({ ...form, public_model: invalid }).expect(400);
-  }
   const mapping = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
-  assert.equal(mapping.public_model, identity);
+  assert.equal(mapping.public_model, '');
   assert.equal(mapping.upstream_model, identity);
+  for (const invalid of ['bad model', 'bad\tmodel', 'bad\nmodel', '']) {
+    await agent.post('/admin/pools').type('form').send({ alias: invalid, provider_ids: String(provider.lastInsertRowid) }).expect(400);
+  }
+  await agent.post('/admin/pools').type('form').send({ alias: identity, provider_ids: String(provider.lastInsertRowid) }).expect(302);
+  const pool = db.prepare('SELECT id FROM pools WHERE alias = ?').get(identity);
   const student = createStudent({ models: [slug] });
+  db.prepare('INSERT OR IGNORE INTO group_pools (group_id, pool_id) SELECT group_id, ? FROM user_groups WHERE user_id = ?').run(pool.id, student.id);
   const catalog = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
   assert.deepEqual(catalog.body.data.map((model) => model.id), [identity]);
   const portal = request.agent(app);
@@ -2376,7 +2200,7 @@ test('provider autoconfigure imports standard model IDs and optional vLLM contex
   assert.equal(response.body.applied.contextLimit, 65536);
 
   const updated = db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(provider.lastInsertRowid);
-  assert.equal(updated.public_model, 'active-model');
+  assert.equal(updated.public_model, 'autoconfigure-alias');
   assert.equal(updated.upstream_model, 'active-model');
   assert.equal(updated.context_limit, 65536);
   assert.equal(updated.output_limit, 4096);
@@ -2457,7 +2281,8 @@ test('provider concurrency cap blocks the requested provider', async () => {
   assert.equal(ok.body.model, 'slow-local-upstream');
 });
 
-test('group provider pool routes to the least busy provider', async () => {
+test('group provider pool routes to the least busy provider', async (t) => {
+  t.after(() => db.prepare("DELETE FROM providers WHERE slug = 'pool-vllm-test'").run());
   const provider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
     VALUES (?, ?, ?, ?, ?, 1, NULL)
@@ -2492,7 +2317,8 @@ test('group provider pool routes to the least busy provider', async () => {
   }
 });
 
-test('provider pool filters endpoints by required tool capability', async () => {
+test('provider pool filters endpoints by required tool capability', async (t) => {
+  t.after(() => db.prepare("DELETE FROM providers WHERE slug = 'tool-capable-pool-test'").run());
   const toolProvider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, priority)
     VALUES (?, ?, ?, ?, ?, 1, 100)
@@ -2555,16 +2381,18 @@ test('group provider pool randomizes equally loaded providers', () => {
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
     VALUES (?, ?, ?, ?, 1, 32000, 4096)
   `);
-  insertModel.run(firstProvider.lastInsertRowid, 'active-model', 'random-upstream-a', 'Random A');
-  insertModel.run(secondProvider.lastInsertRowid, 'active-model', 'random-upstream-b', 'Random B');
+  insertModel.run(firstProvider.lastInsertRowid, 'random-pool-model', 'random-upstream-a', 'Random A');
+  insertModel.run(secondProvider.lastInsertRowid, 'random-pool-model', 'random-upstream-b', 'Random B');
+  publishLegacyAccess(db);
+  const poolIds = [db.prepare("SELECT id FROM pools WHERE alias = 'random-pool-model'").get().id];
 
   const { chooseProviderModel } = require('../src/services/providerService');
   const originalRandom = Math.random;
   try {
     Math.random = () => 0;
-    const firstChoice = chooseProviderModel('active-model', ['random-pool-a', 'random-pool-b']);
+    const firstChoice = chooseProviderModel('random-pool-model', poolIds);
     Math.random = () => 0.999999;
-    const secondChoice = chooseProviderModel('active-model', ['random-pool-a', 'random-pool-b']);
+    const secondChoice = chooseProviderModel('random-pool-model', poolIds);
 
     assert.equal(firstChoice.slug, 'random-pool-a');
     assert.equal(secondChoice.slug, 'random-pool-b');
@@ -2629,10 +2457,6 @@ test('opencode config lists every public model pool assigned to the user group',
     INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
     VALUES (?, ?, ?, ?, 1, 32000, 4096)
   `).run(fastProvider.lastInsertRowid, 'fast-model', 'fast-upstream', 'Fast Model');
-  db.prepare(`
-    INSERT INTO provider_models (provider_id, public_model, upstream_model, name, enabled, context_limit, output_limit)
-    VALUES (?, ?, ?, ?, 1, 16000, 2048)
-  `).run(fastProvider.lastInsertRowid, 'fast-secondary-model', 'fast-secondary-upstream', 'Fast Secondary Model');
 
   const secondFastProvider = db.prepare(`
     INSERT INTO providers (slug, name, kind, base_url, api_key, enabled, max_concurrent_requests)
@@ -2669,7 +2493,7 @@ test('opencode config lists every public model pool assigned to the user group',
   `).run(groupId, visionProvider.lastInsertRowid, 98);
 
   const modelsRes = await request(app).get('/v1/models').set('Authorization', `Bearer ${student.key}`).expect(200);
-  assert.deepEqual(modelsRes.body.data.map((model) => model.id).sort(), ['fast-model', 'fast-secondary-model', 'vision-model']);
+  assert.deepEqual(modelsRes.body.data.map((model) => model.id).sort(), ['fast-model', 'vision-model']);
   const capabilitiesRes = await request(app)
     .get('/v1/model-capabilities')
     .set('Authorization', `Bearer ${student.key}`)
@@ -2680,7 +2504,7 @@ test('opencode config lists every public model pool assigned to the user group',
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: student.email, password: student.password }).expect(302);
   const configRes = await agent.get('/portal/opencode.json').expect(200);
-  assert.deepEqual(Object.keys(configRes.body.providers['ieti-agents'].models).sort(), ['fast-model', 'fast-secondary-model', 'vision-model']);
+  assert.deepEqual(Object.keys(configRes.body.providers['ieti-agents'].models).sort(), ['fast-model', 'vision-model']);
   assert.equal(configRes.body.model, 'ieti-agents/fast-model');
   assert.equal(configRes.body.providers['ieti-agents'].models['fast-model'].limit.context, 32000);
   assert.equal(configRes.body.providers['ieti-agents'].models['fast-model'].limit.output, 4096);
@@ -3230,7 +3054,7 @@ test('a shared group alias advertises common capabilities instead of impossible 
   }
   const student = createStudent({ models: ['common-image'] });
   const groupId = db.prepare('SELECT group_id FROM user_groups WHERE user_id = ?').get(student.id).group_id;
-  require('../src/services/accessService').setGroupProviders(groupId, providerIds);
+  for (const providerId of providerIds) db.prepare('INSERT OR IGNORE INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, providerId);
   const response = await request(app).get('/v1/model-capabilities').set('Authorization', `Bearer ${student.key}`).expect(200);
   const model = response.body.data.find((item) => item.id === 'shared-common');
   assert.equal(model.capabilities.image, false);
