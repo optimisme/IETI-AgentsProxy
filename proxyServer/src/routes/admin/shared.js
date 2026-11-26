@@ -1,9 +1,11 @@
-// Helpers used by more than one area of the admin backoffice: page layout, form parsing
-// and the views of a provider's model mapping.
+// Helpers used by more than one area of the admin backoffice: the page layout and the one
+// path every admin form goes through when a submission is refused.
 const { getDb } = require('../../db');
 const { isAdminSession } = require('../../middleware/authAdmin');
 const { renderTemplate } = require('../../utils/templates');
-const { escapeHtml, flash, siteHeader, trustedHtml } = require('../../utils/html');
+const { flash, siteHeader, trustedHtml } = require('../../utils/html');
+const { ApiError, apiError } = require('../../utils/errors');
+const { usageTable } = require('../../views/admin/shared');
 
 function render(req, res, view, { title, content = '', flash = '' } = {}) {
   const pendingUsers = isAdminSession(req.session)
@@ -27,7 +29,8 @@ function render(req, res, view, { title, content = '', flash = '' } = {}) {
     logoutAction: '/admin/logout'
   }) : '';
 
-  const body = renderTemplate(view, { title: title || 'Admin', content: trustedHtml(content), flash: trustedHtml(flash) });
+  // Views hand over html`` results; a plain string here is text and gets escaped like any other.
+  const body = renderTemplate(view, { title: title || 'Admin', content, flash });
   res.send(renderTemplate('layout', {
     title: title || 'Admin',
     nav: trustedHtml(nav),
@@ -47,27 +50,46 @@ function activeProviderModel(providerId) {
 
 const tokens = (value) => `${Number(value).toLocaleString('en-US')} tokens`;
 
-function usageTable(rows) {
-  if (!rows.length) return '<p class="muted">No records.</p>';
-  return `
-    <table>
-      <thead><tr><th>When</th><th>User</th><th>Model</th><th>Provider</th><th>Tokens</th><th>Status</th><th>Error</th></tr></thead>
-      <tbody>${rows.map((row) => `
-        <tr>
-          <td>${escapeHtml(row.created_at)}</td>
-          <td>${escapeHtml(row.email || row.user_id || 'Deleted user')}</td>
-          <td>${escapeHtml(row.model)}</td>
-          <td>${escapeHtml(row.provider_slug || '')}</td>
-          <td>${row.total_tokens}</td>
-          <td>${escapeHtml(row.status)}</td>
-          <td>${escapeHtml(row.error_message || '')}</td>
-        </tr>
-      `).join('')}</tbody>
-    </table>
-  `;
+// ---- Forms -------------------------------------------------------------------------------
+// A form handler refuses a submission by throwing:
+//   - apiError(400, 'invalid_form', message), which is what the validation helpers throw
+//   - formConflict(code, message, notice) when a value clashes with another record
+// formRoute catches both and shows the same form again with what was typed and the reason;
+// nothing is saved. A client that asks for JSON gets the error as JSON instead.
+
+function formConflict(code, message, notice) {
+  const error = apiError(409, code, message);
+  // Not part of error.details, which is sent to JSON clients.
+  error.notice = notice;
+  return error;
+}
+
+function prefersJson(req) {
+  return Boolean(req.get('accept')) && req.accepts(['html', 'json']) === 'json';
+}
+
+// showForm(req, res, { values, notice, status }) renders the form's page from the submitted
+// values. handler is the usual route handler; it must do all its writes in one transaction
+// or after its last check, so that a refusal leaves nothing half saved.
+function formRoute(showForm, handler) {
+  return (req, res, next) => {
+    try {
+      return handler(req, res, next);
+    } catch (error) {
+      const refused = error instanceof ApiError && (error.statusCode === 400 || error.statusCode === 409);
+      if (!refused || prefersJson(req)) return next(error);
+      return showForm(req, res, {
+        values: req.body || {},
+        notice: error.notice || flash(error.message, 'error'),
+        status: error.statusCode
+      });
+    }
+  };
 }
 
 module.exports = {
+  formConflict,
+  formRoute,
   activeProviderModel,
   render,
   tokens,

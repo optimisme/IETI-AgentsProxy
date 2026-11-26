@@ -1,4 +1,4 @@
-const { escapeHtml, localizedNumber } = require('./html');
+const { html, localizedNumber } = require('./html');
 
 // HTML for a usage count, shown with the browser's own digit grouping.
 function formatUsageNumber(value) {
@@ -8,7 +8,7 @@ function formatUsageNumber(value) {
 function dailyUsageCard(rows) {
   const totalTokens = rows.reduce((sum, row) => sum + row.tokens, 0);
   const totalCalls = rows.reduce((sum, row) => sum + row.calls, 0);
-  return `
+  return html`
     <section class="panel dashboard-card" aria-labelledby="daily-usage-heading">
       <div class="dashboard-card-heading">
         <h2 id="daily-usage-heading">Daily usage</h2>
@@ -18,7 +18,7 @@ function dailyUsageCard(rows) {
         <span><strong>${formatUsageNumber(totalTokens)}</strong> tokens</span>
         <span><strong>${formatUsageNumber(totalCalls)}</strong> completed or stopped calls</span>
       </div>
-      <div class="dashboard-chart" data-usage-chart data-usage="${escapeHtml(JSON.stringify(rows))}">
+      <div class="dashboard-chart" data-usage-chart data-usage="${JSON.stringify(rows)}">
         <canvas tabindex="0" role="img" aria-label="Daily token usage for the last 15 days, UTC. Use left and right arrow keys to inspect each day." aria-describedby="daily-usage-help">Daily token usage. Exact values are available in the daily usage table below.</canvas>
         <div class="dashboard-chart-tooltip" data-chart-tooltip role="status" hidden></div>
       </div>
@@ -29,7 +29,7 @@ function dailyUsageCard(rows) {
           <table>
             <caption class="visually-hidden">Daily completed or stopped usage, UTC</caption>
             <thead><tr><th scope="col">Day (UTC)</th><th scope="col">Calls</th><th scope="col">Tokens</th></tr></thead>
-            <tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${formatUsageNumber(row.calls)}</td><td>${formatUsageNumber(row.tokens)}</td></tr>`).join('')}</tbody>
+            <tbody>${rows.map((row) => html`<tr><td>${row.date}</td><td>${formatUsageNumber(row.calls)}</td><td>${formatUsageNumber(row.tokens)}</td></tr>`)}</tbody>
           </table>
         </div>
       </details>

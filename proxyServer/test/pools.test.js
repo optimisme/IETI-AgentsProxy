@@ -619,3 +619,129 @@ test('admin changes are traced with who, what and which record, without secrets'
   assert.deepEqual(JSON.parse(summarizeBody({ password: '', token: 't' })), { token: '[provided]' });
   assert.equal(summarizeBody({}), null);
 });
+
+test('every admin form shows a refused submission again with what was typed and why, saving nothing', async () => {
+  const agent = await admin();
+  const existing = provider('Taken');
+  const poolId = pool(`taken-alias-${++sequence}`, [existing]);
+  const takenAlias = db.prepare('SELECT alias FROM pools WHERE id = ?').get(poolId).alias;
+  const group = db.prepare('INSERT INTO groups (name) VALUES (?)').run(`Taken group ${sequence}`);
+  const takenGroup = `Taken group ${sequence}`;
+  const user = student([poolId]);
+  const counts = () => Object.fromEntries(['users', 'groups', 'pools', 'providers', 'provider_models', 'pool_providers', 'group_pools']
+    .map((table) => [table, db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count]));
+  const stored = () => ({
+    user: db.prepare('SELECT name, email, enabled, role FROM users WHERE id = ?').get(user.id),
+    group: db.prepare('SELECT * FROM groups WHERE id = ?').get(user.groupId),
+    provider: db.prepare('SELECT * FROM providers WHERE id = ?').get(existing.id),
+    mapping: db.prepare('SELECT * FROM provider_models WHERE provider_id = ?').get(existing.id),
+    settings: db.prepare('SELECT key, value FROM settings ORDER BY key').all(),
+    usage: db.prepare('SELECT COUNT(*) AS count FROM usage_logs').get().count
+  });
+  db.prepare("INSERT INTO usage_logs (user_id, model, status, created_at) VALUES (?, 'm', 'success', datetime('now', '-3 days'))").run(user.id);
+  const before = { counts: counts(), stored: stored() };
+  // As a browser submits a form: it asks for HTML.
+  const submit = (path, body) => agent.post(path).type('form').set('Accept', 'text/html,application/xhtml+xml').send(body);
+  const refused = async (path, body, status, reason, typed) => {
+    const response = await submit(path, body).expect(status);
+    assert.match(response.text, /^<!doctype html>/, `${path} answers with a page`);
+    assert.match(response.text, reason, `${path} says why`);
+    for (const pattern of typed) assert.match(response.text, pattern, `${path} keeps what was typed`);
+    return response;
+  };
+  const error = (text) => new RegExp(`<div class="error">${text}</div>`);
+
+  // Users: a new one, and an existing one whose other sections must still show the stored account.
+  await refused('/admin/users', { name: 'Typed <b>', email: 'not-an-email', role: 'teacher', enabled: '1', group_id: String(user.groupId) }, 400,
+    error('Email must be valid\\.'), [/name="name" value="Typed &lt;b&gt;"/, /name="email" type="email" value="not-an-email"/,
+      /<option value="teacher" selected>/, new RegExp(`<option value="${user.groupId}" selected>`), /<h1>New User<\/h1>/]);
+  await refused('/admin/users', { name: '', email: 'typed@example.test', group_id: String(user.groupId) }, 400, error('Name is required\\.'),
+    [/name="email" type="email" value="typed@example.test"/, /name="enabled" type="checkbox" value="1" style="width:auto" >/]);
+  const userPage = await refused(`/admin/users/${user.id}`, { name: 'Typed name', email: 'bad', enabled: '1', group_id: '999999' }, 400,
+    error('Email must be valid\\.'), [/name="name" value="Typed name"/, /<h1>Edit User<\/h1>/, /<h2>Invitation key<\/h2>/]);
+  assert.match(userPage.text, /<p><strong>Pool Student<\/strong><br>/, 'The rest of the page shows the stored account');
+  await refused(`/admin/users/${user.id}/regenerate-key`, { key_name: 'x' }, 200, /ieti_sk_/, []);
+  db.prepare("UPDATE user_api_keys SET name = 'Laptop' WHERE user_id = ? AND name = 'x'").run(user.id);
+  await refused(`/admin/users/${user.id}/regenerate-key`, { key_name: 'laptop' }, 409, error('This user already has an API key named laptop\\. Choose another name\\.'), [/<h1>Edit User<\/h1>/]);
+  db.prepare('DELETE FROM user_api_keys WHERE user_id = ?').run(user.id);
+
+  // Groups, including a name another group has (which used to fail as an unexplained server error).
+  await refused('/admin/groups', { name: 'Typed group', daily_call_limit: '-1', hourly_token_limit: '50', pool_ids: String(poolId) }, 400,
+    error('Calls per day must be a non-negative integer\\.'), [/name="name" value="Typed group"/, /name="daily_call_limit" type="number" min="0" value="-1"/,
+      /name="hourly_token_limit" type="number" min="0" value="50"/, new RegExp(`name="pool_ids" type="checkbox" value="${poolId}" style="width:auto" checked>`)]);
+  await refused('/admin/groups', { name: takenGroup }, 409, new RegExp(`The name ${takenGroup} is already used by <a href="/admin/groups/${group.lastInsertRowid}">another group</a>`), [new RegExp(`name="name" value="${takenGroup}"`)]);
+  await refused(`/admin/groups/${user.groupId}`, { name: takenGroup, daily_token_limit: '7' }, 409, /is already used by <a href="\/admin\/groups\//,
+    [/name="daily_token_limit" type="number" min="0" value="7"/, /<h1>Edit Group<\/h1>/, /<h2>Users<\/h2>/]);
+
+  // Pools.
+  await refused('/admin/pools', { alias: 'two words', provider_ids: String(existing.id) }, 400, error('OpenCode model alias cannot contain whitespace\\.'),
+    [/name="alias" value="two words"/, new RegExp(`name="provider_ids" type="checkbox" value="${existing.id}" style="width:auto" checked>`)]);
+  await refused(`/admin/pools/${poolId}`, { alias: '', provider_ids: String(existing.id) }, 400, error('OpenCode model alias is required\\.'), [/<h2>What students see<\/h2>/]);
+
+  // Providers: a new one, the settings form of an existing one, and its mapping.
+  const providerBody = {
+    slug: 'typed-slug', name: 'Typed provider', base_url: 'ftp://nowhere', enabled: '1', keep_warm_interval_minutes: '5', max_concurrent_requests: '3',
+    upstream_model: 'typed-upstream', context_limit: '1234', supports_tools: ['0'], supports_image_input: ['0', '1'], max_images: '6',
+    supports_reasoning: ['0', '1'], reasoning_efforts_present: '1', reasoning_efforts: ['low', 'high'], default_reasoning_effort: 'high'
+  };
+  const typedProvider = [/name="slug" value="typed-slug"/, /name="base_url" value="ftp:\/\/nowhere"/, /<option value="5" selected>5 min<\/option>/,
+    /name="max_concurrent_requests" type="number" min="0" value="3"/, /name="upstream_model" value="typed-upstream"/,
+    /name="context_limit" type="number" min="0" value="1234"/, /name="supports_tools" type="checkbox" value="1" style="width:auto" >/,
+    /name="supports_image_input" type="checkbox" value="1" style="width:auto" checked>/, /name="max_images" type="number" min="0" value="6"/,
+    /name="reasoning_efforts" type="checkbox" value="high" style="width:auto" checked>/, /name="reasoning_efforts" type="checkbox" value="medium" style="width:auto" >/,
+    /<option value="high" selected>high<\/option>/];
+  await refused('/admin/providers', providerBody, 400, error('Base URL must be an HTTP or HTTPS URL\\.'), [...typedProvider, /<h1>New Provider<\/h1>/]);
+  await refused('/admin/providers', { ...providerBody, base_url: 'http://ok.example.test', slug: existing.slug }, 409,
+    new RegExp(`The slug <code>${existing.slug}</code> is already used by <a href="/admin/providers/${existing.id}">`), [/name="name" value="Typed provider"/]);
+  const providerPage = await refused(`/admin/providers/${existing.id}`, providerBody, 400, error('Base URL must be an HTTP or HTTPS URL\\.'),
+    [...typedProvider, /<h1>Edit provider<\/h1>/, /<h2>Provider API key<\/h2>/]);
+  assert.match(providerPage.text, new RegExp(`action="/admin/providers/${existing.id}" class="panel" data-provider-settings-form`));
+  await refused(`/admin/providers/${existing.id}/mapping`, { upstream_model: '', context_limit: '-5' }, 400, error('Upstream model name is required\\.'),
+    [/name="context_limit" type="number" min="0" value="-5"/, new RegExp(`name="slug" value="${existing.slug}"`)]);
+
+  // Server settings, and the usage clean-up, where a mistyped number must not delete logs.
+  await refused('/admin/server', { public_base_url: 'https://typed.example.test', max_tokens_per_request: 'abc', maintenance_mode: 'true' }, 400,
+    error('Max output tokens per request must be a whole number of at least 1\\.'),
+    [/name="public_base_url" value="https:\/\/typed\.example\.test"/, /name="max_tokens_per_request" type="number" value="abc"/, /name="maintenance_mode" type="checkbox" value="true" style="width:auto" checked>/]);
+  for (const days of ['-3', '0', '1.5', 'soon']) {
+    await refused('/admin/server/cleanup-usage', { retention_days: days }, 400, error('Days to keep must be a whole number of at least 1\\.'), [/<h2>Usage log cleanup<\/h2>/]);
+  }
+
+  assert.deepEqual({ counts: counts(), stored: stored() }, before, 'No refused submission saved anything');
+
+  // A client that asks for JSON gets the same refusals as JSON.
+  const json = (path, body) => agent.post(path).type('form').set('Accept', 'application/json').send(body);
+  assert.deepEqual((await json('/admin/groups', { name: takenGroup }).expect(409)).body.error,
+    { message: `The name ${takenGroup} is already used by another group.`, type: 'group_name_taken', code: 'group_name_taken' });
+  assert.equal((await json('/admin/pools', { alias: takenAlias }).expect(409)).body.error.code, 'alias_taken');
+  assert.equal((await json('/admin/server/cleanup-usage', { retention_days: '-3' }).expect(400)).body.error.code, 'invalid_form');
+  assert.deepEqual({ counts: counts(), stored: stored() }, before);
+
+  // The same forms still save when the values are fine.
+  await submit(`/admin/groups/${user.groupId}`, { name: `Renamed group ${sequence}`, daily_token_limit: '7', pool_ids: String(poolId) }).expect(302);
+  assert.equal(db.prepare('SELECT daily_token_limit FROM groups WHERE id = ?').get(user.groupId).daily_token_limit, 7);
+  await submit(`/admin/users/${user.id}`, { name: 'Renamed', email: `renamed-${sequence}@example.test`, enabled: '1', group_id: String(user.groupId) }).expect(302);
+  assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(user.id).name, 'Renamed');
+});
+
+test('views escape every interpolated value without being asked to', () => {
+  const { html, joinHtml, jsLiteral, trustedHtml } = require('../src/utils/html');
+  const hostile = '<script>alert("x")</script> & \'quoted\'';
+  assert.equal(String(html`<p title="${hostile}">${hostile}</p>`),
+    '<p title="&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;quoted&#39;">&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;quoted&#39;</p>');
+  // Markup built by another template, a join or trustedHtml is inserted as it is; arrays are concatenated.
+  const item = (value) => html`<li>${value}</li>`;
+  assert.equal(String(html`<ul>${[item('a<b'), item(2)]}</ul>${trustedHtml('<hr>')}`), '<ul><li>a&lt;b</li><li>2</li></ul><hr>');
+  assert.equal(String(joinHtml([item('x'), 'y&z'], html`<br>`)), '<li>x</li><br>y&amp;z');
+  assert.equal(String(joinHtml(['a', 'b'], ' & ')), 'a &amp; b');
+  // Like Array.join, an empty list is an empty string, so `rows || fallback` works.
+  assert.equal(joinHtml([]), '');
+  assert.equal(String(html`${null}${undefined}${false}${0}${''}`), '0');
+  // A plain string holding markup is text: it is shown, never run.
+  assert.equal(String(html`${'<b>bold</b>'}`), '&lt;b&gt;bold&lt;/b&gt;');
+  // Inside <script>, values are written as JavaScript, and cannot close the element.
+  assert.equal(String(html`<script>const x = ${jsLiteral('</script><b>"q"')};</script>`), '<script>const x = "\\u003c/script>\\u003cb>\\"q\\"";</script>');
+  // Results behave as strings where one is expected.
+  assert.equal(`${html`<i>x</i>`}`, '<i>x</i>');
+  assert.equal(JSON.stringify({ a: html`<i>x</i>` }), '{"a":"<i>x</i>"}');
+});

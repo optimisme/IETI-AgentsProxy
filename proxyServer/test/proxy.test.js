@@ -963,10 +963,12 @@ test('admin user forms explain an email that is already taken instead of failing
     email,
     enabled: '1',
     group_id: String(groupId)
-  }).expect(302);
-  assert.equal(edit.headers.location, `/admin/users/${otherId}?email_taken=${ownerId}`);
-  const editPage = await agent.get(edit.headers.location).expect(200);
-  assert.match(editPage.text, new RegExp(`That email already belongs to <a href="/admin/users/${ownerId}">`));
+  }).expect(409);
+  // The user's page comes back with the reason and what was typed; the stored name is unchanged.
+  assert.match(edit.text, /<h1>Edit User<\/h1>/);
+  assert.match(edit.text, new RegExp(`That email already belongs to <a href="/admin/users/${ownerId}">`));
+  assert.match(edit.text, /name="name" value="Renamed"/);
+  assert.match(edit.text, new RegExp(`name="email" type="email" value="${email}"`));
   assert.equal(db.prepare('SELECT name FROM users WHERE id = ?').get(otherId).name, 'Other User');
 
   // Saving a user with their own email, in another letter case, is not a conflict.
@@ -1102,9 +1104,12 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   );
 
   // Renaming a provider onto a slug in use explains the clash instead of failing.
-  const rename = await agent.post(`/admin/providers/${copy.id}`).type('form').send(fields(copyPage.text.split('<h2>Provider API key</h2>')[0], { slug })).expect(302);
-  assert.equal(rename.headers.location, `/admin/providers/${copy.id}?slug_taken=${slug}`);
-  assert.match((await agent.get(rename.headers.location).expect(200)).text, /is already used by <a href/);
+  const rename = await agent.post(`/admin/providers/${copy.id}`).type('form').send(fields(copyPage.text.split('<h2>Provider API key</h2>')[0], { slug, name: 'Typed <name>' })).expect(409);
+  assert.match(rename.text, /<h1>Edit provider<\/h1>/);
+  assert.match(rename.text, new RegExp(`The slug <code>${slug}</code> is already used by <a href="/admin/providers/${sourceId}">`));
+  assert.match(rename.text, new RegExp(`name="slug" value="${slug}"`));
+  assert.match(rename.text, /name="name" value="Typed &lt;name&gt;"/);
+  assert.equal(db.prepare('SELECT name FROM providers WHERE id = ?').get(copy.id).name, 'Copy of Dup <Source>');
   assert.equal(db.prepare('SELECT slug FROM providers WHERE id = ?').get(copy.id).slug, `${slug}-copy`);
 });
 
@@ -1220,13 +1225,13 @@ test('admin can remove a student from a group on the group page', async () => {
   assert.equal(groupOf(other.id), otherGroupId);
 });
 
-test('admin form validation rejects invalid writes', async () => {
+test('admin form validation rejects invalid writes and answers JSON to clients that ask for it', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
   const groupId = db.prepare('SELECT id FROM groups ORDER BY id ASC LIMIT 1').get().id;
 
   const badEmail = `bad-email-${Date.now()}`;
-  const badUser = await agent.post('/admin/users').type('form').send({
+  const badUser = await agent.post('/admin/users').type('form').set('Accept', 'application/json').send({
     name: 'Invalid User',
     email: badEmail,
     enabled: '1',
@@ -1236,7 +1241,7 @@ test('admin form validation rejects invalid writes', async () => {
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?').get(badEmail).count, 0);
 
   const badRoleEmail = `bad-role-${Date.now()}@example.test`;
-  const badRole = await agent.post('/admin/users').type('form').send({
+  const badRole = await agent.post('/admin/users').type('form').set('Accept', 'application/json').send({
     name: 'Invalid Role',
     email: badRoleEmail,
     role: 'admin',
@@ -1246,7 +1251,7 @@ test('admin form validation rejects invalid writes', async () => {
   assert.equal(badRole.body.error.code, 'invalid_form');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?').get(badRoleEmail).count, 0);
 
-  const badProvider = await agent.post('/admin/providers').type('form').send({
+  const badProvider = await agent.post('/admin/providers').type('form').set('Accept', 'application/json').send({
     slug: 'bad-provider',
     name: 'Bad Provider',
     base_url: 'ftp://invalid.example.test',
@@ -1256,7 +1261,7 @@ test('admin form validation rejects invalid writes', async () => {
   assert.equal(badProvider.body.error.code, 'invalid_form');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM providers WHERE slug = ?').get('bad-provider').count, 0);
 
-  const badGroup = await agent.post('/admin/groups').type('form').send({
+  const badGroup = await agent.post('/admin/groups').type('form').set('Accept', 'application/json').send({
     name: 'Bad Group',
     provider_id: '',
     daily_call_limit: '-1',
@@ -3127,7 +3132,8 @@ test('admin registration filter defaults to approved/enabled and preserves filte
   assert.match(first.text, /<form[^>]*class="panel search-panel">[\s\S]*<button>Search<\/button>[\s\S]*>Clear<\/a>[\s\S]*>Copy filtered emails<\/button>[\s\S]*<\/form>/);
   assert.match(first.text, /value="approved-disabled" selected>approved\/disabled/);
   assert.doesNotMatch(first.text, /class="status-enabled"|name="enabled"|Filter by account access/);
-  const next = first.text.match(/href="([^"]+)">Next<\/a>/)[1];
+  // The link is an HTML attribute, so its "&" is written as an entity, as a browser reads it.
+  const next = first.text.match(/href="([^"]+)">Next<\/a>/)[1].replaceAll('&amp;', '&');
   for (const part of [`q=${marker}`, `group_id=${groupId}`, 'status=approved-disabled', 'page=2']) {
     assert.ok(next.includes(part));
   }
@@ -3154,7 +3160,7 @@ test('admin registration filter defaults to approved/enabled and preserves filte
   const all = await agent.get(`/admin/users?${query}&status=all`).expect(200);
   assert.match(all.text, /Page 1 of 2\. 32 users\./);
   assert.deepEqual(copiedEmails(all.text), expectedEmails(Array.from({ length: 32 }, (_, i) => i)));
-  const allNext = all.text.match(/href="([^"]+)">Next<\/a>/)[1];
+  const allNext = all.text.match(/href="([^"]+)">Next<\/a>/)[1].replaceAll('&amp;', '&');
   assert.ok(allNext.includes('status=all'));
   await agent.get(allNext).expect(200).expect(/Page 2 of 2\. 32 users\./);
 });

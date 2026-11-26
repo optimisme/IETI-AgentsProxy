@@ -3,7 +3,7 @@ const express = require('express');
 const config = require('../../config');
 const { getDb } = require('../../db');
 const { requireAdmin } = require('../../middleware/authAdmin');
-const { getSetting, maskSecret } = require('../../services/settingsService');
+const { getSetting } = require('../../services/settingsService');
 const {
   discoverProviderMetadata,
   listProviders,
@@ -20,7 +20,7 @@ const {
   parseReasoningEfforts,
   serializeReasoningEfforts
 } = require('../../utils/reasoning');
-const { escapeHtml, flash } = require('../../utils/html');
+const { flash, html } = require('../../utils/html');
 const {
   nonNegativeIntegerOrNull,
   optionalText,
@@ -28,7 +28,8 @@ const {
   slug: validateSlug,
   url: validateUrl
 } = require('../../utils/validation');
-const { activeProviderModel, render, tokens } = require('./shared');
+const { activeProviderModel, render, formConflict, formRoute } = require('./shared');
+const { providersPage, providerForm, slugTakenNotice, providerPage } = require('../../views/admin/providers');
 
 const router = express.Router();
 
@@ -183,106 +184,14 @@ function saveActiveModelMapping(db, providerId, providerName, form) {
   }
 }
 
-function providerModelContract(model = {}) {
-  return {
-    contextLimit: Number(model.context_limit || getSetting('default_model_context_limit')),
-    outputLimit: Number(model.output_limit || getSetting('default_model_output_limit')),
-    text: Number(model.supports_text_input) === 1,
-    image: Number(model.supports_image_input) === 1,
-    maxImages: Number(model.supports_image_input) === 1 && Number(model.max_images) > 0 ? Number(model.max_images) : null,
-    tools: Number(model.supports_tools) === 1,
-    reasoning: Number(model.supports_reasoning) === 1,
-    reasoningEfforts: parseReasoningEfforts(model.reasoning_efforts),
-    defaultReasoningEffort: normalizeReasoningEffort(model.default_reasoning_effort),
-    chatTemplateKwargs: Number(model.supports_chat_template_kwargs) === 1,
-    parallelTools: Number(model.supports_parallel_tools) === 1
-  };
-}
-
-function alignmentValue(value, field) {
-  if (field === 'contextLimit' || field === 'outputLimit') return Number(value || 0).toLocaleString('en-US');
-  if (field === 'reasoningEfforts') {
-    if (value === null) return 'provider managed';
-    return value.length ? value.join(', ') : 'none selectable';
-  }
-  if (field === 'defaultReasoningEffort') return value || 'provider default';
-  if (field === 'maxImages') return value === null ? 'unlimited' : String(value);
-  return value ? 'supported' : 'not supported';
-}
-
-function modelCapabilitySummary(model) {
-  const contract = providerModelContract(model);
-  const capabilities = [
-    contract.text ? 'Text' : null,
-    contract.image ? (contract.maxImages === null ? 'Images' : `Images (max ${contract.maxImages})`) : null,
-    contract.tools ? 'Tools' : null,
-    contract.parallelTools ? 'Parallel tools' : null,
-    contract.reasoning
-      ? `Reasoning: ${alignmentValue(contract.reasoningEfforts, 'reasoningEfforts')}`
-      : null,
-    contract.chatTemplateKwargs ? 'Chat template overrides' : null
-  ].filter(Boolean);
-  return capabilities.length
-    ? capabilities.map((capability) => `<span class="feature-chip">${escapeHtml(capability)}</span>`).join('')
-    : '<span class="muted">No capabilities declared</span>';
-}
-
-function modelMappingFields(provider = {}, model = activeProviderModel(provider.id)) {
-  const capability = (name) => model[name] === undefined || Number(model[name]) === 1;
-  const reasoningEfforts = parseReasoningEfforts(model.reasoning_efforts) || [];
-  const defaultReasoningEffort = normalizeReasoningEffort(model.default_reasoning_effort) || '';
-  return `
-    <h2>Active Model Mapping</h2>
-    <label>Upstream model name</label><input name="upstream_model" value="${escapeHtml(model.upstream_model || '')}" required>
-    <label>Context limit</label><input name="context_limit" type="number" min="0" value="${escapeHtml(model.context_limit ?? getSetting('default_model_context_limit'))}">
-    <label>Output limit</label><input name="output_limit" type="number" min="0" value="${escapeHtml(model.output_limit ?? getSetting('default_model_output_limit'))}">
-    <h3>Capabilities</h3>
-    <p class="muted">Capabilities are aggregated and published automatically to Codex and OpenCode.</p>
-    <input type="hidden" name="supports_text_input" value="0"><label><input name="supports_text_input" type="checkbox" value="1" style="width:auto" ${capability('supports_text_input') ? 'checked' : ''}> Text input</label>
-    <input type="hidden" name="supports_image_input" value="0"><label><input name="supports_image_input" type="checkbox" value="1" style="width:auto" ${capability('supports_image_input') ? 'checked' : ''}> Image input</label>
-    <div class="max-images-field">
-      <label>Max images per request <span class="muted" style="display:block;font-weight:400">Blank or 0 means unlimited. Set it to the upstream's own cap (for example vLLM <code>--limit-mm-per-prompt</code>) so oversized requests are rejected before they reach the provider.</span></label>
-      <input name="max_images" type="number" min="0" value="${escapeHtml(model.max_images ?? '')}" placeholder="Unlimited">
-    </div>
-    <input type="hidden" name="supports_tools" value="0"><label><input name="supports_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_tools') ? 'checked' : ''}> Tool calling</label>
-    <input type="hidden" name="supports_reasoning" value="0"><label><input name="supports_reasoning" type="checkbox" value="1" style="width:auto" ${capability('supports_reasoning') ? 'checked' : ''}> Reasoning</label>
-    <fieldset style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0 12px">
-      <legend>Reasoning controls</legend>
-      <p class="muted">Select only levels accepted by this upstream model. Leave all levels unselected for models with provider-managed reasoning and no selectable effort.</p>
-      <input type="hidden" name="reasoning_efforts_present" value="1">
-      <div class="actions">
-        ${REASONING_EFFORTS.map((effort) => `<label><input name="reasoning_efforts" type="checkbox" value="${effort}" style="width:auto" ${reasoningEfforts.includes(effort) ? 'checked' : ''}> ${effort}</label>`).join('')}
-      </div>
-      <label>Reasoning history field</label>
-      <select name="reasoning_history_field">
-        <option value="">Forward history unchanged</option>
-        ${['reasoning', 'reasoning_content'].map((field) => `<option value="${field}" ${model.reasoning_history_field === field ? 'selected' : ''}>${field}</option>`).join('')}
-      </select>
-      <p class="muted">For upstreams requiring reasoning in assistant history. Existing reasoning is preserved; missing history uses an empty string.</p>
-      <label>Default reasoning effort</label>
-      <select name="default_reasoning_effort">
-        <option value="">Provider default</option>
-        ${REASONING_EFFORTS.map((effort) => `<option value="${effort}" ${defaultReasoningEffort === effort ? 'selected' : ''}>${effort}</option>`).join('')}
-      </select>
-      <input type="hidden" name="supports_chat_template_kwargs" value="0"><label><input name="supports_chat_template_kwargs" type="checkbox" value="1" style="width:auto" ${Number(model.supports_chat_template_kwargs || 0) === 1 ? 'checked' : ''}> Allow restricted vLLM chat template overrides</label>
-      <p class="muted">Only <code>enable_thinking</code>, <code>preserve_thinking</code>, and <code>reasoning_effort</code> are accepted.</p>
-    </fieldset>
-    <input type="hidden" name="supports_parallel_tools" value="0"><label><input name="supports_parallel_tools" type="checkbox" value="1" style="width:auto" ${capability('supports_parallel_tools') ? 'checked' : ''}> Parallel tool calls</label>
-  `;
+// The server-wide limits a mapping falls back to when it sets none.
+function modelDefaults() {
+  return { context: getSetting('default_model_context_limit'), output: getSetting('default_model_output_limit') };
 }
 
 function findProviderBySlug(db, slug, { exceptId = null } = {}) {
   return db.prepare('SELECT id, name FROM providers WHERE slug = ? AND id IS NOT ?')
     .get(slug, exceptId === null ? null : Number(exceptId)) || null;
-}
-
-function slugTakenNotice(slug, owner) {
-  return `
-    <div class="error">
-      The slug <code>${escapeHtml(slug)}</code> is already used by <a href="/admin/providers/${owner.id}">${escapeHtml(owner.name)}</a>.
-      Nothing was saved. Choose a different slug.
-    </div>
-  `;
 }
 
 function copySourceProvider(value) {
@@ -300,180 +209,85 @@ function copySlug(db, slug) {
   }
 }
 
-// Turns parsed form values back into row-shaped objects so a rejected form can be shown again.
-function providerFormState(form, mapping) {
+// The provider form's fields as submitted, valid or not, laid over the stored rows if any,
+// so a refused form can be shown again exactly as it was filled in.
+function providerFromBody(body, stored = {}) {
   return {
-    provider: {
-      slug: form.slug,
-      name: form.name,
-      base_url: form.baseUrl,
-      enabled: form.enabled,
-      keep_warm_interval_minutes: form.keepWarmIntervalMinutes,
-      max_concurrent_requests: form.maxConcurrentRequests,
-      timeout_ms: form.timeoutMs
-    },
-    model: {
-      upstream_model: mapping.upstreamModel,
-      context_limit: mapping.contextLimit,
-      output_limit: mapping.outputLimit,
-      supports_text_input: mapping.supportsTextInput,
-      supports_image_input: mapping.supportsImageInput,
-      max_images: mapping.maxImages,
-      supports_tools: mapping.supportsTools,
-      supports_reasoning: mapping.supportsReasoning,
-      reasoning_efforts: mapping.reasoningEfforts,
-      default_reasoning_effort: mapping.defaultReasoningEffort,
-      reasoning_history_field: mapping.reasoningHistoryField,
-      supports_chat_template_kwargs: mapping.supportsChatTemplateKwargs,
-      supports_parallel_tools: mapping.supportsParallelTools
-    }
+    ...stored,
+    slug: body.slug ?? '',
+    name: body.name ?? '',
+    base_url: body.base_url ?? '',
+    max_concurrent_requests: body.max_concurrent_requests ?? '',
+    timeout_ms: body.timeout_ms ?? '',
+    enabled: body.enabled ? 1 : 0,
+    keep_warm_interval_minutes: body.keep_warm_interval_minutes
   };
 }
 
-function providerForm(provider = {}, action = '/admin/providers', { model, copySource = null, copyApiKey = true } = {}) {
-  const deleteFormId = provider.id ? `provider-delete-${provider.id}` : '';
-  const deleteModalId = provider.id ? `provider-delete-modal-${provider.id}` : '';
-  const autoconfigureModalId = provider.id ? `provider-autoconfigure-modal-${provider.id}` : '';
-  const providerTestModalId = provider.id ? `provider-test-modal-${provider.id}` : '';
-  const keepWarmSelectId = `provider-keep-warm-${provider.id || 'new'}`;
-  return `
-    <form method="post" action="${action}" class="panel" data-provider-settings-form>
-      <h2>Provider Settings</h2>
-      <label>Provider slug</label><input name="slug" value="${escapeHtml(provider.slug)}" required>
-      <label>Name</label><input name="name" value="${escapeHtml(provider.name)}" required>
-      <label>Base URL${copySource ? ` <span class="muted" style="display:block;font-weight:400">Copied from ${escapeHtml(copySource.name)}. Change it if the copy points at a different server.</span>` : ''}</label><input name="base_url" value="${escapeHtml(provider.base_url)}" placeholder="http://127.0.0.1:8001" required>
-      <label>Maximum concurrent requests. Blank or 0 means infinite.</label><input name="max_concurrent_requests" type="number" min="0" value="${escapeHtml(provider.max_concurrent_requests ?? '')}">
-      <label>Timeout milliseconds. Blank uses the server default.</label><input name="timeout_ms" type="number" min="0" value="${escapeHtml(provider.timeout_ms ?? '')}">
-      <label><input name="enabled" type="checkbox" value="1" style="width:auto" ${provider.enabled === 0 ? '' : 'checked'}> Provider enabled</label>
-      <label for="${keepWarmSelectId}">Keep warm calling</label>
-      <select id="${keepWarmSelectId}" name="keep_warm_interval_minutes">
-        ${[[0, 'Never'], [1, '1 min'], [5, '5 min']].map(([minutes, label]) => `<option value="${minutes}" ${Number(provider.keep_warm_interval_minutes || 0) === minutes ? 'selected' : ''}>${label}</option>`).join('')}
-      </select>
-      <p class="muted">No calls are sent when set to Never. Other options send a tiny completion at the selected interval when this provider and a model are enabled. May consume billable tokens; does not use student quota.</p>
-      ${copySource ? `
-        <input type="hidden" name="copy_from" value="${copySource.id}">
-        ${copySource.api_key ? `<label><input name="copy_api_key" type="checkbox" value="1" style="width:auto" ${copyApiKey ? 'checked' : ''}> Use the same API key as ${escapeHtml(copySource.name)}</label>` : ''}
-      ` : ''}
-      ${model ? modelMappingFields(provider, model) : modelMappingFields(provider)}
-      <div class="form-actions">
-        <div class="actions">
-          <button type="submit">Save provider</button>
-          ${provider.id ? `<button type="button" class="danger" data-open-modal="${deleteModalId}">Delete provider</button>` : ''}
-          ${provider.id ? `<button type="button" class="secondary" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json" data-autoconfigure-modal="${autoconfigureModalId}">Autoconfigure</button>` : ''}
-        </div>
-        ${provider.id ? `<a class="button secondary" href="/admin/providers/new?from=${provider.id}">Duplicate provider</a>` : ''}
-      </div>
-    </form>
-    ${provider.id ? `
-      <form id="${deleteFormId}" method="post" action="/admin/providers/${provider.id}/delete"></form>
-      <dialog id="${deleteModalId}" class="modal" aria-labelledby="${deleteModalId}-title">
-        <h2 id="${deleteModalId}-title">Delete provider?</h2>
-        <p>This will permanently delete <strong>${escapeHtml(provider.name)}</strong> (<code>${escapeHtml(provider.slug)}</code>), its model mapping, and its group assignments.</p>
-        <p class="muted">Existing usage history is preserved under the provider slug.</p>
-        <div class="actions">
-          <button type="button" class="secondary" data-close-modal>Cancel</button>
-          <button type="submit" form="${deleteFormId}" class="danger">Delete provider</button>
-        </div>
-      </dialog>
-      <dialog id="${autoconfigureModalId}" class="modal autoconfigure-modal" closedby="none" aria-labelledby="${autoconfigureModalId}-title" data-autoconfigure-url="/admin/providers/${provider.id}/autoconfigure.json">
-        <h2 id="${autoconfigureModalId}-title" data-autoconfigure-title>Autoconfigure provider</h2>
-        <p data-autoconfigure-status role="status" aria-live="polite">Connecting to the provider...</p>
-        <div data-autoconfigure-progress>
-          <progress max="${AUTOCONFIGURE_TOTAL_STAGES}" value="0" aria-label="Completed autoconfigure stages"></progress>
-          <p class="muted">Catalog · Text · Assistant history · Tools · Images · Streaming. Retries stay within the same stage.</p>
-          <p class="muted"><span data-autoconfigure-elapsed>0 seconds elapsed</span> · Tests can take up to four minutes.</p>
-        </div>
-        <p data-autoconfigure-help class="muted">Nothing has been saved. You can cancel testing at any time.</p>
-        <div data-autoconfigure-picker hidden>
-          <label for="${autoconfigureModalId}-model">Upstream model</label>
-          <select id="${autoconfigureModalId}-model" data-autoconfigure-model disabled></select>
-        </div>
-        <section data-autoconfigure-review hidden>
-          <h3>Settings to save</h3>
-          <div class="autoconfigure-table"><table><thead><tr><th>Setting</th><th>Current</th><th>Detected</th></tr></thead><tbody data-autoconfigure-settings></tbody></table></div>
-          <p class="muted">Official values take priority. Settings that could not be verified keep their current values.</p>
-        </section>
-        <ul data-autoconfigure-results class="autoconfigure-results" aria-label="Test results"></ul>
-        <details data-autoconfigure-diagnostics hidden><summary>Technical details</summary><p data-autoconfigure-detail class="muted" style="white-space:pre-wrap;overflow-wrap:anywhere"></p></details>
-        <div class="actions">
-          <button type="button" class="secondary" data-cancel-autoconfigure>Cancel</button>
-          <button type="button" class="secondary" data-retry-autoconfigure hidden>Try again</button>
-          <button type="button" data-apply-autoconfigure hidden disabled>Apply and save</button>
-        </div>
-      </dialog>
-      <script src="/admin/assets/provider-autoconfigure.js" defer></script>
-      <dialog id="${providerTestModalId}" class="modal" aria-labelledby="${providerTestModalId}-title">
-        <h2 id="${providerTestModalId}-title" data-test-title>Provider test result</h2>
-        <p data-test-status class="muted" aria-live="polite">Running test request...</p>
-        <p data-test-detail class="muted" style="white-space:pre-wrap"></p>
-        <div class="actions">
-          <button type="button" class="secondary" data-close-modal>Close</button>
-        </div>
-      </dialog>
-    ` : ''}
-  `;
+function mappingFromBody(body, stored = {}) {
+  // A checkbox is sent as a hidden "0" followed by "1" when ticked.
+  const ticked = (name, fallback) => {
+    const value = body[name];
+    if (value === undefined) return fallback;
+    return ['1', 'true', 'yes', 'on'].includes(String(Array.isArray(value) ? value.at(-1) : value).toLowerCase()) ? 1 : 0;
+  };
+  return {
+    ...stored,
+    upstream_model: body.upstream_model ?? '',
+    context_limit: body.context_limit ?? '',
+    output_limit: body.output_limit ?? '',
+    supports_text_input: ticked('supports_text_input', 1),
+    supports_image_input: ticked('supports_image_input', 1),
+    max_images: body.max_images ?? '',
+    supports_tools: ticked('supports_tools', 1),
+    supports_reasoning: ticked('supports_reasoning', 1),
+    reasoning_efforts: [].concat(body.reasoning_efforts ?? []),
+    default_reasoning_effort: body.default_reasoning_effort ?? '',
+    reasoning_history_field: body.reasoning_history_field ?? '',
+    supports_chat_template_kwargs: ticked('supports_chat_template_kwargs', 0),
+    supports_parallel_tools: ticked('supports_parallel_tools', 1)
+  };
 }
 
-function providerApiKeyStatus(provider) {
-  return provider.api_key ? `configured (${maskSecret(provider.api_key)})` : 'not configured';
+function refuseTakenSlug(slug, exceptId = null) {
+  const owner = findProviderBySlug(getDb(), slug, { exceptId });
+  if (owner) throw formConflict('slug_taken', `The slug ${slug} is already used by another provider.`, slugTakenNotice(slug, owner));
 }
 
 router.get('/admin/providers', requireAdmin, (req, res) => {
-  const rows = listProviders().map((provider) => {
-    const model = activeProviderModel(provider.id);
-    const contract = model.id ? providerModelContract(model) : null;
-    const pools = poolsForProvider(provider.id);
-    return `
-      <tr>
-        <td>
-          <a href="/admin/providers/${provider.id}"><strong>${escapeHtml(provider.name)}</strong></a><br>
-          <span class="muted">${escapeHtml(provider.slug)}</span>
-        </td>
-        <td>${model.upstream_model ? `<code>${escapeHtml(model.upstream_model)}</code>` : '<span class="muted">none</span>'}</td>
-        <td>${contract ? `${escapeHtml(alignmentValue(contract.contextLimit, 'contextLimit'))} / ${escapeHtml(alignmentValue(contract.outputLimit, 'outputLimit'))}` : '<span class="muted">—</span>'}</td>
-        <td><div class="feature-chips">${contract ? modelCapabilitySummary(model) : '<span class="muted">—</span>'}</div></td>
-        <td>
-          <span class="${provider.enabled ? 'status-enabled' : 'status-disabled'}">${provider.enabled ? 'Enabled' : 'Disabled'}</span><br>
-          <span class="muted">API key ${provider.api_key ? 'configured' : 'missing'}</span>
-        </td>
-        <td>${pools.length
-          ? pools.map((pool) => `<a href="/admin/pools/${pool.id}"><code>${escapeHtml(pool.alias)}</code></a>`).join('<br>')
-          : '<span class="alignment-status alignment-warning" title="Students cannot reach a provider that is in no pool"><span aria-hidden="true">⚠</span> Not in a pool</span>'}</td>
-        <td><a class="button secondary" href="/admin/providers/${provider.id}">Edit</a></td>
-      </tr>
-    `;
-  }).join('');
-  const content = `
-    <div class="provider-list-heading">
-      <div>
-        <p class="muted">A provider is one upstream server and the model it serves. Students reach providers through <a href="/admin/pools">pools</a>, which set the model alias and balance requests.</p>
-      </div>
-      <a class="button" href="/admin/providers/new">Add provider</a>
-    </div>
-    <div class="provider-pool-table">
-      <table>
-        <thead><tr><th>Provider</th><th>Upstream model</th><th>Context / output</th><th>Features</th><th>Status</th><th>Pools</th><th>Actions</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="7" class="muted">No providers.</td></tr>'}</tbody>
-      </table>
-    </div>
-  `;
+  const defaults = modelDefaults();
+  const providers = listProviders().map((provider) => ({
+    ...provider,
+    model: activeProviderModel(provider.id),
+    pools: poolsForProvider(provider.id)
+  }));
   render(req, res, 'settings', {
     title: 'Providers',
-    content,
+    content: providersPage({ defaults, providers }),
     flash: flash(req.query.deleted ? 'Provider deleted.' : (req.query.saved ? 'Provider saved.' : req.query.test || ''))
   });
 });
 
 // ---- Pools: balanced sets of providers published under one model alias ----
 
-router.get('/admin/providers/new', requireAdmin, (req, res) => {
-  const source = copySourceProvider(req.query.from);
-  if (req.query.from !== undefined && !source) return res.status(404).send('Provider not found');
+function showNewProvider(req, res, { values = null, notice = '', status = 200 } = {}) {
+  const source = copySourceProvider(values ? values.copy_from : req.query.from);
+  if (!values && req.query.from !== undefined && !source) return res.status(404).send('Provider not found');
+  res.status(status);
+  if (values) {
+    return render(req, res, 'settings', {
+      title: source ? 'Duplicate Provider' : 'New Provider',
+      flash: notice,
+      content: providerForm(providerFromBody(values), '/admin/providers', {
+        model: mappingFromBody(values), defaults: modelDefaults(), copySource: source, copyApiKey: Boolean(values.copy_api_key)
+      })
+    });
+  }
   if (!source) {
     return render(req, res, 'settings', {
       title: 'New Provider',
-      content: `
-        ${providerForm({ enabled: 1, api_key: '' })}
+      content: html`
+        ${providerForm({ enabled: 1, api_key: '' }, '/admin/providers', { defaults: modelDefaults() })}
       `
     });
   }
@@ -490,26 +304,21 @@ router.get('/admin/providers/new', requireAdmin, (req, res) => {
   render(req, res, 'settings', {
     title: 'Duplicate Provider',
     flash: flash(`This is a copy of ${source.name}. Nothing is saved until you press Save provider. The copy is ${source.enabled ? 'enabled' : 'disabled'} like the original and is not in any pool.`),
-    content: providerForm(copy, '/admin/providers', { model: activeProviderModel(source.id), copySource: source })
+    content: providerForm(copy, '/admin/providers', { model: activeProviderModel(source.id), defaults: modelDefaults(), copySource: source })
   });
+}
+
+router.get('/admin/providers/new', requireAdmin, (req, res) => {
+  showNewProvider(req, res);
 });
 
-router.post('/admin/providers', requireAdmin, (req, res) => {
+router.post('/admin/providers', requireAdmin, formRoute(showNewProvider, (req, res) => {
   const source = copySourceProvider(req.body.copy_from);
   const copyApiKey = Boolean(source && req.body.copy_api_key);
   const form = parseProviderForm(req.body, copyApiKey ? { api_key: source.api_key } : {});
   const mapping = parseModelMappingForm(req.body);
   const db = getDb();
-  const slugOwner = findProviderBySlug(db, form.slug);
-  if (slugOwner) {
-    const state = providerFormState(form, mapping);
-    res.status(409);
-    return render(req, res, 'settings', {
-      title: source ? 'Duplicate Provider' : 'New Provider',
-      flash: slugTakenNotice(form.slug, slugOwner),
-      content: providerForm(state.provider, '/admin/providers', { model: state.model, copySource: source, copyApiKey })
-    });
-  }
+  refuseTakenSlug(form.slug);
   const providerId = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO providers
@@ -530,141 +339,35 @@ router.post('/admin/providers', requireAdmin, (req, res) => {
     return result.lastInsertRowid;
   })();
   res.redirect(`/admin/providers/${providerId}?${source ? `copied=${source.id}` : 'saved=1'}`);
-});
+}));
 
-router.get('/admin/providers/:id', requireAdmin, (req, res) => {
+// The provider's page. After a refused submission it shows the typed values and the reason.
+function showProvider(req, res, { values = null, notice = '', status = 200 } = {}) {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
   const providerPools = poolsForProvider(provider.id);
+  const model = activeProviderModel(provider.id);
+  const defaults = modelDefaults();
   const copiedFrom = req.query.copied ? copySourceProvider(req.query.copied) : null;
-  const slugOwner = req.query.slug_taken ? findProviderBySlug(getDb(), String(req.query.slug_taken), { exceptId: provider.id }) : null;
+  // The page has three forms; only the one that was submitted shows typed values.
+  const formProvider = values && values.slug !== undefined ? providerFromBody(values, provider) : provider;
+  const formModel = values && values.upstream_model !== undefined ? mappingFromBody(values, model) : model;
   const copiedMessage = req.query.copied
     ? `Provider created${copiedFrom ? ` as a copy of ${copiedFrom.name}` : ' as a copy'}. It is ${provider.enabled ? 'enabled' : 'disabled'} and not in any pool yet. Run a test request below, then add it to a pool.`
     : '';
+  res.status(status);
   render(req, res, 'settings', {
     title: 'Edit provider',
-    flash: slugOwner
-      ? slugTakenNotice(String(req.query.slug_taken), slugOwner)
-      : flash(copiedMessage || (req.query.saved ? 'Provider saved.' : req.query.test || '')),
-    content: `
-      <div class="provider-sections">
-        <div class="panel">
-          <h2>Pools</h2>
-          ${providerPools.length
-            ? `<p>Published to students as ${providerPools.map((pool) => `<a href="/admin/pools/${pool.id}"><code>${escapeHtml(pool.alias)}</code></a>`).join(', ')}.</p>`
-            : '<p><span class="alignment-status alignment-warning"><span aria-hidden="true">⚠</span> Not in a pool</span> Students cannot reach this provider until it is added to a <a href="/admin/pools">pool</a>.</p>'}
-        </div>
-        ${providerForm(provider, `/admin/providers/${provider.id}`)}
-        <div class="panel">
-          <h2>Provider API key</h2>
-          <form id="provider-api-key-save-${provider.id}" method="post" action="/admin/providers/${provider.id}">
-            <label>API key or local placeholder</label><input name="api_key" type="password" autocomplete="off" placeholder="${provider.api_key ? 'Leave blank to keep current value' : 'local'}">
-          </form>
-          <p class="muted">API key: ${escapeHtml(providerApiKeyStatus(provider))}</p>
-          <form id="provider-api-key-delete-${provider.id}" method="post" action="/admin/providers/${provider.id}/clear-key"></form>
-          <div class="actions">
-            <button type="submit" form="provider-api-key-save-${provider.id}">Save API key</button>
-            <button type="submit" form="provider-api-key-delete-${provider.id}" class="danger" ${provider.api_key ? '' : 'disabled'}>Delete API key</button>
-          </div>
-        </div>
-        <div class="panel">
-          <h2>Test provider</h2>
-          <div class="actions">
-            <button type="button" data-test-url="/admin/providers/${provider.id}/test.json" data-test-modal="provider-test-modal-${provider.id}" data-test-title="Server test request result" data-test-running="Running server test request...">Run server test request</button>
-            <button type="button" class="secondary" data-test-url="/admin/providers/${provider.id}/mapping/test.json" data-test-modal="provider-test-modal-${provider.id}" data-test-title="Mapping request result" data-test-running="Running mapping request...">Run mapping request</button>
-          </div>
-        </div>
-      </div>
-      <script>
-        document.querySelectorAll('[data-test-url]').forEach((button) => {
-          button.addEventListener('click', async () => {
-            const target = document.getElementById(button.dataset.resultTarget);
-            const modal = document.getElementById(button.dataset.testModal);
-            const modalTitle = modal?.querySelector('[data-test-title]');
-            const modalStatus = modal?.querySelector('[data-test-status]');
-            const modalDetail = modal?.querySelector('[data-test-detail]');
-            const originalText = button.textContent;
-            const clearResult = () => {
-              if (!target) return;
-              window.clearTimeout(target._clearTimer);
-              target._clearTimer = window.setTimeout(() => {
-                target.className = 'muted';
-                target.textContent = '';
-              }, 2000);
-            };
-            button.disabled = true;
-            button.textContent = 'Running...';
-            if (modal && modalStatus && modalDetail) {
-              if (modalTitle) modalTitle.textContent = button.dataset.testTitle || 'Provider test result';
-              modalStatus.className = 'muted';
-              modalStatus.textContent = button.dataset.testRunning || 'Running test request...';
-              modalDetail.textContent = '';
-              if (typeof modal.showModal === 'function') modal.showModal();
-              else modal.setAttribute('open', '');
-            }
-            if (target) {
-              window.clearTimeout(target._clearTimer);
-              target.className = 'muted';
-              target.textContent = 'Running test request...';
-            }
-            try {
-              const response = await fetch(button.dataset.testUrl, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json' }
-              });
-              const body = await response.json();
-              const message = body.message || (response.ok ? 'Test completed.' : 'Test failed.');
-              if (modalStatus && modalDetail) {
-                modalStatus.className = body.ok ? 'notice' : 'error';
-                modalStatus.textContent = message;
-                modalDetail.textContent = body.detail || '';
-              }
-              if (target) {
-                target.className = body.ok ? 'notice' : 'error';
-                target.textContent = [message, body.detail || ''].filter(Boolean).join('\\n');
-                clearResult();
-              }
-            } catch (error) {
-              if (modalStatus && modalDetail) {
-                modalStatus.className = 'error';
-                modalStatus.textContent = error.message || 'Test request failed.';
-                modalDetail.textContent = '';
-              }
-              if (target) {
-                target.className = 'error';
-                target.textContent = error.message || 'Test request failed.';
-                clearResult();
-              }
-            } finally {
-              button.disabled = false;
-              button.textContent = originalText;
-            }
-          });
-        });
-
-        document.querySelectorAll('[data-open-modal]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const modal = document.getElementById(button.dataset.openModal);
-            if (!modal) return;
-            if (typeof modal.showModal === 'function') modal.showModal();
-            else modal.setAttribute('open', '');
-          });
-        });
-        document.querySelectorAll('[data-close-modal]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const modal = button.closest('dialog');
-            if (!modal) return;
-            if (typeof modal.close === 'function') modal.close();
-            else modal.removeAttribute('open');
-          });
-        });
-      </script>
-    `
+    flash: notice || flash(copiedMessage || (req.query.saved ? 'Provider saved.' : req.query.test || '')),
+    content: providerPage({ defaults, formModel, formProvider, provider, providerPools })
   });
+}
+
+router.get('/admin/providers/:id', requireAdmin, (req, res) => {
+  showProvider(req, res);
 });
 
-router.post('/admin/providers/:id', requireAdmin, (req, res) => {
+router.post('/admin/providers/:id', requireAdmin, formRoute(showProvider, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
   if (isProviderApiKeyOnlyForm(req.body)) {
@@ -677,9 +380,7 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
   const form = parseProviderForm(req.body, provider);
   const mapping = parseModelMappingForm(req.body);
   const db = getDb();
-  if (findProviderBySlug(db, form.slug, { exceptId: provider.id })) {
-    return res.redirect(`/admin/providers/${provider.id}?slug_taken=${encodeURIComponent(form.slug)}`);
-  }
+  refuseTakenSlug(form.slug, provider.id);
   db.transaction(() => {
     db.prepare(`
       UPDATE providers
@@ -701,7 +402,7 @@ router.post('/admin/providers/:id', requireAdmin, (req, res) => {
     saveActiveModelMapping(db, provider.id, form.name, mapping);
   })();
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
-});
+}));
 
 router.post('/admin/providers/:id/clear-key', requireAdmin, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
@@ -927,7 +628,7 @@ router.post('/admin/providers/:id/autoconfigure.json', requireAdmin, async (req,
   }
 });
 
-router.post('/admin/providers/:id/mapping', requireAdmin, (req, res) => {
+router.post('/admin/providers/:id/mapping', requireAdmin, formRoute(showProvider, (req, res) => {
   const provider = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
   if (!provider) return res.status(404).send('Provider not found');
   const form = parseModelMappingForm(req.body);
@@ -937,7 +638,7 @@ router.post('/admin/providers/:id/mapping', requireAdmin, (req, res) => {
   });
   tx();
   res.redirect(`/admin/providers/${provider.id}?saved=1`);
-});
+}));
 
 router.post('/admin/providers/:id/mapping/test.json', requireAdmin, async (req, res, next) => {
   try {

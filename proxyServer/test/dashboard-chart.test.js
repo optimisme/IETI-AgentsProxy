@@ -145,8 +145,8 @@ test('tagged counts are rewritten with the grouping of the browser language', ()
 
 test('usage cards tag every count with its raw value and an en-US fallback', () => {
   const { quotaLimitCards } = require('../src/utils/html');
-  const html = quotaLimitCards({ daily_token_limit: 30000000, daily_call_limit: null, hourly_call_limit: null, hourly_token_limit: null },
-    { todayTokens: 1234567, todayCalls: 12, hourTokens: 0, hourCalls: 0 });
+  const html = String(quotaLimitCards({ daily_token_limit: 30000000, daily_call_limit: null, hourly_call_limit: null, hourly_token_limit: null },
+    { todayTokens: 1234567, todayCalls: 12, hourTokens: 0, hourCalls: 0 }));
   assert.match(html, /<span data-number="28765433">28,765,433<\/span> left/);
   assert.match(html, /<span data-number="1234567">1,234,567<\/span> used of <span data-number="30000000">30,000,000<\/span>/);
   assert.match(html, /<span data-number="12">12<\/span> used<\/div>/);

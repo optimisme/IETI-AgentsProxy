@@ -23,7 +23,7 @@
 | `middleware/` | Express middleware (auth student, auth admin, rate limit, error handler) |
 | `routes/` | Route handlers (health, openai, studentPortal, googleAuth) and `routes/admin/`, the backoffice split by area |
 | `utils/` | Error classes (`errors.js`), token estimation (`tokens.js`) |
-| `views/` | Server-rendered HTML templates for admin/portal UI |
+| `views/` | Page shells (`*.html` with `{{placeholders}}`) and `views/admin/`, the markup of each admin area as view modules |
 
 ## Key Services (`src/services/`)
 
@@ -51,7 +51,7 @@
 | `routes/health.js` | `GET /health` | Health check |
 | `routes/openai.js` | `GET /v1/models`, `POST /v1/chat/completions` | OpenAI-compatible API proxy (with streaming SSE support) |
 | `routes/studentPortal.js` | `/`, `/login`, `/logout`, `/portal/*` | Student self-service web UI |
-| `routes/admin/` | `/admin/*` | Admin backoffice. `index.js` mounts one router per area: `dashboard`, `users`, `groups`, `pools`, `providers`, `server`, `activity`; `shared.js` holds what several areas use |
+| `routes/admin/` | `/admin/*` | Admin backoffice. `index.js` mounts one router per area: `dashboard`, `users`, `groups`, `pools`, `providers`, `server`, `activity`; `shared.js` holds the page layout and the form path. Route files hold logic only; their markup is in `views/admin/<area>.js` |
 
 ## Database
 
@@ -89,6 +89,8 @@ Test suite at `test/` uses a local mock DeepSeek server. Run with `npm test`. Ex
 - One **group per user** — group defines the pools its students can use and their quotas
 - **Pools** own the model alias and the balancing: a request for an alias is served by the least busy enabled provider of that pool, with each provider's own active mapping. A group gets whole pools, never single providers of one. A provider's concurrency limit is shared by every pool it is in
 - **Capabilities** (limits, images, tools, reasoning) are defined only on providers. What students see under an alias is computed: the smallest limits and the capabilities every serving provider of the pool has. The pool page shows that result and flags a provider as not aligned when it offers less than another one in the pool; nothing copies capabilities between providers
+- **Admin markup is written with the `html` template tag** (`utils/html.js`): every interpolated value is escaped unless it is markup already (another `html` result, `joinHtml`, `trustedHtml`). Never build admin HTML with plain strings or call `escapeHtml` in a view: a plain string is treated as text and shown escaped. Values written inside `<script>` use `jsLiteral`. View functions receive their data as arguments and do not query the database
+- **Admin forms share one refusal path** (`formRoute` in `routes/admin/shared.js`): a handler refuses a submission by throwing a validation error (`apiError(400, 'invalid_form', …)`, as the helpers in `utils/validation.js` do) or `formConflict(code, message, notice)` for a value another record already has. The same page is then shown again with the typed values and the reason, with status 400 or 409, and nothing is saved. Requests that ask for JSON get the error as JSON. Each form has a `show…` function that renders its page from stored data or from the submitted values
 - **Admin changes are traced**: `adminAuditService.auditAdminChanges` is mounted on the admin router and records every POST an admin makes, with the record's name looked up before the handler runs. Checks that change nothing (provider tests, autoconfigure previews) are skipped, and secret fields are stored as `[provided]`. A new admin route needs a label in `ACTION_LABELS` to read well on the Activity page
 - **Old access data is gone**: `provider_models.public_model`, `group_providers` and `groups.provider_id` described access before pools. `migratePools` in `src/db/index.js` converts a database that still has them, once, and then removes them by rebuilding the two tables. Tests build such a database with `test/helpers/oldAccess.js`; other tests set up access with `test/helpers/pools.js`
 - **Rate limiting** is in-memory (not persisted), resets on server restart. Failed logins are also limited in memory per address and per address+login
