@@ -1,10 +1,28 @@
 const { getDb } = require('../db');
 const { poolsForGroup, setGroupPools } = require('./poolService');
+const { getEnabledModelEntries } = require('./providerService');
+
+// A group's pools in their order; the first one is the group's default model. A group whose
+// pools were never ordered keeps the order its models had before ordering existed: that of
+// the providers serving them (priority, then name), with pools nobody serves last.
+function orderedPools(groupId) {
+  const pools = poolsForGroup(groupId);
+  if (pools.length < 2 || pools.every((pool) => pool.position !== null)) return pools;
+  const firstServed = new Map();
+  getEnabledModelEntries().forEach((entry, index) => {
+    if (!firstServed.has(entry.poolId)) firstServed.set(entry.poolId, index);
+  });
+  const rank = (pool) => (firstServed.has(pool.id) ? firstServed.get(pool.id) : Infinity);
+  return pools
+    .map((pool, index) => ({ pool, index }))
+    .sort((left, right) => rank(left.pool) - rank(right.pool) || left.index - right.index)
+    .map(({ pool }) => pool);
+}
 
 // Adds the group's pools and, derived from them, the providers that can serve its students.
 function attachProviderPool(group) {
   if (!group) return null;
-  const pools = poolsForGroup(group.id);
+  const pools = orderedPools(group.id);
   const providers = [...new Map(pools.flatMap((pool) => pool.providers).map((provider) => [provider.id, provider])).values()];
   return {
     ...group,

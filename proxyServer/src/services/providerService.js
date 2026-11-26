@@ -223,14 +223,20 @@ function normalizePoolIds(poolIds) {
   return [...new Set(values.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
 }
 
+// Entries of the given pools, in the order of poolIds: a group's pools are ordered and the
+// first one is its default model.
+function modelEntriesForPools(poolIds) {
+  const order = new Map(normalizePoolIds(poolIds).map((poolId, index) => [poolId, index]));
+  return getEnabledModelEntries()
+    .filter((model) => order.has(model.poolId))
+    .map((model, index) => ({ model, index }))
+    .sort((left, right) => order.get(left.model.poolId) - order.get(right.model.poolId) || left.index - right.index)
+    .map(({ model }) => model);
+}
+
 // Aliases of the given pools that currently have an enabled provider behind them.
 function getPublicModelAliasesForPools(poolIds) {
-  const allowed = new Set(normalizePoolIds(poolIds));
-  if (!allowed.size) return [];
-  return [...new Set(getEnabledModelEntries()
-    .filter((model) => allowed.has(model.poolId))
-    .map((model) => model.publicModel)
-    .filter(Boolean))];
+  return [...new Set(modelEntriesForPools(poolIds).map((model) => model.publicModel).filter(Boolean))];
 }
 
 function getInFlight(slug) {
@@ -686,6 +692,7 @@ module.exports = {
   discoverProviderMetadata,
   getEnabledModelEntries,
   getPublicModelAliasesForPools,
+  modelEntriesForPools,
   getInFlight,
   getProviderBySlug,
   inferRequiredCapabilities,

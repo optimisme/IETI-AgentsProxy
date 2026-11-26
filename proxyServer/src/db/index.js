@@ -427,11 +427,17 @@ function migratePools(database) {
         group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
         pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        position INTEGER,
         PRIMARY KEY (group_id, pool_id)
       );
       CREATE INDEX IF NOT EXISTS idx_pool_providers_provider ON pool_providers(provider_id);
       CREATE INDEX IF NOT EXISTS idx_group_pools_pool ON group_pools(pool_id);
     `);
+    // The order of a group's pools; the first one is its default model. Links that have no
+    // position yet come after the ordered ones, by alias, which was the only order before.
+    if (!columnNames(database, 'group_pools').includes('position')) {
+      database.exec('ALTER TABLE group_pools ADD COLUMN position INTEGER');
+    }
     if (!hadPools && legacy.publicModel) convertLegacyAccessToPools(database, legacy);
   })();
   if (legacy.publicModel || legacy.groupProviders || legacy.groupProviderId) retireLegacyAccess(database, legacy);

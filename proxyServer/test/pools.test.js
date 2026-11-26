@@ -242,7 +242,8 @@ test('a database that already has pools keeps them and only loses the old access
     INSERT INTO pool_providers (pool_id, provider_id) VALUES (7, 1), (7, 2);
     INSERT INTO group_pools (group_id, pool_id) VALUES (1, 7);
   `);
-  const pools = () => ['pools', 'pool_providers', 'group_pools'].map((table) => rowsWithout(database, table));
+  // group_pools gains its (empty) position column on this start; the links themselves must not change.
+  const pools = () => ['pools', 'pool_providers', 'group_pools'].map((table) => rowsWithout(database, table, ['position']));
   const before = pools();
   migrateSchema(database);
   assert.deepEqual(pools(), before, 'The old alias is not converted again');
@@ -522,9 +523,10 @@ test('a group chooses pools on its page, and the lists show pools from both side
   assert.deepEqual(
     [...row.matchAll(/<a href="\/admin\/pools\/(\d+)"><code>([^<]*)<\/code>|<li><a href="\/admin\/providers\/(\d+)">([^<]*)<\/a>( <span class="muted">\(disabled\)<\/span>)?/g)]
       .map((match) => (match[1] ? `pool:${match[1]}:${match[2]}` : `${match[3]}:${match[4]}${match[5] ? ':disabled' : ''}`)),
+    // In the order the pools were submitted, which is the group's order.
     [
-      `pool:${alpha}:alpha-${sequence}`, `${first.id}:Zulu`,
-      `pool:${beta}:beta-&lt;${sequence}&gt;`, `${second.id}:Yankee:disabled`, `${first.id}:Zulu`
+      `pool:${beta}:beta-&lt;${sequence}&gt;`, `${second.id}:Yankee:disabled`, `${first.id}:Zulu`,
+      `pool:${alpha}:alpha-${sequence}`, `${first.id}:Zulu`
     ]
   );
 
@@ -744,4 +746,115 @@ test('views escape every interpolated value without being asked to', () => {
   // Results behave as strings where one is expected.
   assert.equal(`${html`<i>x</i>`}`, '<i>x</i>');
   assert.equal(JSON.stringify({ a: html`<i>x</i>` }), '{"a":"<i>x</i>"}');
+});
+
+test('a group orders its pools: the first is the default model everywhere, and the order is edited on the group page', async () => {
+  const agent = await admin();
+  const first = provider('OrderA');
+  const second = provider('OrderB');
+  const stamp = ++sequence;
+  const zeta = pool(`zeta-${stamp}`, [first]);
+  const alpha = pool(`alpha-${stamp}`, [second]);
+  const mid = pool(`mid-${stamp}`, [first, second]);
+  const unused = pool(`unused-${stamp}`, [first]);
+  const user = student([]);
+  const password = 'order-student-password';
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(require('../src/services/studentAuthService').hashPassword(password), user.id);
+  const limits = { daily_call_limit: '', daily_token_limit: '', hourly_call_limit: '', hourly_token_limit: '' };
+  const name = db.prepare('SELECT name FROM groups WHERE id = ?').get(user.groupId).name;
+  const save = (poolIds) => agent.post(`/admin/groups/${user.groupId}`).type('form').send({ name, pool_ids: poolIds.map(String), ...limits }).expect(302);
+  const apiOrder = async () => (await request(app).get('/v1/models').set('Authorization', `Bearer ${user.key}`).expect(200)).body.data.map((model) => model.id);
+  const portal = request.agent(app);
+  await portal.post('/login').type('form').send({ login: db.prepare('SELECT email FROM users WHERE id = ?').get(user.id).email, password }).expect(302);
+  const openCode = async () => (await portal.get('/portal/opencode.json').expect(200)).body;
+  const formOrder = (html) => [...html.matchAll(/<div class="pool-order-row" data-pool-row>[\s\S]*?name="pool_ids" type="checkbox" value="(\d+)" style="width:auto" (checked)?>[\s\S]*?data-pool-default (hidden)?>Default<\/span>\s*<span class="pool-moves" data-pool-moves (hidden)?>[\s\S]*?data-pool-up[^>]*?( disabled)?>↑<\/button>[\s\S]*?data-pool-down[^>]*?( disabled)?>↓<\/button>/g)]
+    .map((row) => ({ id: Number(row[1]), ticked: Boolean(row[2]), isDefault: !row[3], moves: !row[4], canUp: !row[5], canDown: !row[6] }));
+
+  // A group whose pools were never ordered (every group from before ordering existed) keeps
+  // the order it had: by the providers that serve each pool. OrderA serves mid and zeta,
+  // OrderB serves alpha. The group page shows that same order, so its Default label is true.
+  for (const poolId of [zeta, alpha, mid]) db.prepare('INSERT INTO group_pools (group_id, pool_id) VALUES (?, ?)').run(user.groupId, poolId);
+  assert.deepEqual(await apiOrder(), [`mid-${stamp}`, `zeta-${stamp}`, `alpha-${stamp}`]);
+  assert.equal((await openCode()).model, `ieti-agents/mid-${stamp}`);
+  let page = (await agent.get(`/admin/groups/${user.groupId}`).expect(200)).text;
+  assert.deepEqual(formOrder(page).filter((row) => row.ticked).map((row) => row.id), [mid, zeta, alpha]);
+  assert.equal(formOrder(page)[0].isDefault, true);
+
+  // The form sends ticked pools top to bottom, and that order is saved.
+  await save([zeta, alpha, mid]);
+  assert.deepEqual(db.prepare('SELECT pool_id, position FROM group_pools WHERE group_id = ? ORDER BY position').all(user.groupId),
+    [{ pool_id: zeta, position: 1 }, { pool_id: alpha, position: 2 }, { pool_id: mid, position: 3 }]);
+  assert.deepEqual(await apiOrder(), [`zeta-${stamp}`, `alpha-${stamp}`, `mid-${stamp}`]);
+  const config = await openCode();
+  assert.equal(config.model, `ieti-agents/zeta-${stamp}`);
+  assert.deepEqual(Object.keys(config.providers['ieti-agents'].models), [`zeta-${stamp}`, `alpha-${stamp}`, `mid-${stamp}`]);
+  assert.deepEqual((await request(app).get('/v1/model-capabilities').set('Authorization', `Bearer ${user.key}`).expect(200)).body.data.map((model) => model.id),
+    [`zeta-${stamp}`, `alpha-${stamp}`, `mid-${stamp}`]);
+  const chat = (await portal.get('/portal/chat').expect(200)).text;
+  assert.equal(JSON.parse(chat.match(/<script id="portal-chat-config" type="application\/json">([\s\S]*?)<\/script>/)[1]).models[0].id, `zeta-${stamp}`);
+
+  // The group page shows that order: ticked pools first with the default marked and the
+  // arrows that apply, then the pools the group does not use.
+  page = (await agent.get(`/admin/groups/${user.groupId}`).expect(200)).text;
+  const rows = formOrder(page);
+  assert.deepEqual(rows.filter((row) => row.ticked), [
+    { id: zeta, ticked: true, isDefault: true, moves: true, canUp: false, canDown: true },
+    { id: alpha, ticked: true, isDefault: false, moves: true, canUp: true, canDown: true },
+    { id: mid, ticked: true, isDefault: false, moves: true, canUp: true, canDown: false }
+  ]);
+  const unusedRow = rows.find((row) => row.id === unused);
+  assert.deepEqual({ ticked: unusedRow.ticked, isDefault: unusedRow.isDefault, moves: unusedRow.moves }, { ticked: false, isDefault: false, moves: false });
+  assert.ok(rows.indexOf(unusedRow) > 2, 'Pools the group does not use come after its own');
+  assert.match(page, /the first one is their default model/);
+  assert.match(page, new RegExp(`aria-label="Move zeta-${stamp} up"`));
+  // The page's script is valid and is the one that reorders the list.
+  const script = page.match(/<script>\s*\(\(\) => \{\s*for \(const list of document\.querySelectorAll\('\[data-pool-order\]'\)\)[\s\S]*?<\/script>/);
+  assert.ok(script);
+  assert.doesNotThrow(() => new Function(script[0].replace(/<\/?script>/g, '')));
+  // The groups list follows the same order.
+  const listRow = (await agent.get('/admin/groups').expect(200)).text.match(new RegExp(`<tr>\\s*<td><a href="/admin/groups/${user.groupId}">[\\s\\S]*?</tr>`))[0];
+  assert.deepEqual([...listRow.matchAll(/<a href="\/admin\/pools\/(\d+)"><code>/g)].map((match) => Number(match[1])), [zeta, alpha, mid]);
+
+  // Reordering, dropping a pool and adding one are all just a different list.
+  await save([mid, unused, zeta]);
+  assert.deepEqual(await apiOrder(), [`mid-${stamp}`, `unused-${stamp}`, `zeta-${stamp}`]);
+  assert.equal((await openCode()).model, `ieti-agents/mid-${stamp}`);
+  // A refused save shows the order that was submitted, not the stored one.
+  const refusedPage = (await agent.post(`/admin/groups/${user.groupId}`).type('form').set('Accept', 'text/html')
+    .send({ name: '', pool_ids: [String(zeta), String(mid)], ...limits }).expect(400)).text;
+  assert.deepEqual(formOrder(refusedPage).filter((row) => row.ticked).map((row) => row.id), [zeta, mid]);
+  assert.deepEqual(await apiOrder(), [`mid-${stamp}`, `unused-${stamp}`, `zeta-${stamp}`]);
+  // A pool whose providers stop serving drops out; the next one becomes the default.
+  db.prepare('UPDATE providers SET enabled = 0 WHERE id = ?').run(second.id);
+  await save([alpha, zeta]);
+  assert.deepEqual(await apiOrder(), [`zeta-${stamp}`]);
+  assert.equal((await openCode()).model, `ieti-agents/zeta-${stamp}`);
+  // One pool has nothing to reorder.
+  await save([zeta]);
+  page = (await agent.get(`/admin/groups/${user.groupId}`).expect(200)).text;
+  assert.deepEqual(formOrder(page).filter((row) => row.ticked), [{ id: zeta, ticked: true, isDefault: true, moves: false, canUp: false, canDown: false }]);
+});
+
+test('a database from before pool ordering gains an empty position column and keeps listing pools by alias', () => {
+  const database = new Database(':memory:');
+  database.pragma('foreign_keys = ON');
+  initSchema(database);
+  migrateSchema(database);
+  database.exec(`
+    ALTER TABLE group_pools DROP COLUMN position;
+    INSERT INTO providers (id, slug, name, base_url) VALUES (1, 'p', 'P', 'http://a');
+    INSERT INTO groups (id, name) VALUES (1, 'G');
+    INSERT INTO pools (id, alias) VALUES (1, 'zeta'), (2, 'alpha');
+    INSERT INTO group_pools (group_id, pool_id) VALUES (1, 1), (1, 2);
+  `);
+  const before = database.prepare('SELECT group_id, pool_id, created_at FROM group_pools ORDER BY pool_id').all();
+  migrateSchema(database);
+  migrateSchema(database);
+  assert.deepEqual(database.prepare('SELECT group_id, pool_id, created_at FROM group_pools ORDER BY pool_id').all(), before);
+  assert.deepEqual(database.prepare('SELECT position FROM group_pools').all(), [{ position: null }, { position: null }]);
+  assert.deepEqual(
+    database.prepare('SELECT pools.alias FROM group_pools JOIN pools ON pools.id = pool_id ORDER BY position IS NULL, position, pools.alias').all().map((row) => row.alias),
+    ['alpha', 'zeta']
+  );
+  database.close();
 });

@@ -2,7 +2,8 @@ const { getDb } = require('../db');
 const { apiError } = require('../utils/errors');
 
 // A pool is a set of load-balanced providers published to students under one model alias.
-// Groups are given pools; a provider may belong to several pools.
+// Groups are given pools, in an order: the first pool of a group is its default model.
+// A provider may belong to several pools.
 
 function validatePoolAlias(value) {
   const alias = String(value || '').trim();
@@ -68,11 +69,11 @@ function poolsForGroup(groupId) {
   if (!groupId) return [];
   const db = getDb();
   const pools = db.prepare(`
-    SELECT pools.id, pools.alias
+    SELECT pools.id, pools.alias, group_pools.position
     FROM group_pools
     JOIN pools ON pools.id = group_pools.pool_id
     WHERE group_pools.group_id = ?
-    ORDER BY pools.alias ASC
+    ORDER BY group_pools.position IS NULL, group_pools.position ASC, pools.alias ASC
   `).all(groupId);
   return withProviders(db, pools);
 }
@@ -127,12 +128,13 @@ function deletePool(id) {
   return getDb().prepare('DELETE FROM pools WHERE id = ?').run(id).changes > 0;
 }
 
+// Gives the group exactly these pools, in this order.
 function setGroupPools(groupId, poolIds) {
   const db = getDb();
   db.transaction(() => {
     db.prepare('DELETE FROM group_pools WHERE group_id = ?').run(groupId);
-    const insert = db.prepare('INSERT INTO group_pools (group_id, pool_id) VALUES (?, ?)');
-    for (const poolId of existingIds(db, 'pools', positiveIds(poolIds))) insert.run(groupId, poolId);
+    const insert = db.prepare('INSERT INTO group_pools (group_id, pool_id, position) VALUES (?, ?, ?)');
+    existingIds(db, 'pools', positiveIds(poolIds)).forEach((poolId, index) => insert.run(groupId, poolId, index + 1));
   })();
 }
 

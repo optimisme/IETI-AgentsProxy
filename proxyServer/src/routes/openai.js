@@ -3,7 +3,7 @@ const config = require('../config');
 const { authStudent } = require('../middleware/authStudent');
 const { studentRateLimit } = require('../middleware/rateLimit');
 const { largeJsonBody } = require('../middleware/bodyParsers');
-const { callChatCompletions, getEnabledModelEntries } = require('../services/providerService');
+const { callChatCompletions, modelEntriesForPools } = require('../services/providerService');
 const { failedAttemptUsage, handleChatCompletion, recordFailedAttempt } = require('../services/chatCompletionService');
 const { affinityContextFromRequest } = require('../services/conversationAffinityService');
 const { providerAvailability } = require('../services/providerAvailabilityService');
@@ -26,9 +26,8 @@ const {
 const router = express.Router();
 
 function getPublishedModels(poolIds) {
-  const allowed = new Set(poolIds || []);
   const grouped = new Map();
-  for (const entry of getEnabledModelEntries().filter((model) => allowed.has(model.poolId))) {
+  for (const entry of modelEntriesForPools(poolIds || [])) {
     if (!entry.publicModel) continue;
     const current = grouped.get(entry.publicModel);
     const contextWindow = Number(entry.limit?.context || config.defaultModelContextLimit);

@@ -17,7 +17,7 @@ const {
 const { isAdminSession, startAdminSession, verifyAdminCredentials } = require('../middleware/authAdmin');
 const { getUsageTotals, dailyUsage } = require('../services/usageService');
 const { getSetting } = require('../services/settingsService');
-const { getEnabledModelEntries } = require('../services/providerService');
+const { getEnabledModelEntries, modelEntriesForPools } = require('../services/providerService');
 const { getUserGroup } = require('../services/accessService');
 const {
   findUserByInviteToken,
@@ -194,8 +194,8 @@ function getModelEntries(models, major = 2) {
 
 function getActiveModelsForUser(user) {
   const group = getUserGroup(user.id);
-  const poolIds = group?.pool_ids || [];
-  const enabled = getEnabledModelEntries().filter((entry) => poolIds.includes(entry.poolId));
+  // In the group's pool order: the first model is the default one.
+  const enabled = modelEntriesForPools(group?.pool_ids || []);
   const defaults = {
     context: Number(getSetting('default_model_context_limit', config.defaultModelContextLimit)),
     output: Number(getSetting('default_model_output_limit', OPENCODE_DEFAULT_OUTPUT_LIMIT))
