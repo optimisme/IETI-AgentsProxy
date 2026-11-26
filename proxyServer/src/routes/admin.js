@@ -1172,6 +1172,27 @@ router.post('/admin/users', requireAdmin, (req, res) => {
   res.redirect(`/admin/users/${userId}?created=1&invite_created=1`);
 });
 
+// Lists a group's providers under the model name each one exposes to students, since
+// providers sharing an exposed name are one load-balanced model.
+function groupProvidersByExposedModel(providers) {
+  if (!providers.length) return '<span class="muted">none</span>';
+  const enabledById = new Map(listProviders().map((provider) => [Number(provider.id), Boolean(provider.enabled)]));
+  const byModel = Map.groupBy(providers, (provider) => activeProviderModel(provider.id).public_model || '');
+  return [...byModel.entries()]
+    .sort(([left], [right]) => (!left) - (!right) || left.localeCompare(right))
+    .map(([publicModel, modelProviders]) => `
+      <div class="group-provider-model">
+        ${publicModel ? `<code>${escapeHtml(publicModel)}</code>` : '<span class="muted">No exposed model</span>'}
+        <ul>
+          ${modelProviders
+            .toSorted((left, right) => String(left.name || left.slug).localeCompare(String(right.name || right.slug)))
+            .map((provider) => `<li><a href="/admin/providers/${provider.id}">${escapeHtml(provider.name || provider.slug)}</a>${enabledById.get(Number(provider.id)) === false ? ' <span class="muted">(disabled)</span>' : ''}</li>`)
+            .join('')}
+        </ul>
+      </div>
+    `).join('');
+}
+
 router.get('/admin/groups', requireAdmin, (req, res) => {
   const groups = getAllGroups();
   const rows = groups.map((group) => {
@@ -1179,7 +1200,7 @@ router.get('/admin/groups', requireAdmin, (req, res) => {
     return `
       <tr>
         <td><a href="/admin/groups/${group.id}">${escapeHtml(group.name)}</a></td>
-        <td>${escapeHtml(group.provider_names || group.provider_name || '') || '<span class="muted">none</span>'}</td>
+        <td>${groupProvidersByExposedModel(group.providers)}</td>
         <td>${group.daily_call_limit ?? '<span class="muted">unlimited</span>'} / ${group.hourly_call_limit ?? '<span class="muted">unlimited</span>'}</td>
         <td>${group.daily_token_limit ?? '<span class="muted">unlimited</span>'} / ${group.hourly_token_limit ?? '<span class="muted">unlimited</span>'}</td>
         <td>${userCount}</td>
@@ -1191,7 +1212,7 @@ router.get('/admin/groups', requireAdmin, (req, res) => {
     title: 'Groups',
     content: `
       <p><a class="button" href="/admin/groups/new">Create group</a></p>
-      <table><thead><tr><th>Name</th><th>Provider</th><th>Calls day/hour</th><th>Tokens day/hour</th><th>Users</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No groups.</td></tr>'}</tbody></table>
+      <table><thead><tr><th>Name</th><th>Providers by exposed model</th><th>Calls day/hour</th><th>Tokens day/hour</th><th>Users</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">No groups.</td></tr>'}</tbody></table>
     `,
     flash: flash(req.query.saved ? 'Group saved.' : '')
   });
@@ -1680,19 +1701,19 @@ router.get('/admin/providers/new', requireAdmin, (req, res) => {
       `
     });
   }
-  // A copy starts disabled, and group assignments are not copied, so it serves nobody until it is reviewed.
+  // Group assignments are not copied, so the copy serves nobody until it is added to a group.
   const copy = {
     slug: copySlug(getDb(), source.slug),
     name: `Copy of ${source.name}`.slice(0, 160),
     base_url: source.base_url,
-    enabled: 0,
+    enabled: source.enabled,
     keep_warm_interval_minutes: source.keep_warm_interval_minutes,
     max_concurrent_requests: source.max_concurrent_requests,
     timeout_ms: source.timeout_ms
   };
   render(req, res, 'settings', {
     title: 'Duplicate Provider',
-    flash: flash(`This is a copy of ${source.name}. Nothing is saved until you press Save provider. The copy starts disabled and is not assigned to any group.`),
+    flash: flash(`This is a copy of ${source.name}. Nothing is saved until you press Save provider. The copy is ${source.enabled ? 'enabled' : 'disabled'} like the original and is not assigned to any group.`),
     content: providerForm(copy, '/admin/providers', { model: activeProviderModel(source.id), copySource: source })
   });
 });
@@ -1741,7 +1762,7 @@ router.get('/admin/providers/:id', requireAdmin, (req, res) => {
   const copiedFrom = req.query.copied ? copySourceProvider(req.query.copied) : null;
   const slugOwner = req.query.slug_taken ? findProviderBySlug(getDb(), String(req.query.slug_taken), { exceptId: provider.id }) : null;
   const copiedMessage = req.query.copied
-    ? `Provider created${copiedFrom ? ` as a copy of ${copiedFrom.name}` : ' as a copy'}. It is ${provider.enabled ? 'enabled' : 'disabled'} and not assigned to any group yet. Run a test request below before enabling it.`
+    ? `Provider created${copiedFrom ? ` as a copy of ${copiedFrom.name}` : ' as a copy'}. It is ${provider.enabled ? 'enabled' : 'disabled'} and not assigned to any group yet. Run a test request below before adding it to a group.`
     : '';
   render(req, res, 'settings', {
     title: 'Edit provider',

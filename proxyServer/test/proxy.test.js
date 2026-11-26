@@ -1019,7 +1019,8 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   assert.match(page.text, new RegExp(`name="slug" value="${slug}-copy"`));
   assert.match(page.text, /name="name" value="Copy of Dup &lt;Source&gt;"/);
   assert.match(page.text, /name="base_url" value="http:\/\/127\.0\.0\.1:9"/);
-  assert.match(page.text, /name="enabled" type="checkbox" value="1" style="width:auto" >/);
+  assert.match(page.text, /name="enabled" type="checkbox" value="1" style="width:auto" checked>/);
+  assert.match(page.text, /The copy is enabled like the original and is not assigned to any group\./);
   assert.match(page.text, /name="upstream_model" value="dup-upstream"/);
   assert.match(page.text, /name="max_images" type="number" min="0" value="4"/);
   assert.match(page.text, /name="copy_api_key" type="checkbox" value="1" style="width:auto" checked> Use the same API key as Dup &lt;Source&gt;/);
@@ -1055,7 +1056,7 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   assert.equal(copy.name, 'Copy of Dup <Source>');
   assert.equal(copy.base_url, 'http://127.0.0.1:10');
   assert.equal(copy.api_key, 'source-secret-key');
-  assert.equal(copy.enabled, 0);
+  assert.equal(copy.enabled, 1);
   assert.deepEqual(
     [copy.keep_warm_interval_minutes, copy.max_concurrent_requests, copy.timeout_ms],
     [5, 3, 45000]
@@ -1073,21 +1074,65 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   assert.equal(db.prepare('SELECT api_key FROM providers WHERE id = ?').get(sourceId).api_key, 'source-secret-key');
 
   const copyPage = await agent.get(saved.headers.location).expect(200);
-  assert.match(copyPage.text, /Provider created as a copy of Dup &lt;Source&gt;\. It is disabled and not assigned to any group yet\./);
+  assert.match(copyPage.text, /Provider created as a copy of Dup &lt;Source&gt;\. It is enabled and not assigned to any group yet\./);
 
   // The next copy of the same source gets the next free slug, and an unticked key box leaves the placeholder.
+  db.prepare('UPDATE providers SET enabled = 0 WHERE id = ?').run(sourceId);
   const second = await agent.get(`/admin/providers/new?from=${sourceId}`).expect(200);
+  assert.match(second.text, /name="enabled" type="checkbox" value="1" style="width:auto" >/);
+  assert.match(second.text, /The copy is disabled like the original/);
   assert.match(second.text, new RegExp(`name="slug" value="${slug}-copy-2"`));
   const withoutKey = fields(second.text);
   delete withoutKey.copy_api_key;
   await agent.post('/admin/providers').type('form').send(withoutKey).expect(302);
-  assert.equal(db.prepare('SELECT api_key FROM providers WHERE slug = ?').get(`${slug}-copy-2`).api_key, 'local');
+  assert.deepEqual(
+    db.prepare('SELECT api_key, enabled FROM providers WHERE slug = ?').get(`${slug}-copy-2`),
+    { api_key: 'local', enabled: 0 }
+  );
 
   // Renaming a provider onto a slug in use explains the clash instead of failing.
   const rename = await agent.post(`/admin/providers/${copy.id}`).type('form').send(fields(copyPage.text.split('<h2>Provider API key</h2>')[0], { slug })).expect(302);
   assert.equal(rename.headers.location, `/admin/providers/${copy.id}?slug_taken=${slug}`);
   assert.match((await agent.get(rename.headers.location).expect(200)).text, /is already used by <a href/);
   assert.equal(db.prepare('SELECT slug FROM providers WHERE id = ?').get(copy.id).slug, `${slug}-copy`);
+});
+
+test('admin groups list shows each group\'s providers under their exposed model name', async (t) => {
+  const agent = request.agent(app);
+  await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);
+  const stamp = Date.now();
+  const groupId = db.prepare('INSERT INTO groups (name) VALUES (?)').run(`Exposed Group ${stamp}`).lastInsertRowid;
+  const addProvider = (name, publicModel, enabled = 1) => {
+    const id = db.prepare('INSERT INTO providers (slug, name, base_url, enabled) VALUES (?, ?, ?, ?)')
+      .run(`exposed-${stamp}-${name.toLowerCase()}`, name, 'http://127.0.0.1:9', enabled).lastInsertRowid;
+    if (publicModel) {
+      db.prepare('INSERT INTO provider_models (provider_id, public_model, upstream_model, name) VALUES (?, ?, ?, ?)')
+        .run(id, publicModel, 'upstream', name);
+    }
+    db.prepare('INSERT INTO group_providers (group_id, provider_id) VALUES (?, ?)').run(groupId, id);
+    return id;
+  };
+  const zulu = addProvider('Zulu', `beta-${stamp}`);
+  const unmapped = addProvider('Unmapped', '');
+  const bravo = addProvider('Bravo', `alpha-<${stamp}>`, 0);
+  const alpha = addProvider('Alpha', `alpha-<${stamp}>`);
+  t.after(() => {
+    db.prepare('DELETE FROM providers WHERE slug LIKE ?').run(`exposed-${stamp}-%`);
+    db.prepare('DELETE FROM groups WHERE id = ?').run(groupId);
+  });
+
+  const page = await agent.get('/admin/groups').expect(200);
+  assert.match(page.text, /<th>Providers by exposed model<\/th>/);
+  const row = page.text.match(new RegExp(`<tr>\\s*<td><a href="/admin/groups/${groupId}">[\\s\\S]*?</tr>`))[0];
+  assert.deepEqual(
+    [...row.matchAll(/<code>([^<]*)<\/code>|(No exposed model)|<li><a href="\/admin\/providers\/(\d+)">([^<]*)<\/a>( <span class="muted">\(disabled\)<\/span>)?/g)]
+      .map((match) => match[1] ?? match[2] ?? `${match[3]}:${match[4]}${match[5] ? ':disabled' : ''}`),
+    [
+      `alpha-&lt;${stamp}&gt;`, `${alpha}:Alpha`, `${bravo}:Bravo:disabled`,
+      `beta-${stamp}`, `${zulu}:Zulu`,
+      'No exposed model', `${unmapped}:Unmapped`
+    ]
+  );
 });
 
 test('admin user creation and editing roll back when a later database step fails', async () => {
