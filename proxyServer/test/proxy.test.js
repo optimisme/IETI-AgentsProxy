@@ -1113,6 +1113,27 @@ test('admin can duplicate a provider through a prefilled form that saves nothing
   assert.equal(db.prepare('SELECT slug FROM providers WHERE id = ?').get(copy.id).slug, `${slug}-copy`);
 });
 
+test('the setup script is served under the download limit with the fingerprint of the Perl helper served beside it', async () => {
+  const crypto = require('node:crypto');
+  const assets = path.join(__dirname, '..', 'assets');
+  const script = await request(app).get('/downloads/set_agents_opencode.sh').set('Host', 'setup.example.test').expect(200);
+  // The setup command students paste refuses anything larger than this.
+  assert.ok(Buffer.byteLength(script.text) < 65536, `served script is ${Buffer.byteLength(script.text)} bytes`);
+  assert.doesNotMatch(script.text, /__IETI_DEFAULT_BASE_URL__"|__IETI_HELPER_SHA256__"/);
+  const helper = await request(app).get('/downloads/set_agents_helper.pl').buffer(true).parse((res, done) => {
+    const chunks = []; res.on('data', (chunk) => chunks.push(chunk)); res.on('end', () => done(null, Buffer.concat(chunks)));
+  }).expect(200).expect('Cache-Control', 'no-store').expect('Content-Type', /text\/plain/);
+  assert.deepEqual(helper.body, fs.readFileSync(path.join(assets, 'set_agents_helper.pl')));
+  const fingerprint = crypto.createHash('sha256').update(helper.body).digest('hex');
+  assert.match(script.text, new RegExp(`\nPERL_HELPER_SHA256="${fingerprint}"\n`));
+  // The script asks the same server for the helper: its address without the /v1 of the API.
+  assert.match(script.text, /\nDEFAULT_BASE_URL="http:\/\/setup\.example\.test\/v1"\n/);
+  assert.match(script.text, /helper_url="\$\{root%\/v1\}\/downloads\/set_agents_helper\.pl"/);
+  // The PowerShell script needs no helper and is unchanged by this.
+  const powershell = await request(app).get('/downloads/set_agents_opencode.ps1').expect(200);
+  assert.doesNotMatch(powershell.text, /set_agents_helper|HELPER_SHA256/);
+});
+
 test('admin user creation and editing roll back when a later database step fails', async () => {
   const agent = request.agent(app);
   await agent.post('/login').type('form').send({ login: 'admin', password: 'secret' }).expect(302);

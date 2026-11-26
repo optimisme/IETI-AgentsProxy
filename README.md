@@ -279,6 +279,7 @@ La seccio **Chat**, entre Dashboard i Settings, utilitza la sessio de l'usuari i
 El portal ofereix `set_agents_opencode.sh` (Linux/macOS) i `set_agents_opencode.ps1` (Windows). Configuren el proveidor `ieti-agents` globalment per a l'usuari actual, sense crear fitxers al projecte ni iniciar OpenCode.
 
 - **Linux/macOS:** Bash i Python 3.9 o superior (`python3`), nomes amb la biblioteca estandard. La comanda del portal utilitza curl per descarregar l'script i Bash l'executa nomes si la descarrega te exit, sense crear fitxers temporals. L'instal·lador utilitza Python; no necessita Node.js, npm ni pip.
+- **macOS sense Python:** macOS no porta Python; el seu `/usr/bin/python3` nomes ofereix instal·lar les eines de desenvolupament d'Apple. Quan no hi ha cap Python 3.9+ utilitzable (a macOS o a Linux), l'script fa servir el Perl del sistema (5.16 o superior) i curl. En aquest cas descarrega `set_agents_helper.pl` del mateix servidor i en comprova l'empremta SHA-256 abans d'executar-lo. El resultat es identic al de Python; tampoc necessita cap modul addicional. Si no hi ha ni Python ni Perl amb curl, l'script ho explica i no canvia res.
 - **Windows:** PowerShell 5.1 o superior, amb HTTP i JSON natius de PowerShell/.NET; no necessita cap runtime ni paquet addicional.
 
 Python s'executa directament, sense crear cap entorn virtual ni cache de bytecode. Els fitxers temporals de validacio i preparacio s'eliminen en acabar, tambe en cas d'error o cancel·lacio; nomes es conserven la configuracio global, la clau i les copies `.bak` de la configuracio.

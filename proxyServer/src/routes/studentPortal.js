@@ -52,6 +52,7 @@ const router = express.Router();
 const OPENCODE_DEFAULT_OUTPUT_LIMIT = 8192;
 const PENDING_API_KEY = 'student-api-key';
 const CLIENT_SCRIPT_DIRECTORY = path.resolve(__dirname, '..', '..', 'assets');
+const PERL_HELPER = 'set_agents_helper.pl';
 const chatAssets = new Map([
   ['portal-chat.js', 'portal-chat.js'],
   ['portal-chat.css', 'portal-chat.css'],
@@ -978,7 +979,10 @@ function sendClientScript(req, res, filename) {
     ? defaultBaseUrl.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
     : defaultBaseUrl.replaceAll("'", "''");
   // Preserve literal replacement tokens such as $& in the URL.
-  const script = source.replace('__IETI_DEFAULT_BASE_URL__', () => baseUrlReplacement);
+  // The shell script also learns the fingerprint of the Perl helper it may download, so a
+  // helper that is not the one served with it is refused.
+  const script = source.replace('__IETI_DEFAULT_BASE_URL__', () => baseUrlReplacement)
+    .replace('__IETI_HELPER_SHA256__', () => crypto.createHash('sha256').update(fs.readFileSync(path.join(CLIENT_SCRIPT_DIRECTORY, PERL_HELPER))).digest('hex'));
   res.set({
     'Content-Type': 'text/plain; charset=utf-8',
     'Content-Disposition': `attachment; filename="${filename}"`,
@@ -986,6 +990,13 @@ function sendClientScript(req, res, filename) {
   });
   res.send(script);
 }
+
+// The Perl version of the setup helper. set_agents_opencode.sh fetches it on machines
+// without a working Python 3 (every Mac without Apple's developer tools).
+router.get(`/downloads/${PERL_HELPER}`, (req, res) => {
+  res.set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.send(fs.readFileSync(path.join(CLIENT_SCRIPT_DIRECTORY, PERL_HELPER)));
+});
 
 router.get('/downloads/set_agents_opencode.sh', (req, res) => {
   sendClientScript(req, res, 'set_agents_opencode.sh');

@@ -20,10 +20,37 @@ for argument in "$@"; do
     *) echo "Error: unknown option: $argument" >&2; exit 1 ;;
   esac
 done
-if ! command -v python3 >/dev/null 2>&1; then
-  echo 'Error: required command was not found: python3 (Python 3.9+)' >&2
-  exit 1
-fi
+
+# The helper that does the work exists twice, in Python (below) and in Perl (the separate
+# set_agents_helper.pl), and both do exactly the same. Python 3.9+ runs it when a working
+# one is installed. macOS ships none: its /usr/bin/python3 only offers to install Apple's
+# developer tools, and running it would open that dialog. There, and wherever else Python
+# is missing, the Perl that comes with the system runs the helper instead, with curl.
+# The Perl helper is fetched only then, which keeps this script small enough for the
+# download limit in the setup command.
+python_usable() {
+  local python
+  python="$(command -v python3 2>/dev/null)" || return 1
+  if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ "$python" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then return 1; fi
+  python3 -I -B -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1
+}
+perl_usable() {
+  command -v perl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && perl -e 'exit($] >= 5.016 ? 0 : 1)' >/dev/null 2>&1
+}
+case "${IETI_SETUP_RUNTIME:-}" in
+  python|perl) RUNTIME="$IETI_SETUP_RUNTIME" ;;
+  '')
+    if python_usable; then RUNTIME=python
+    elif perl_usable; then RUNTIME=perl
+    else
+      echo 'Error: this setup needs Python 3.9 or newer, or Perl 5.16 or newer together with curl.' >&2
+      if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        echo 'On macOS, run "xcode-select --install", wait for it to finish, and run this setup again.' >&2
+      fi
+      exit 1
+    fi ;;
+  *) echo 'Error: IETI_SETUP_RUNTIME must be python or perl.' >&2; exit 1 ;;
+esac
 
 IFS= read -r -d '' GLOBAL_SCRIPT <<'PYTHON' || true
 import base64
@@ -720,10 +747,46 @@ except Exception as error:
     sys.stderr.write("Error: " + message + "\n")
     sys.exit(1)
 PYTHON
-run_python() { python3 -I -B -c "$GLOBAL_SCRIPT" "$@"; }
+
+# Downloads replace this with the SHA-256 of the Perl helper this server hands out.
+PERL_HELPER_SHA256="__IETI_HELPER_SHA256__"
+PERL_SCRIPT=""
+load_perl_helper() {
+  local beside="" root helper_url digest
+  # Run from a checkout or a saved copy, the helper sits next to this script.
+  if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/set_agents_helper.pl" ]; then
+    beside="$(dirname "${BASH_SOURCE[0]}")/set_agents_helper.pl"
+  fi
+  if [ -n "$beside" ]; then
+    PERL_SCRIPT="$(cat "$beside")"
+  else
+    # Always from the server this script came from, never from an address typed during setup.
+    root="$DEFAULT_BASE_URL"
+    if [ "$root" = '__IETI_''DEFAULT_BASE_URL__' ]; then root='https://agents.ieti.site/v1'; fi
+    helper_url="${root%/v1}/downloads/set_agents_helper.pl"
+    if ! PERL_SCRIPT="$(curl -fsSL --connect-timeout 10 --max-time 30 --max-redirs 3 --max-filesize 131072 "$helper_url")"; then
+      echo "Error: could not download the setup helper from $helper_url." >&2; exit 1
+    fi
+    if [ "$PERL_HELPER_SHA256" != '__IETI_''HELPER_SHA256__' ]; then
+      digest="$(printf '%s\n' "$PERL_SCRIPT" | PERL5LIB= PERL5OPT= perl -MDigest::SHA -e 'binmode STDIN; print Digest::SHA->new(256)->addfile(*STDIN)->hexdigest')"
+      if [ "$digest" != "$PERL_HELPER_SHA256" ]; then
+        echo 'Error: the downloaded setup helper does not match the one this setup expects. Nothing was changed.' >&2; exit 1
+      fi
+    fi
+  fi
+  case "$PERL_SCRIPT" in
+    '# IETI Agents setup helper (Perl)'*) ;;
+    *) echo 'Error: the setup helper is not valid. Nothing was changed.' >&2; exit 1 ;;
+  esac
+}
+if [ "$RUNTIME" = perl ]; then load_perl_helper; fi
+run_helper() {
+  if [ "$RUNTIME" = python ]; then python3 -I -B -c "$GLOBAL_SCRIPT" "$@"
+  else PERL5LIB= PERL5OPT= perl -e "$PERL_SCRIPT" -- "$@"; fi
+}
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-CONFIG_HOME="$(run_python absolute "$CONFIG_HOME")"
+CONFIG_HOME="$(run_helper absolute "$CONFIG_HOME")"
 CONFIG_DIRECTORY="$CONFIG_HOME/opencode"
 CONFIG_FILE="$CONFIG_DIRECTORY/opencode.json"
 SECRETS_DIRECTORY="$CONFIG_HOME/ieti-agents"
@@ -733,7 +796,7 @@ if [ -e "$CONFIG_FILE" ] && [ -e "$CONFIG_DIRECTORY/opencode.jsonc" ]; then
   exit 1
 fi
 if [ -e "$CONFIG_DIRECTORY/opencode.jsonc" ]; then CONFIG_FILE="$CONFIG_DIRECTORY/opencode.jsonc"; fi
-INSTALLED="$(run_python inspect-config "$CONFIG_FILE")"
+INSTALLED="$(run_helper inspect-config "$CONFIG_FILE")"
 if [ -e "$KEY_FILE" ]; then INSTALLED=1; fi
 INTERACTIVE=0
 if [ "$SYNC_ONLY" -eq 0 ] && [ -t 0 ]; then INTERACTIVE=1; fi
@@ -741,7 +804,7 @@ if [ "$SYNC_ONLY" -eq 0 ] && [ -t 0 ]; then INTERACTIVE=1; fi
 SCRATCH_DIRECTORY=""
 cleanup() {
   if [ -n "$SCRATCH_DIRECTORY" ]; then
-    run_python cleanup "$SCRATCH_DIRECTORY/transaction.json" >/dev/null 2>&1 || true
+    run_helper cleanup "$SCRATCH_DIRECTORY/transaction.json" >/dev/null 2>&1 || true
     rm -rf "$SCRATCH_DIRECTORY"
   fi
 }
@@ -767,19 +830,19 @@ PREPARED_CONFIG="$SCRATCH_DIRECTORY/opencode.json"
 CANDIDATE_KEY="$SCRATCH_DIRECTORY/key"
 CAPABILITIES_FILE="$SCRATCH_DIRECTORY/capabilities.json"
 MANIFEST_FILE="$SCRATCH_DIRECTORY/transaction.json"
-run_python snapshot-key "$KEY_FILE" "$PREPARED_CONFIG.key-source"
+run_helper snapshot-key "$KEY_FILE" "$PREPARED_CONFIG.key-source"
 
 commit_changes() {
-  run_python stage "$CONFIG_FILE" "$PREPARED_CONFIG" "$KEY_FILE" "$CANDIDATE_KEY" "$MANIFEST_FILE" "$1"
-  run_python commit "$MANIFEST_FILE" >/dev/null
+  run_helper stage "$CONFIG_FILE" "$PREPARED_CONFIG" "$KEY_FILE" "$CANDIDATE_KEY" "$MANIFEST_FILE" "$1"
+  run_helper commit "$MANIFEST_FILE" >/dev/null
 }
 if [ "$UNINSTALL" -eq 1 ]; then
-  run_python prepare "$CONFIG_FILE" unused "$PREPARED_CONFIG" unused "$KEY_FILE" uninstall
+  run_helper prepare "$CONFIG_FILE" unused "$PREPARED_CONFIG" unused "$KEY_FILE" uninstall
   commit_changes uninstall
   echo "Removed IETI Agents from $CONFIG_FILE and removed $KEY_FILE."
   exit 0
 fi
-DETECTED="$(run_python detect-opencode "$OPENCODE_VERSION")"
+DETECTED="$(run_helper detect-opencode "$OPENCODE_VERSION")"
 CONFIG_FORMAT="${DETECTED%%$'\t'*}"
 echo "Writing the OpenCode $CONFIG_FORMAT configuration format (${DETECTED#*$'\t'})."
 TIMEOUT_SECONDS="${PROXY_AGENTS_REQUEST_TIMEOUT_SECONDS:-30}"
@@ -794,7 +857,7 @@ if [ "$INTERACTIVE" -eq 1 ]; then
   fi
   BASE_URL="${entered_url:-$BASE_URL}"
 fi
-API_BASE_URL="$(run_python normalize "$BASE_URL")"
+API_BASE_URL="$(run_helper normalize "$BASE_URL")"
 
 read_masked_key() {
   local character='' value=''
@@ -815,12 +878,12 @@ validate_key() {
   if ! valid_key_format; then echo 'Error: invalid API key format; expected an ieti_sk_ key.' >&2; return 1; fi
   printf '%s\n' "$IETI_API_KEY" > "$CANDIDATE_KEY"
   local http_status error_message
-  if ! http_status="$(run_python fetch "$API_BASE_URL" "$CANDIDATE_KEY" "$CAPABILITIES_FILE" "$TIMEOUT_SECONDS")"; then
+  if ! http_status="$(run_helper fetch "$API_BASE_URL" "$CANDIDATE_KEY" "$CAPABILITIES_FILE" "$TIMEOUT_SECONDS")"; then
     return 2
   fi
   if [ "$http_status" = 401 ]; then echo 'Error: invalid API key (HTTP 401).' >&2; return 1; fi
   if [ "$http_status" != 200 ]; then
-    error_message="$(run_python error "$CAPABILITIES_FILE")"
+    error_message="$(run_helper error "$CAPABILITIES_FILE")"
     if [ "$http_status" = 403 ]; then
       echo "Error: IETI account or group access is unavailable (HTTP 403): $error_message" >&2
     else
@@ -828,7 +891,7 @@ validate_key() {
     fi
     return 2
   fi
-  if ! run_python prepare "$CONFIG_FILE" "$CAPABILITIES_FILE" "$PREPARED_CONFIG" "$API_BASE_URL" "$KEY_FILE" update "$CONFIG_FORMAT"; then return 2; fi
+  if ! run_helper prepare "$CONFIG_FILE" "$CAPABILITIES_FILE" "$PREPARED_CONFIG" "$API_BASE_URL" "$KEY_FILE" update "$CONFIG_FORMAT"; then return 2; fi
   return 0
 }
 prompt_for_key() {
@@ -854,7 +917,7 @@ if [ -n "$IETI_API_KEY" ]; then
 else
   SAVED_VALID=0
   if [ -f "$KEY_FILE" ]; then
-    IETI_API_KEY="$(run_python read-key "$KEY_FILE")"
+    IETI_API_KEY="$(run_helper read-key "$KEY_FILE")"
     if validate_key; then SAVED_VALID=1; else
       validation_status=$?
       if [ "$validation_status" -ne 1 ]; then exit 1; fi
@@ -880,6 +943,6 @@ else
   fi
 fi
 commit_changes update
-MODEL_COUNT="$(run_python model-count "$PREPARED_CONFIG")"
+MODEL_COUNT="$(run_helper model-count "$PREPARED_CONFIG")"
 echo "IETI API key validated. Updated global $CONFIG_FILE with $MODEL_COUNT available model(s)."
 echo "API key stored at $KEY_FILE. Restart OpenCode to load the configuration."
